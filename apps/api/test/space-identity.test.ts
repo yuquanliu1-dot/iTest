@@ -1,14 +1,16 @@
 /**
- * 空间助手身份重写（preamble 替换）的回归防护。
+ * Regression guard for the space-assistant identity rewrite (preamble replacement).
  *
- * 背景：pi 默认 preamble 是 "You are an expert coding assistant operating inside pi"，
- * 会让助手对外自称编码助手。修复方式是 before_agent_start 里改写渲染后的 system prompt。
+ * Background: pi's default preamble is "You are an expert coding assistant operating inside pi",
+ * which makes the assistant present itself externally as a coding assistant. The fix rewrites the rendered
+ * system prompt inside before_agent_start.
  *
- * 本测试锁住一个易踩的坑：**不能通过 loader.systemPrompt / systemPromptOptions.customPrompt
- * 改身份**。pi 的 buildSystemPromptSections（system-prompt.js:76）在 customPrompt 非空时
- * 会整个跳过 else 分支，tools / rules / docs 三段全丢——rules 段承载所有空间工具的
- * promptGuidelines（STAGE_PROMPT_GUIDELINES 等），丢了等于静默废掉工具使用规范。
- * 下面的 e2e 用真实 AgentSession + 真实工具断言这些段仍在。
+ * This test locks in a known gotcha: **the identity must not be changed via
+ * loader.systemPrompt / systemPromptOptions.customPrompt**. pi's buildSystemPromptSections (system-prompt.js:76)
+ * skips the else branch entirely when customPrompt is non-empty, dropping the tools / rules / docs sections —
+ * the rules section carries the promptGuidelines of all space tools (STAGE_PROMPT_GUIDELINES etc.);
+ * losing it silently voids the tool-usage guidelines.
+ * The e2e below uses a real AgentSession + a real tool to assert those sections survive.
  */
 import { describe, it, expect } from 'vitest';
 import { Type } from '@earendil-works/pi-ai';
@@ -20,7 +22,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { buildSpacePreamble, rewriteSpacePreamble } from '../src/pi/space/session.js';
 
-/** pi 未改版时的默认 preamble（system-prompt.js:81）。 */
+/** pi's default preamble when unmodified (system-prompt.js:81). */
 const PI_DEFAULT_PREAMBLE =
   'You are an expert coding assistant operating inside pi, a coding agent harness. '
   + 'You help users by reading files, executing commands, editing code, and writing new files.';
@@ -68,9 +70,9 @@ describe('buildSpacePreamble 语言化', () => {
   });
 });
 
-/** 起一个真实 session 抓「真正发到 provider 的 system prompt」，验证改写只动身份、不伤工具规范。 */
+/** Spin up a real session to capture "the system prompt actually sent to the provider", verifying the rewrite touches only the identity and never the tool guidelines. */
 describe('空间助手 session 的 system prompt（端到端）', () => {
-  /** 命中网络请求即抛，作用是截断在 prompt 构造之后。 */
+  /** Throws on any network request; its role is to cut off right after prompt construction. */
   function captureWirePrompt(buildLoader: (ws: string) => DefaultResourceLoader): Promise<string> {
     return (async () => {
       const ws = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-space-identity-'));
@@ -81,7 +83,7 @@ describe('空间助手 session 的 system prompt（端到端）', () => {
         baseUrl: 'http://127.0.0.1:9/v1', reasoning: false, input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 100,
       };
-      // 带 promptGuidelines 的真实工具：正是 customPrompt 短路时会丢的那批规范。
+      // A real tool with promptGuidelines: exactly the guidelines lost when customPrompt short-circuits.
       const tool = defineTool({
         name: 'verify_case', label: 'verify_case', description: 'verify',
         parameters: Type.Object({}), promptGuidelines: ['RULE_KEEP_ME'],
@@ -99,13 +101,13 @@ describe('空间助手 session 的 system prompt（端到端）', () => {
       });
       try {
         await session.prompt('你是谁？');
-      } catch { /* 网络截断属预期 */ }
+      } catch { /* network cutoff is expected */ }
       const sys = session.messages.find((m) => m.role === 'system');
       globalThis.fetch = origFetch;
       await session.dispose();
       await fs.rm(ws, { recursive: true, force: true }).catch(() => {});
       const head = JSON.parse(wire).input?.find((m: { role: string }) => m.role === 'system')?.content ?? '';
-      // transcript 的 sections 保持完整：forceSystemPrompt 只投影到请求头，不落会话记录。
+      // The transcript's sections stay intact: forceSystemPrompt only projects into the request header, it never lands in the session record.
       expect(Object.keys((sys as { sections?: object } | undefined)?.sections ?? {})).toEqual(
         ['preamble', 'tools', 'rules', 'docs', 'addendum', 'cwd'],
       );
@@ -130,7 +132,7 @@ describe('空间助手 session 的 system prompt（端到端）', () => {
     }));
     expect(head).toContain('iTest 平台的测试助手');
     expect(head).not.toContain('coding assistant');
-    expect(head).toContain('RULE_KEEP_ME'); // customPrompt 短路会丢的就是这条
+    expect(head).toContain('RULE_KEEP_ME'); // exactly the item lost by the customPrompt short-circuit
   });
 
   it('对照组：不加扩展时 pi 原文照发（证明改写确实由扩展驱动）', async () => {

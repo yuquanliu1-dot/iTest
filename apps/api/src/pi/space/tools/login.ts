@@ -10,13 +10,13 @@ import { loginStateKey, saveLoginState } from './loginStateCache.js';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
-/** 登录指令：目标导航、占位符凭据、验证码识别（system prompt 既有 OCR 规则）、成功由模型按页面状态自判。
- *  webRef 指定了目标 web 服务时，占位符带 @ref 归属；manifest 让模型知道还有哪些服务可选。 */
+/** Login instruction: target navigation, placeholder credentials, captcha recognition (the system prompt's existing OCR rules); success is self-judged by the model from the page state.
+ *  When webRef names a target web service, the placeholders carry @ref ownership; the manifest tells the model which other services are available. */
 function buildLoginInstruction(targetUrl: string, webRef: string | null, manifest: string): string {
   const phUser = credentialPlaceholder('user', webRef);
   const phPassword = credentialPlaceholder('password', webRef);
   const manifestSection = manifest ? `\n## 可选 web 服务\n${manifest}\n` : '';
-  // 有服务清单时额外给出带 @name 的字面量形态：模型要登别的系统就照抄那一行。
+  // With a service manifest, additionally give the @name-suffixed literal forms: to log into another system the model copies that line.
   const refHint = manifest
     ? `\n   （要登清单里的其它服务时，改用该服务名对应的占位符，如 ${credentialPlaceholder('user', '<服务名>')} / ${credentialPlaceholder('password', '<服务名>')}）`
     : '';
@@ -58,7 +58,7 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
               loginUrl: def.loginUrl,
               hasPassword: true,
               environmentId: envCtx.envId,
-              // 供模型在 perform_login(webRef=…) 时知道有哪些服务可选
+              // Lets the model know which services are available when calling perform_login(webRef=…)
               webServices: [...envCtx.logins.keys()],
             }),
           };
@@ -88,7 +88,7 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
         let envCtx: Awaited<ReturnType<typeof resolveEnv>> | undefined;
         try {
           envCtx = await resolveEnv({ versionId: ctx.versionId }, { expectedProjectId: ctx.projectId });
-          // 显式 webRef 落空即报错——静默回落到默认服务会把测试登到另一个系统上。
+          // A miss on an explicit webRef is an error — silently falling back to the default service would log the test into another system.
           const cred = envCtx.resolveLogin(webRef);
           if (!cred) {
             return {
@@ -102,16 +102,16 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
           if (!targetUrl) {
             return { ok: false, error: '缺少登录目标 URL（未传 url，且环境未配置 loginUrl/baseUrl）' };
           }
-          // LLM 未配置直接失败（用户去设置页配置），不启动浏览器
+          // LLM unconfigured fails immediately (the user goes configure it in settings), without launching a browser
           const client = (await resolveLlmClient()).client;
           const browser = await chromium.launch({
             headless: true,
             executablePath: process.env.CHROMIUM_PATH || undefined,
           });
-          // 实时画面：登录过程对用户可见（填表/验证码/提交都在流里）。
-          // 与 verify_case/solidify_case 同款契约——registerLiveView 拿随机 key，
-          // start 事件把流地址带给前端 LiveViewRail，结束 close 收流（录制留供回放）。
-          // ctx.liveView === false 为批量后台链路：不注册画面源，省 0.5fps 截图轮询开销。
+          // Live view: the login process is visible to the user (form-filling/captcha/submit all appear in the stream).
+          // Same contract as verify_case/solidify_case — registerLiveView gets a random key,
+          // the start event hands the stream URL to the frontend LiveViewRail, and on end close() tears the stream down (the recording stays for replay).
+          // ctx.liveView === false is the batch background link: no view source registered, saving the 0.5fps screenshot-polling overhead.
           let live: ReturnType<typeof registerLiveView> | undefined;
           try {
             const context = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -126,8 +126,8 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
               targetUrl,
               liveUrl: live ? `/api/assistant/threads/${ctx.threadId}/live/${live.key}` : undefined,
             });
-            // 凭据替换复用执行层唯一实现（与 verify_case/solidify_case/机械回放同一把尺）：
-            // 显式 webRef 优先，缺省走「用例 web_service_ref → 环境默认 web」链。
+            // Credential substitution reuses the execution layer's single implementation (the same ruler as verify_case/solidify_case/mechanical replay):
+            // explicit webRef takes priority; the default walks the "case web_service_ref → environment default web" chain.
             const summary = await runAiTask(
               page,
               buildLoginInstruction(targetUrl, webRef, renderWebResourceManifest({ envCtx })),
@@ -146,7 +146,7 @@ export function buildLoginTools(ctx: SpaceToolsContext): ToolExecutor[] {
               return { ok: false, error: `登录失败: ${reason}` };
             }
             const storageState = await context.storageState();
-            // 暖缓存：verify_case 及后续 perform_login 同环境同账号直接复用（过期自愈）
+            // Warm the cache: verify_case and subsequent perform_login on the same environment+account reuse it directly (expiry self-heals)
             saveLoginState(loginStateKey(envCtx.envId, cred?.user), storageState);
             ctx.emit({ type: 'login_progress', phase: 'end', result: 'passed' });
             return {

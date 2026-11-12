@@ -1,6 +1,7 @@
 /**
- * R3.5 失败信号采集（零 LLM）：verify nlAiFail 分流时落一行原始信号。
- * fire-and-forget：INSERT 失败只 warn，绝不影响 verify 主流程（对齐蒸馏 worker 语义）。
+ * R3.5 failure-signal collection (zero LLM): records one raw signal row when verify routes an
+ * nlAiFail. Fire-and-forget: an INSERT failure only warns, never affects the verify main flow
+ * (same semantics as the distillation worker).
  */
 import { eq } from 'drizzle-orm';
 import { logger } from '../../logger.js';
@@ -15,7 +16,7 @@ export interface NlAiFailSignalPayload {
   pageUrl: string | null;
 }
 
-/** 落一条 nl_ai_fail 信号；productLine 由 project 反查（教训层不做线隔离，仅供审批展示）。 */
+/** Records one nl_ai_fail signal; productLine is looked up from the project (the lesson layer does not isolate by line; for approval display only). */
 export async function recordNlAiFailSignal(input: {
   threadId: string;
   projectId: string;

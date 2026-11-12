@@ -1,8 +1,8 @@
 /**
- * cases 列表缓存失效网验证：注入 fake redis 让 ?projectId= 分支真走缓存，
- * 证明 (1) 列表被回填且后续读命中（库内直改不反映）；(2) 步骤写路径（steps DELETE）
- * 的显式失效让下一次读立即拿到新数据。cases.test.ts 未注入 redis（退化直查），
- * 缓存路径只在这里覆盖。
+ * cases list cache invalidation-net verification: a fake redis is injected so the ?projectId= branch really goes through the cache,
+ * proving that (1) the list gets backfilled and later reads hit it (direct DB edits don't show); (2) explicit invalidation on the step
+ * write path (steps DELETE) makes the next read immediately see new data. cases.test.ts injects no redis (degrades to direct queries),
+ * so the cache path is covered only here.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
@@ -94,17 +94,17 @@ describe('cases list cache invalidation', () => {
     expect(row.stepsTotal).toBe(2);
     expect(row.stepsCompiled).toBe(2);
 
-    // 直改库（绕过失效网）→ 列表仍返回旧值 = 命中缓存
+    // Direct DB edit (bypassing the invalidation net) -> the list still returns the old value = cache hit
     await pool.query(`UPDATE test_steps SET compiled = NULL WHERE case_id = $1`, [caseId]);
     const cached = (await request(app).get(`/api/cases?projectId=${projectId}`)).body as Array<{ id: string; stepsTotal: number; stepsCompiled: number }>;
     expect(cached.find((r) => r.id === caseId)!.stepsCompiled).toBe(2);
 
-    // 走 API 删一步（写路径显式失效）→ 下一次读立即拿到新数据
+    // Delete a step via the API (write path explicitly invalidates) -> the next read immediately gets fresh data
     const del = await request(app).delete(`/api/cases/${caseId}/steps/${ids[0]}`);
     expect(del.status).toBe(200);
     const fresh = (await request(app).get(`/api/cases?projectId=${projectId}`)).body as Array<{ id: string; stepsTotal: number; stepsCompiled: number }>;
     expect(fresh.find((r) => r.id === caseId)!.stepsTotal).toBe(1);
-    // 库里剩余步 compiled 已被上面直改清空
+    // The remaining step in the DB had its compiled cleared by the direct edit above
     expect(fresh.find((r) => r.id === caseId)!.stepsCompiled).toBe(0);
   });
 });

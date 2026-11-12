@@ -59,11 +59,11 @@ describe('checkoutRepoForVersion', () => {
     const meta = JSON.parse(await fs.readFile(path.join(cwd, '.itest-sandbox.json'), 'utf8')) as { branch: string };
     expect(meta.branch).toBe('feature');
 
-    // 二次 checkout 走 fetch+reset 分支,结果幂等
+    // A second checkout takes the fetch+reset branch; the result is idempotent
     const cwd2 = await checkoutRepoForVersion(versionId);
     expect(cwd2).toBe(cwd);
 
-    // 已有沙箱上切换 ref(FETCH_HEAD 机制的核心场景):feature → main,内容跟随
+    // Switching ref on an existing sandbox (the core FETCH_HEAD mechanism scenario): feature → main, content follows
     await pool.query(`UPDATE project_versions SET ref='main' WHERE id=$1`, [versionId]);
     const cwd3 = await checkoutRepoForVersion(versionId);
     expect(cwd3).toBe(cwd);
@@ -105,7 +105,7 @@ describe('checkoutRepoForVersion', () => {
       `INSERT INTO projects(product_line_id, name, repo_url, provider, default_branch) VALUES ($1,'pt',$2,'github','main') RETURNING id`,
       [productLineId, `file://${repoUrl}`],
     )).rows[0]!.id as string;
-    // ref_kind 仅是展示语义;checkout 只认 ref 值 —— 用 tag 名验证 fetch FETCH_HEAD 对 tag 生效
+    // ref_kind is display semantics only; checkout only honors the ref value — use a tag name to verify fetch FETCH_HEAD works for tags
     const versionId = (await pool.query(
       `INSERT INTO project_versions(project_id, name, ref, ref_kind) VALUES ($1,'vt','v1','tag') RETURNING id`,
       [projectId],

@@ -1,6 +1,6 @@
 /**
- * 执行 worker：消费 exec 队列。job 粒度 = 一次完整 planRun 或一次单用例执行(含数据集全部行),
- * storageState 不跨容器(execute/runPlan.ts 进程内 Map),只要 job 不拆碎即成立。
+ * Execution worker: consumes the exec queue. Job granularity = one full planRun or one single-case execution (including all dataset rows),
+ * storageState doesn't cross containers (in-process Map in execute/runPlan.ts); holds as long as a job isn't split apart.
  */
 import { eq } from 'drizzle-orm';
 import type { Worker } from 'bullmq';
@@ -12,8 +12,8 @@ import { runCase, type PreseedReport } from '../execute/runCase.js';
 import { registerLiveView } from '../execute/liveView.js';
 import { buildExecutionWorker, type ExecJob } from './execQueue.js';
 
-/** 单用例执行共用体：worker 与 execute.ts 的 inline 回落都走它(DRY,防两处行为分叉)。
- *  runCase 内部已兜底数据集行错误;真抛(随机崩溃)把预置报告全改 failed 防僵尸。 */
+/** Shared single-case execution body: both the worker and execute.ts's inline fallback go through it (DRY, prevents behavior divergence between the two).
+ *  runCase already contains dataset-row errors; a real throw (random crash) flips all preseeded reports to failed to avoid zombies. */
 export async function runCaseJob(data: { caseId: string; preseed?: PreseedReport[]; datasetRowIndexes?: number[]; createdByUserId?: string | null }): Promise<void> {
   const live = registerLiveView(`case:${data.caseId}`);
   try {
@@ -43,8 +43,8 @@ export async function runCaseJob(data: { caseId: string; preseed?: PreseedReport
   }
 }
 
-/** 队列 job 处理器。错误已在 runPlan 内部各阶段兜底/runCaseJob 写 failed 报告/runSolidifyBatchCaseJob
- *  落 failed_* 行状态,这里再吞一层只记日志,防止意外重跑半成品。 */
+/** Queue job handler. Errors are already contained by runPlan's per-stage handling / runCaseJob writing failed reports / runSolidifyBatchCaseJob
+ *  persisting failed_* row states; this swallows one more layer, logging only, to prevent accidentally re-running half-finished work. */
 async function processExecJob(data: ExecJob): Promise<void> {
   try {
     if (data.kind === 'plan') {
@@ -69,7 +69,7 @@ export function getExecWorker(): Worker<ExecJob> | null {
   return _worker;
 }
 
-/** API 进程启动时调用(REDIS_URL 缺失/连接失败 → 优雅降级到 inline 执行,与 scheduler 守门一致)。 */
+/** Called at API process startup (REDIS_URL missing/connect failed → degrade gracefully to inline execution, same guard as the scheduler). */
 export async function startExecutionWorker(): Promise<void> {
   if (!process.env.REDIS_URL) {
     logger.warn('REDIS_URL not set; execution queue disabled (inline execution)');
@@ -101,7 +101,7 @@ function registerShutdown(): void {
   process.on('SIGINT', () => void stop('SIGINT'));
 }
 
-/** 仅供测试：停 worker + 断 exec queue 连接。 */
+/** For tests only: stop the worker + disconnect the exec queue. */
 export async function __stopExecWorkerForTests(): Promise<void> {
   if (_worker) { await _worker.close(); _worker = null; }
   const { __closeExecutionQueue } = await import('./execQueue.js');

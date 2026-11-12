@@ -28,7 +28,7 @@ const LlmTestBody = z.object({
   baseUrl: z.string().optional(),
 });
 
-/** 敏感 settings 键出参脱敏：llm_api_key 整值掩码；llm_channels 数组逐元素掩码 apiKey。 */
+/** Sensitive settings key output masking: llm_api_key masks the whole value; the llm_channels array masks apiKey per element. */
 const SENSITIVE_LLM_KEYS = new Set<string>(['llm_api_key', CHANNEL_KEYS.channels]);
 function maskSensitiveValue(key: string, value: unknown): unknown {
   if (key === 'llm_api_key') return typeof value === 'string' ? maskApiKey(value) : value;
@@ -58,7 +58,7 @@ settingsRoute.get('/', async (_req, res) => {
   res.json(out);
 });
 
-// 渠道结构视图（apiKey 只回掩码）。注意必须注册在 /:key 之前。
+// Channel structure view (apiKey returns masked only). Must be registered before /:key.
 settingsRoute.get('/llm', async (_req, res) => {
   const rows = await db
     .select()
@@ -98,7 +98,7 @@ const LlmPutBody = z.object({
   channels: z.array(LlmChannelInput).min(1),
 });
 
-// 全量保存渠道：apiKey 留空/缺省 = 按 id 保留存量原值（前端拿到的是掩码，无明文）
+// Save channels wholesale: apiKey left empty/absent = keep the stored original by id (what the frontend gets is masked, no plaintext)
 settingsRoute.put('/llm', async (req, res) => {
   const body = LlmPutBody.parse(req.body);
   const existingById = new Map((await readStoredChannels()).map((c) => [c.id, c]));
@@ -142,16 +142,16 @@ settingsRoute.put('/llm', async (req, res) => {
       .values({ key: w.key, value: w.value as object })
       .onConflictDoUpdate({ target: settings.key, set: { value: w.value as object, updatedAt: new Date() } });
   }
-  // 失效:整张 settings 字典视图 + 三个渠道 key 的单条视图
+  // Invalidate: the whole settings dictionary view + the per-key views of the three channel keys
   await cache.del(settingsAllKey());
   for (const w of writes) await cache.del(settingKey(w.key));
   res.json({ ok: true });
 });
 
-// 通用单键 PUT（ai_fallback_locator_failed 等非 LLM 键的现有写入路径）
+// Generic single-key PUT (the existing write path for non-LLM keys like ai_fallback_locator_failed)
 settingsRoute.put('/', async (req, res) => {
   const body = PutBody.parse(req.body);
-  // 旧版单渠道键已废弃（启动时迁移为 llm_channels 后删除），拒写避免造出没人读的孤儿配置
+  // Legacy single-channel keys are deprecated (migrated into llm_channels and deleted at startup); reject writes to avoid orphan configs nobody reads
   if ((LEGACY_LLM_KEYS as readonly string[]).includes(body.key)) {
     throw new HttpError(400, 'legacy_llm_config', '旧版单渠道配置已废弃，请在「LLM Provider」中新增渠道');
   }
@@ -160,7 +160,7 @@ settingsRoute.put('/', async (req, res) => {
     .values({ key: body.key, value: body.value as object })
     .onConflictDoUpdate({ target: settings.key, set: { value: body.value as object, updatedAt: new Date() } })
     .returning();
-  // 失效:整张 settings 字典视图 + 此 key 的单条视图
+  // Invalidate: the whole settings dictionary view + this key's per-key view
   await cache.del(settingsAllKey());
   await cache.del(settingKey(body.key));
   res.json({ key: rows[0]!.key, value: rows[0]!.value });
@@ -177,8 +177,8 @@ settingsRoute.get('/:key', async (req, res) => {
   res.json({ ...row, value: SENSITIVE_LLM_KEYS.has(k) ? maskSensitiveValue(k, row.value) : row.value });
 });
 
-// 用表单当前值（未保存也可）探测 LLM 连通性；HTTP 200 + ok:false 表示探测失败。
-// 已存渠道的 key 出参已脱敏：apiKey 留空时按 channelId 取存量真值为底，表单非空字段覆盖。
+// Probe LLM connectivity using the form's current values (unsaved is fine); HTTP 200 + ok:false means the probe failed.
+// Stored channels' keys are masked on output: when apiKey is empty, take the stored true value as base by channelId, with non-empty form fields overriding.
 settingsRoute.post('/llm/test', async (req, res) => {
   const body = LlmTestBody.parse(req.body);
   let apiKey = (body.apiKey ?? '').trim();

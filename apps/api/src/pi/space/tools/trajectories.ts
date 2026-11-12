@@ -1,6 +1,6 @@
 /**
- * 轨迹检索工具：建用例前取同线成功轨迹 exemplar 做 few-shot（R2 读路径）。
- * 返回脚注硬约束锚点/URL 禁照抄——线内事实以当前应用实测为准。
+ * Trajectory search tool: before authoring cases, fetch successful same-line trajectories as few-shot exemplars (R2 read path).
+ * The returned footer hard-constrains that anchors/URLs must not be copied — in-line facts defer to live measurement on the current app.
  */
 import { Type } from '@earendil-works/pi-ai';
 import type { ToolExecutor } from '../../tools.js';

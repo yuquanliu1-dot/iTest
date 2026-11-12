@@ -4,14 +4,14 @@ import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-// mock 真实浏览器执行器：默认返回空结果（= 该行所有步骤通过）；各测试用 execMock 定制成败。
+// mock the real browser executor: returns an empty result by default (= all steps in the row pass); each test customizes pass/fail via execMock.
 const { execMock } = vi.hoisted(() => ({ execMock: vi.fn() }));
 vi.mock('../src/execute/cdp.js', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, executeCaseReal: execMock, executeCaseInBrowser: execMock };
 });
 
-// mock resolveCaseUrl：默认委托真实实现；urlMock 设置 once 实现时可注入 report 插入后的意外抛错。
+// mock resolveCaseUrl: delegates to the real implementation by default; when urlMock has a once implementation configured, an unexpected throw after report insertion can be injected.
 const { urlMock } = vi.hoisted(() => ({ urlMock: vi.fn() }));
 vi.mock('../src/lib/resolve-url.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/resolve-url.js')>();
@@ -53,8 +53,8 @@ async function insertCase(title: string, datasetId: string | null): Promise<stri
   return r.rows[0].id as string;
 }
 
-/** 执行已异步化（POST 立即返回 running reportId，后台继续跑）：
- *  轮询指定 report 直到 status !== 'running'，再把 body 返回给断言。 */
+/** Execution is asynchronous (POST returns the running reportId immediately, and it keeps running in the background):
+ *  poll the report until status !== 'running', then return the body to the assertion. */
 async function waitReportDone(reportId: string, timeoutMs = 8000): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -76,7 +76,7 @@ beforeAll(async () => {
   projectId = seed.projectId;
   groupId = seed.groupId;
   versionId = seed.versionId;
-  // 项目默认环境：避免 EnvMissing 把每行 report 直接判失败
+  // Project default environment: prevents EnvMissing from failing every row's report
   await pool.query(`INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认', true)`, [projectId]);
 
   const { default: express } = await import('express');
@@ -115,13 +115,13 @@ describe('runCase dataset iteration', () => {
     expect(r.status).toBe(200);
     expect(r.body.reportIds).toHaveLength(2);
     expect(r.body.reportId).toBe(r.body.reportIds[0]);
-    expect(r.body.status).toBeUndefined(); // 单执行入口不回传 status（保持旧响应形状）
+    expect(r.body.status).toBeUndefined(); // single-execution entry does not return status (keeps the old response shape)
 
-    // 后台执行：轮询到两条 report 都收敛后再断言执行器调用与落库结果
+    // Background execution: poll until both reports converge, then assert executor calls and DB results
     await waitReportDone(r.body.reportIds[0]);
     await waitReportDone(r.body.reportIds[1]);
 
-    // 执行器收到该行解密后的初始变量 + 敏感列名
+    // Executor receives the decrypted initial vars for that row + sensitive column names
     expect(execMock).toHaveBeenCalledTimes(2);
     const firstCtx = execMock.mock.calls[0]![2] as { initialVars?: Record<string, string>; sensitiveVarKeys?: string[] };
     expect(firstCtx.initialVars).toEqual({ username: 'alice', password: 'pw-1' });
@@ -135,11 +135,11 @@ describe('runCase dataset iteration', () => {
       totalRows: 2,
       values: { username: 'bob', password: '******' },
     });
-    // 解密值绝不落库：report 行里搜不到明文
+    // Decrypted values never hit the DB: no plaintext can be found in the report row
     const raw = await pool.query(`SELECT dataset_snapshot::text AS s FROM reports WHERE id = $1`, [r.body.reportIds[1]]);
     expect(raw.rows[0].s).not.toContain('pw-2');
 
-    // 用例级执行起止时刻：每行各落自己的（数据集模式下两行独立）
+    // Case-level execution start/end times: each row lands its own (in dataset mode the two rows are independent)
     expect(rep.body.startedAt).toBeTruthy();
     expect(rep.body.finishedAt).toBeTruthy();
     const rep0 = await request(app).get(`/api/reports/${r.body.reportIds[0]}`);
@@ -150,25 +150,25 @@ describe('runCase dataset iteration', () => {
   it('部分行选择：只跑选中的行 —— 1 条 report，rowIndex 是数据集行号，preseed 一致', async () => {
     const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '选行执行' });
     const caseId = await insertCase('选行回放', created.body.id);
-    // 只选第 2 行（启用行下标 1）
+    // Select only row 2 (enabled-row index 1)
     await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[1] WHERE id = $1`, [caseId]);
 
     execMock.mockReset();
     execMock.mockResolvedValue([]);
     const r = await request(app).post(`/api/cases/${caseId}/execute`);
     expect(r.status).toBe(200);
-    // 只产生 1 条 report（不再跑全部行）；单行时响应沿用旧形状：只有 reportId，无 reportIds
+    // Produces only 1 report (no longer runs all rows); single-row response keeps the legacy shape: only reportId, no reportIds
     expect(r.body.reportIds).toBeUndefined();
     expect(r.body.reportId).toBeTruthy();
 
     await waitReportDone(r.body.reportId);
 
-    // 执行器只被调一次，且拿到的是被选中那一行的解密变量
+    // Executor is called only once, and receives the decrypted variables of the selected row
     expect(execMock).toHaveBeenCalledTimes(1);
     const ctx = execMock.mock.calls[0]![2] as { initialVars?: Record<string, string> };
     expect(ctx.initialVars).toEqual({ username: 'bob', password: 'pw-2' });
 
-    // 报告行号 = 数据集启用行号；分母 = 本批次执行行数
+    // Report row number = enabled dataset row number; denominator = number of rows executed in this batch
     const rep = await request(app).get(`/api/reports/${r.body.reportId}`);
     expect(rep.body.datasetRowIndex).toBe(1);
     expect(rep.body.datasetSnapshot).toEqual({
@@ -177,7 +177,7 @@ describe('runCase dataset iteration', () => {
       values: { username: 'bob', password: '******' },
     });
 
-    // 该用例名下确实只有 1 条 report（preseed 与执行行集一致，没有多跑/漏跑）
+    // The case really has only 1 report (preseed matches the executed row set — nothing extra, nothing missed)
     const all = await pool.query(
       `SELECT dataset_row_index FROM reports WHERE case_id = $1 ORDER BY dataset_row_index`,
       [caseId],
@@ -207,12 +207,12 @@ describe('runCase dataset iteration', () => {
     await waitReportDone(r.body.reportIds[0]);
     await waitReportDone(r.body.reportIds[1]);
 
-    // 执行序 = 数据集行序（升序）：第 1 行 → 第 3 行
+    // Execution order = dataset row order (ascending): row 1 → row 3
     const first = execMock.mock.calls[0]![2] as { initialVars?: Record<string, string> };
     expect(first.initialVars?.username).toBe('alice');
     const second = execMock.mock.calls[1]![2] as { initialVars?: Record<string, string> };
     expect(second.initialVars?.username).toBe('carol');
-    // report 的 rowIndex 是数据集行号（0 与 2），不是批内位置（0 与 1）
+    // The report rowIndex is the dataset row number (0 and 2), not the in-batch position (0 and 1)
     const rows = await pool.query(
       `SELECT dataset_row_index FROM reports WHERE case_id = $1 ORDER BY dataset_row_index`,
       [caseId],
@@ -259,7 +259,7 @@ describe('runCase dataset iteration', () => {
     execMock.mockReset();
     execMock.mockResolvedValue([]);
     urlMock.mockReset();
-    // 第 1 行在 report 插入之后、执行器之前抛出意外错误（非 EnvMissing/CDPUnavailable 分类路径）
+    // Row 1 throws an unexpected error after report insertion but before the executor (not the EnvMissing/CDPUnavailable classified path)
     urlMock.mockImplementationOnce(() => {
       throw new Error('boom after insert');
     });
@@ -276,12 +276,12 @@ describe('runCase dataset iteration', () => {
     expect(rep0.body.stepResults[0].error).toContain('boom after insert');
     expect(rep0.body.stepResults[0].humanMessage).toBe('执行器内部错误，该行已记为失败');
 
-    // 后续行照常执行
+    // Subsequent rows execute as usual
     const rep1 = await request(app).get(`/api/reports/${r.body.reportIds[1]}`);
     expect(rep1.body.status).toBe('passed');
     expect(rep1.body.datasetRowIndex).toBe(1);
 
-    // 该用例名下没有遗留 running 僵尸 report
+    // No leftover running zombie reports under this case
     const all = await pool.query(
       `SELECT status, dataset_row_index FROM reports WHERE case_id = $1 ORDER BY dataset_row_index`,
       [caseId],
@@ -297,7 +297,7 @@ describe('runCase dataset iteration', () => {
     execMock.mockReset();
     let release!: () => void;
     const gate = new Promise<void>((res) => { release = res; });
-    // 第 1 行执行器在 gate 上挂起直到放行 → 保证 POST 返回时执行必然未完成
+    // Row 1's executor hangs on the gate until released → guarantees execution is definitely unfinished when POST returns
     execMock.mockImplementationOnce(async () => {
       await gate;
       return [{ order: 1, status: 'passed', durationMs: 0 }];
@@ -305,7 +305,7 @@ describe('runCase dataset iteration', () => {
     const r = await request(app).post(`/api/cases/${caseId}/execute`);
     expect(r.status).toBe(200);
     expect(r.body.reportIds).toHaveLength(2);
-    // 执行被 gate 挂起 → 此刻 report 仍是 running（报告行先于执行存在）
+    // Execution is suspended on the gate → the report is still running at this moment (the report row exists before execution)
     const running = await request(app).get(`/api/reports/${r.body.reportIds[0]}`);
     expect(running.body.status).toBe('running');
 
@@ -353,13 +353,13 @@ describe('runCase dataset iteration', () => {
     await waitReportDone(r.body.reportIds[0]!);
     await waitReportDone(r.body.reportIds[1]!);
 
-    // 同批：两行 batchId 一致且非空
+    // Same batch: both rows share a non-empty batchId
     const b0 = await pool.query(`SELECT dataset_batch_id FROM reports WHERE id = $1`, [r.body.reportIds[0]]);
     const b1 = await pool.query(`SELECT dataset_batch_id FROM reports WHERE id = $1`, [r.body.reportIds[1]]);
     expect(b0.rows[0]!.dataset_batch_id).toBeTruthy();
     expect(b0.rows[0]!.dataset_batch_id).toBe(b1.rows[0]!.dataset_batch_id);
 
-    // 端点：以第 2 行为锚也能拉到全批，rowIndex 升序 = reportIds 执行序；只回摘要列
+    // Endpoint: anchoring on row 2 also fetches the whole batch, rowIndex ascending = reportIds execution order; summary columns only
     const batch = await request(app).get(`/api/reports/${r.body.reportIds[1]}/dataset-batch`);
     expect(batch.status).toBe(200);
     expect(batch.body.batchId).toBe(b0.rows[0]!.dataset_batch_id);
@@ -368,11 +368,11 @@ describe('runCase dataset iteration', () => {
     expect(batch.body.rows.map((x: { id: string }) => x.id)).toEqual(r.body.reportIds);
     expect(batch.body.rows[1]!.status).toBe('passed');
     expect(batch.body.rows[1]!.datasetSnapshot).toBeTruthy();
-    expect(batch.body.rows[0]!.stepResults).toBeUndefined(); // 摘要端点不带步骤明细
+    expect(batch.body.rows[0]!.stepResults).toBeUndefined(); // the summary endpoint carries no step details
   });
 
   it('无批次/非数据集 → { batchId: null, rows: [] }；他组织报告 → 404（不泄露存在性）', async () => {
-    // 非数据集执行：单 report 不落批次
+    // Non-dataset execution: a single report lands no batch
     const plainId = await insertCase('普通无批次', null);
     execMock.mockReset();
     execMock.mockResolvedValue([]);
@@ -383,7 +383,7 @@ describe('runCase dataset iteration', () => {
     expect(pb.status).toBe(200);
     expect(pb.body).toEqual({ batchId: null, rows: [] });
 
-    // 老报告（直插、无 dataset_batch_id）同样回空
+    // Legacy reports (direct insert, no dataset_batch_id) also return empty
     const legacyCase = await insertCase('老报告', null);
     const ins = await pool.query(
       `INSERT INTO reports(case_id, status, step_results, summary) VALUES ($1,'passed','[]','x') RETURNING id`,
@@ -393,7 +393,7 @@ describe('runCase dataset iteration', () => {
     expect(none.status).toBe(200);
     expect(none.body).toEqual({ batchId: null, rows: [] });
 
-    // 跨组织：他 org 项目 → 分组 → 用例 → 报告，种子身份不可见 → 404
+    // Cross-org: other org's project → group → case → report, invisible to the seeded identity → 404
     const otherOrg = crypto.randomUUID();
     await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,'他组织-batch',$2)`, [otherOrg, `/${otherOrg}/`]);
     const lineId = (await pool.query(`INSERT INTO product_lines(organization_id, name) VALUES ($1,'他家线') RETURNING id`, [otherOrg])).rows[0]!.id as string;

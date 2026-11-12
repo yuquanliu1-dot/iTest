@@ -1,12 +1,12 @@
 import type { AiLang } from '../../../agent/langDirective.js';
 
-/** 版本仓库后台检出状态(session 建立时通常未就绪;检出完成/失败后就位)。 */
+/** Version repo background checkout state (usually not ready when the session is built; settles after the checkout completes/fails). */
 export interface RepoState {
-  /** 仓库沙箱目录;后台检出完成前为 null。 */
+  /** Repo sandbox directory; null until the background checkout completes. */
   cwd: string | null;
-  /** 非 no_repo 的检出失败原因(auth_failed 等);null = 无失败。 */
+  /** Checkout failure reason other than no_repo (auth_failed etc.); null = no failure. */
   issue: string | null;
-  /** 项目未配置 Git 仓库(no_repo 静默,不进 issue)。 */
+  /** The project has no Git repo configured (no_repo stays silent, not fed into issue). */
   noRepo: boolean;
 }
 
@@ -14,8 +14,8 @@ export function emptyRepoState(): RepoState {
   return { cwd: null, issue: null, noRepo: false };
 }
 
-/** repo 沙箱工具的 cwd 动态解析:就绪返回目录;未就绪/不可用时 throw,
- *  由工具内既有 try/catch 转为错误结果(AI 可读到具体原因并告知用户)。 */
+/** Dynamic cwd resolution for repo sandbox tools: returns the directory when ready; throws when not ready/unavailable,
+ *  and the tool's existing try/catch turns it into an error result (the AI can read the concrete reason and tell the user). */
 export function repoToolCwd(repo: RepoState): string {
   if (repo.cwd) return repo.cwd;
   if (repo.noRepo) throw new Error('项目未配置 Git 仓库,repo 类工具不可用');
@@ -23,25 +23,25 @@ export function repoToolCwd(repo: RepoState): string {
   throw new Error('仓库尚未就绪(后台检出中),请稍后重试');
 }
 
-/** 空间工具运行上下文:由 session.ts 按 thread 构建,经闭包注入各工具。
- *  repo 为共享可变引用,后台检出完成后 cwd 就位,工具随调随解析。 */
+/** Space tool run context: built per thread by session.ts and injected into each tool via closure.
+ *  repo is a shared mutable reference; once the background checkout completes cwd is in place and tools resolve it per call. */
 export interface SpaceToolsContext {
   threadId: string;
   versionId: string;
   projectId: string;
   repo: RepoState;
-  /** 向当前线程 SSE 订阅者广播自定义事件(confirm_request / stage / announce 等)。 */
+  /** Broadcast a custom event to the current thread's SSE subscribers (confirm_request / stage / announce etc.). */
   emit: (e: Record<string, unknown>) => void;
-  /** 线程创建人：AI 直建/暂存落库对象以此为归属；历史线程为 null。 */
+  /** Thread creator: AI-direct-created/staged persistence objects take this as their owner; null on historical threads. */
   createdByUserId: string | null;
-  /** 线程创建人是否为有效管理员（buildSpaceRecord 构建时解析）。false → 管理类工具不注册。 */
+  /** Whether the thread creator is a valid manager (resolved at buildSpaceRecord time). false → management tools not registered. */
   manager: boolean;
-  /** 界面语言：线程创建人语言，历史线程缺省 zh-CN。 */
+  /** UI language: the thread creator's language; historical threads default to zh-CN. */
   lang?: AiLang;
-  /** 版本独立工作空间目录（.data/workspaces/v-<versionId>）；read_skill 的 .pi/skills 根。 */
+  /** Version's dedicated workspace directory (.data/workspaces/v-<versionId>); the .pi/skills root for read_skill. */
   workspaceDir?: string;
-  /** 线程用途：'rca' 才注册 save_rca_result；缺省等同 'chat'（历史线程/测试桩不带此字段）。 */
+  /** Thread purpose: save_rca_result is registered only for 'rca'; default equals 'chat' (historical threads/test stubs omit this field). */
   purpose?: string;
-  /** 是否注册 playground 实时画面。缺省/true = 开（会话链路现行为）；显式 false = 批量后台链路关闭（省 0.5fps 截图轮询开销）。 */
+  /** Whether to register the playground live view. Default/true = on (current session-link behavior); explicit false = off for batch background links (saves the 0.5fps screenshot-polling overhead). */
   liveView?: boolean;
 }

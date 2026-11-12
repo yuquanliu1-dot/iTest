@@ -1,14 +1,14 @@
 /**
- * 执行期凭据来源的唯一构造点：机械回放（cdp.resolveEnvCredential）、AI 回放降级
- * （cdp.aiCredentialSub）、pi 层 verify/solidify/login 三个工具都用它。
+ * The single construction point for runtime credential sources: mechanical replay (cdp.resolveEnvCredential),
+ * AI replay fallback (cdp.aiCredentialSub), and the pi layer's verify/solidify/login tools all use it.
  *
- * 默认链三级：显式 @ref → 用例绑定的 web_service_ref → 环境的默认 web 服务。
- * 一条链同时覆盖"不同用例测不同 web"（第二级）与"同一用例跨 web"（第一级）。
+ * Three-level default chain: explicit @ref → the case's bound web_service_ref → the environment's default web service.
+ * One chain covers both "different cases test different webs" (level 2) and "one case across webs" (level 1).
  */
 import { credentialPlaceholder, type CredentialSource } from './aiTask.js';
 import type { EnvCtx } from './envContext.js';
 
-/** 无 ref 占位符该落到哪个 web 服务上（第二/三级链的结果；null = 环境无可用 web）。 */
+/** Which web service a ref-less placeholder resolves onto (the level-2/3 chain result; null = no usable web in the environment). */
 export function defaultWebRef(ctx: { envCtx?: EnvCtx; caseWebServiceRef?: string | null }): string | null {
   const explicit = ctx.caseWebServiceRef;
   if (explicit) return explicit;
@@ -17,7 +17,7 @@ export function defaultWebRef(ctx: { envCtx?: EnvCtx; caseWebServiceRef?: string
   return def?.name ?? null;
 }
 
-/** 组装 CredentialSource。secret 为步骤级敏感密文（与 web 无关，原样透传）。 */
+/** Assembles a CredentialSource. secret is the step-level sensitive ciphertext (web-independent, passed through as-is). */
 export function buildCredentialSource(
   ctx: { envCtx?: EnvCtx; caseWebServiceRef?: string | null },
   secret?: string | undefined,
@@ -29,7 +29,7 @@ export function buildCredentialSource(
     user: def?.user ?? null,
     password: def?.password ?? null,
     secret: secret ?? null,
-    // 显式 @ref 写错服务名时判死（strictRef）：静默用默认服务的凭据会把测试登到另一个系统上。
+    // An explicit @ref naming a wrong service hard-fails (strictRef): silently using the default service's credentials would log the test into another system.
     byRef: (ref) => env?.resolveLogin(ref) ?? null,
     strictRef: true,
     envName: env?.envName ?? null,
@@ -37,8 +37,8 @@ export function buildCredentialSource(
   };
 }
 
-/** AI 提示词的资源清单（只含 name / origin / 有无凭据，绝不出现真实值）。
- *  每行直接给出该服务对应的凭据占位符形态——模型照抄即可，不必自己拼 @name。 */
+/** Resource manifest for the AI prompt (only name / origin / whether credentials exist; never real values).
+ *  Each line directly gives that service's credential placeholder form — the model copies it verbatim, no need to assemble @name itself. */
 export function renderWebResourceManifest(ctx: { envCtx?: EnvCtx }): string {
   const env = ctx.envCtx;
   const webs = env?.webServices ?? [];

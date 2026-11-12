@@ -1,19 +1,19 @@
 /**
- * P5 单测：A3 独立评审（judge）+ D2 故障注入（fault）。
+ * P5 unit tests: A3 independent review (judge) + D2 fault injection (fault).
  *
- * A3 验收项：
- *  - 判定形状容错：中英别名、百分数置信度、形状不可解析 → unclear；
- *  - **绝不改 findings.status**（人工审阅才是权威）——评审只写 findings.judge；
- *  - 评审调用失败 → 该条 unclear（不是「不成立」），会话 judge_status=failed；
- *  - 幂等：judge_status=done 的会话再评审不重复调模型；
- *  - 无 findings → judge_status=skipped；
- *  - 只喂材料（描述 + 平台动作留痕 + 证据帧元数据），不喂探索者的推理。
+ * A3 acceptance criteria:
+ *  - Verdict shape tolerance: Chinese/English aliases, percentage confidence, unparseable shape → unclear;
+ *  - **Never touches findings.status** (human review is the authority) — the judge only writes findings.judge;
+ *  - Judge call failure → that finding becomes unclear (not "dismissed"), session judge_status=failed;
+ *  - Idempotency: re-judging a session with judge_status=done does not call the model again;
+ *  - No findings → judge_status=skipped;
+ *  - Only feeds material (description + platform action trail + evidence frame metadata), never the explorer's reasoning.
  *
- * D2 验收项：
- *  - 模式名归一（中英别名）；
- *  - 施加/切换/复原：切换模式先复原上一个（不叠加）；复原清掉离线/慢网路由/CPU 节流；
- *  - 慢网只拖 GET（写请求照常放行）；
- *  - 工具永不 throw（非法 mode → isError + 可行动文案）。
+ * D2 acceptance criteria:
+ *  - Mode name normalization (Chinese/English aliases);
+ *  - Apply/switch/reset: switching modes resets the previous one first (no stacking); reset clears offline/slow-network route/CPU throttling;
+ *  - Slow network only delays GET (write requests pass through as usual);
+ *  - Tools never throw (invalid mode → isError + actionable message).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Pool } from 'pg';
@@ -47,7 +47,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** 建一条会话行。 */
+/** Insert one session row. */
 async function insertSession(opts: { judgeStatus?: string } = {}): Promise<string> {
   sessionCounter += 1;
   const r = await pool.query(
@@ -58,7 +58,7 @@ async function insertSession(opts: { judgeStatus?: string } = {}): Promise<strin
   return r.rows[0]!.id as string;
 }
 
-/** 建一条 finding（可选平台留痕）。返回 id 与 order（order 决定决策帧文件名）。 */
+/** Insert one finding (optional platform action trail). Returns id and order (order determines the decision frame file name). */
 async function insertFinding(
   sessionId: string,
   opts: { title?: string; trail?: unknown; status?: string; evidenceFrame?: unknown } = {},
@@ -84,9 +84,9 @@ async function insertFinding(
   return { id: r.rows[0]!.id as string, order: sessionCounter };
 }
 
-/** 写一张真 PNG 到决策帧落盘路径（judge 按 <order> 从盘上读帧）。
- *  screenshotDiskPath 必须动态 import：它拖出 db/client（模块加载时读 DATABASE_URL），
- *  静态 import 会抢在 beforeAll 设 env 之前把 pool 绑到默认库——全部 judge 用例假红。 */
+/** Write a real PNG to the decision frame disk path (the judge reads frames from disk by <order>).
+ *  screenshotDiskPath must be dynamically imported: it pulls in db/client (which reads DATABASE_URL at module load),
+ *  and a static import would bind the pool to the default database before beforeAll sets the env — every judge case goes falsely red. */
 async function writeFrame(sessionId: string, order: number): Promise<{ base64: string; file: string }> {
   const { screenshotDiskPath } = await import('../src/execute/explorationShared.js');
   const file = screenshotDiskPath(sessionId, order);
@@ -99,7 +99,7 @@ async function writeFrame(sessionId: string, order: number): Promise<{ base64: s
   return { base64: png.toString('base64'), file };
 }
 
-/** 假 LLM 客户端：按脚本回 JSON，或抛错。记录收到的请求（验「只喂材料」）。 */
+/** Fake LLM client: replies with scripted JSON or throws. Records received requests (to verify "only material is fed"). */
 function makeLlm(
   reply: (req: LLMRequest, call: number) => Record<string, unknown>,
 ): { client: LLMClient; calls: LLMRequest[] } {
@@ -122,12 +122,12 @@ describe('A3 独立评审（judge）', () => {
       reason: '材料支撑',
       confidence: 0.8,
     });
-    // 中文别名。
+    // Chinese aliases.
     expect(parseVerdict({ verdict: '不成立', reason: '预期行为', confidence: 0.2 })?.verdict).toBe('dismissed');
     expect(parseVerdict({ verdict: '存疑', reason: '看不清', confidence: 0.2 })?.verdict).toBe('unclear');
-    // 0~100 的百分数折算。
+    // Percentage conversion from the 0~100 scale.
     expect(parseVerdict({ verdict: 'confirmed', reason: 'x', confidence: 80 })?.confidence).toBeCloseTo(0.8);
-    // 形状不可解析 / >1 的数值一律按百分数折算（代码口径：0~100 折到 0~1，超界钳到 1）。
+    // Unparseable shapes / values > 1 are always converted as percentages (code semantics: 0~100 folds to 0~1, out of range clamps to 1).
     expect(parseVerdict({ verdict: 'whatever' })).toBeNull();
     expect(parseVerdict(null)).toBeNull();
     expect(parseVerdict({ verdict: 'confirmed', reason: 'x', confidence: 5 })?.confidence).toBeCloseTo(0.05);
@@ -148,7 +148,7 @@ describe('A3 独立评审（judge）', () => {
     await judgeExplorationSession(sessionId, { llm: client, vision: false });
 
     const f = await pool.query(`SELECT status, judge FROM exploration_findings WHERE id=$1`, [findingId]);
-    // 人工审阅状态仍是 pending——评审只标注，不越权。
+    // Human review status stays pending — the judge only annotates, never oversteps.
     expect(f.rows[0]!.status).toBe('pending');
     const judge = f.rows[0]!.judge as { verdict: string; reason: string; confidence: number; model: string };
     expect(judge.verdict).toBe('confirmed');
@@ -163,7 +163,7 @@ describe('A3 独立评审（judge）', () => {
     expect(result.summary).toContain('成立 1');
     expect(result.findings[0]!.id).toBe(findingId);
 
-    // 只喂材料：描述 + 平台动作留痕 + 页面 URL，不含探索者推理。
+    // Only material is fed: description + platform action trail + page URL, no explorer reasoning.
     const body = calls[0]!.userMessage;
     expect(body).toContain('删除后列表未刷新');
     expect(body).toContain('平台动作留痕');
@@ -212,7 +212,7 @@ describe('A3 独立评审（judge）', () => {
 
   it('决策帧在盘上 → 评审请求带真图（评审看得见画面），材料里说明已附图', async () => {
     const sessionId = await insertSession();
-    const order = sessionCounter + 1; // insertFinding 内部自增——先算好给 evidenceFrame 用
+    const order = sessionCounter + 1; // insertFinding increments internally — compute it up front for evidenceFrame
     const inserted = await insertFinding(sessionId, {
       evidenceFrame: { screenshotPath: `/screenshots/${sessionId}/finding-${order}.png`, capturedAt: new Date().toISOString() },
     });
@@ -222,16 +222,16 @@ describe('A3 独立评审（judge）', () => {
 
     const { judgeExplorationSession } = await import('../src/pi/exploration/judge.js');
     try {
-      await judgeExplorationSession(sessionId, { llm: client }); // vision 缺省 = 允许附图
+      await judgeExplorationSession(sessionId, { llm: client }); // vision defaults to true = attaching frames allowed
 
       expect(calls).toHaveLength(1);
-      // 请求带的是磁盘上那帧的真图（不是路径文本）。
+      // The request carries the real image of the frame on disk (not the path text).
       expect(calls[0]!.image?.base64).toBe(frame.base64);
       expect(calls[0]!.image?.mime).toBe('image/png');
-      // 多轮形态里图片块也在（用户消息首块 = 决策帧）。
+      // The image block is also present in the multi-turn form (first block of the user message = decision frame).
       const first = calls[0]!.messages?.[0]!.content[0]!;
       expect(first.type).toBe('image');
-      // 材料里明确告知已附图（模型据此核对画面与描述）。
+      // The material explicitly states that the frame is attached (the model cross-checks the image against the description).
       expect(calls[0]!.userMessage).toContain('决策帧截图已附在本消息的图片块里');
     } finally {
       await rm(dirname(frame.file), { recursive: true, force: true });
@@ -241,7 +241,7 @@ describe('A3 独立评审（judge）', () => {
   it('附图那条路失败（网关拒图）→ 退纯文本再判一次，评审不因一张图整场挂掉', async () => {
     const sessionId = await insertSession();
     const inserted = await insertFinding(sessionId);
-    await writeFrame(sessionId, inserted.order); // 帧在盘上 → 首选附图
+    await writeFrame(sessionId, inserted.order); // frame is on disk → attaching it is preferred
     const withImage: LLMRequest[] = [];
     const withoutImage: LLMRequest[] = [];
     const client: LLMClient = {
@@ -264,7 +264,7 @@ describe('A3 独立评审（judge）', () => {
       expect(withoutImage).toHaveLength(1);
       const f = await pool.query(`SELECT judge FROM exploration_findings WHERE id=$1`, [inserted.id]);
       const judge = f.rows[0]!.judge as { verdict: string };
-      // 第二次（纯文本）成功 → 正常落判定，不是 unclear。
+      // The second (text-only) attempt succeeds → the verdict lands normally, not unclear.
       expect(judge.verdict).toBe('dismissed');
       const s = await pool.query(`SELECT judge_status FROM exploration_sessions WHERE id=$1`, [sessionId]);
       expect(s.rows[0]!.judge_status).toBe('done');
@@ -313,7 +313,7 @@ describe('D2 故障注入（fault）', () => {
     expect(fault.current()).toBe('offline');
     expect(offline.at(-1)).toBe(true);
 
-    // 切到慢网：先复原断网（setOffline(false)）再挂路由，不叠加。
+    // Switching to slow network: resets offline first (setOffline(false)), then mounts the route — no stacking.
     await fault.apply('slow_network');
     expect(fault.current()).toBe('slow_network');
     expect(offline.at(-1)).toBe(false);
@@ -379,7 +379,7 @@ describe('D2 故障注入（fault）', () => {
     await handler?.(makeRoute('GET'));
     await handler?.(makeRoute('POST'));
 
-    // 两个都放行（GET 只是被延迟过，不是被拦）。
+    // Both pass through (GET is only delayed, not blocked).
     expect(continued).toEqual(['GET', 'POST']);
   }, 20000);
 

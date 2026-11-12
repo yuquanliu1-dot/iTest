@@ -1,31 +1,32 @@
-/** 执行历史查询 service(query_stats 工具的数据层)。
- *  范围语义:项目域——当前项目全部执行历史(含计划成员执行、无版本计划运行),结果标注所属版本。
- *  与 executions 列表页的"展示口径"(排除计划成员)不同:归因口径关注用例本身全历史。
- *  只读,无写路径。
- *  上下文预算:本层负责全部裁剪——字符串 clipText(1000 字)、db/sql rows ≤10 行、log lines ≤10 行、
- *  screenshot/compiled 等大对象不透传;工具层只做参数解析与 JSON 序列化。 */
+/** Execution-history query service (the query_stats tool's data layer).
+ *  Scope semantics: project domain — the current project's full execution history (including plan-member executions and
+ *  version-less plan runs), results annotated with the owning version.
+ *  Unlike the executions list page's "display criteria" (plan members excluded): the attribution criteria cares about a case's full history.
+ *  Read-only, no write paths.
+ *  Context budget: this layer owns all trimming — strings clipText (1000 chars), db/sql rows ≤10, log lines ≤10,
+ *  large objects like screenshot/compiled are never passed through; the tool layer only does parameter parsing + JSON serialization. */
 import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { executionPlans, groups, planRunCases, planRuns, projectVersions, reports, testCases } from '../db/schema.js';
 import { resolveUsersByIds } from '../lib/creator.js';
 
-/** days 天前的时间点(含当天当天,闭区间起点)。 */
+/** The point in time `days` days ago (today included; closed-interval start). */
 function since(days: number): Date {
   return new Date(Date.now() - days * 86_400_000);
 }
 
-/** 失败计数片段(orderBy 复用;必须括号包住 filter 再 ::int,否则 pg 返回 bigint→string) */
+/** Failed-count fragment (reused by orderBy; the filter must be parenthesized before ::int, otherwise pg returns bigint→string) */
 const failedCount = sql`(count(*) filter (where ${reports.status} = 'failed'))`;
 
-/** 上下文预算:字符串统一截断阈值。 */
+/** Context budget: the uniform string truncation threshold. */
 export const CLIP_LEN = 1000;
 
-/** 字符串截断(上下文预算):超 max 字截断加省略号。 */
+/** String truncation (context budget): clipped at max chars with an ellipsis appended. */
 export function clipText(s: string, max = CLIP_LEN): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
-/** 失败列表/报告列表共用的「最后断言」SQL:vision reason 优先,失败步 error 兜底(与 executions 列表页同口径)。 */
+/** The "last assertion" SQL shared by failure/report lists: vision reason first, failed-step error as fallback (same criteria as the executions list page). */
 const lastAssertionSql = sql<string | null>`
   case
     when jsonb_typeof(${reports.stepResults}) = 'array' and jsonb_array_length(${reports.stepResults}) > 0 then
@@ -39,7 +40,7 @@ const lastAssertionSql = sql<string | null>`
     else null
   end`;
 
-/** report → plan_run 回溯 SQL:该报告所属的计划运行 id(单用例执行为 null)。 */
+/** report → plan_run backtracking SQL: the plan run id the report belongs to (null for single-case executions). */
 const planRunIdSql = sql<string | null>`(select pr.plan_run_id::text from plan_run_cases pr where pr.report_id = ${reports.id} limit 1)`;
 
 export interface HistoryCaseStat {
@@ -56,7 +57,7 @@ export interface HistoryCaseStat {
   lastRunAt: string | null;
 }
 
-/** 用例级聚合:执行数/通过(含自愈拆分)/失败/均耗时/最新状态,按失败数降序。含计划成员执行。 */
+/** Case-level aggregation: execution count / passed (with self-heal split) / failed / avg duration / latest status, sorted by failed count desc. Includes plan-member executions. */
 export async function caseStats(
   projectId: string,
   opts: { caseIds?: string[]; versionId?: string; days?: number } = {},
@@ -86,7 +87,7 @@ export async function caseStats(
   return attachVersionNames(rows);
 }
 
-/** 批量给行补 versionName(null versionId → null,由上层标注"无版本")。 */
+/** Bulk-fills versionName onto rows (null versionId → null; upper layers label it "no version"). */
 async function attachVersionNames<T extends { versionId: string | null }>(
   rows: T[],
 ): Promise<Array<T & { versionName: string | null }>> {
@@ -109,7 +110,7 @@ export interface HistoryOverview {
   topFailedCases: HistoryCaseStat[];
 }
 
-/** 项目执行概览:case 报告口径(通过=一次通过+自愈通过)/计划运行状态分布/失败 top5。 */
+/** Project execution overview: case-report criteria (passed = first-run passed + self-heal passed) / plan-run status distribution / top-5 failures. */
 export async function historyOverview(
   projectId: string,
   opts: { days?: number; versionId?: string } = {},
@@ -117,7 +118,7 @@ export async function historyOverview(
   const days = opts.days ?? 30;
   const caseConds = [eq(groups.projectId, projectId), gte(reports.createdAt, since(days))];
   if (opts.versionId) caseConds.push(eq(testCases.versionId, opts.versionId));
-  // 聚合无 groupBy 恒返回一行,非空断言与 user.service.ts 的 row! 惯例一致
+  // Aggregation without groupBy always returns one row; the non-null assertion matches user.service.ts's row! convention
   const agg = (await db
     .select({
       total: sql<number>`(count(*))::int`,
@@ -162,14 +163,14 @@ export interface HistoryFailure {
   versionName: string | null;
   durationMs: number | null;
   summary: string | null;
-  /** 最后断言信息:vision reason 优先,失败步 error 兜底(与 executions 列表页同款 SQL) */
+  /** Last assertion info: vision reason first, failed-step error as fallback (same SQL as the executions list page) */
   lastAssertion: string | null;
-  /** 计划成员执行回溯到的 plan_run id;单用例执行为 null */
+  /** The plan_run id backtracked for plan-member executions; null for single-case executions */
   planRunId: string | null;
   createdAt: string | null;
 }
 
-/** 失败报告明细(归因下钻原材料),最新在前。含计划成员执行。 */
+/** Failed-report details (the raw material for attribution drill-down), newest first. Includes plan-member executions. */
 export async function failureList(
   projectId: string,
   opts: { caseId?: string; days?: number; limit?: number } = {},
@@ -201,9 +202,9 @@ export async function failureList(
   return attachVersionNames(rows);
 }
 
-// ---------- stepResults jsonb 整形(纯函数,单测覆盖) ----------
+// ---------- stepResults jsonb shaping (pure functions, unit-tested) ----------
 
-/** 结构化行内对象的安全读取:非 null 对象才返回。 */
+/** Safe read of a structured inline object: returns only non-null objects. */
 function asObj(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
@@ -216,12 +217,12 @@ function strOf(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
 }
 
-/** 字符串值截断的对象浅拷贝(表头/单元格等 string map 通用)。 */
+/** Shallow copy with string values truncated (generic for string maps like headers/cells). */
 function clipRecord(r: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'string' ? clipText(v) : v]));
 }
 
-/** rows ≤10 行(超限置 truncated),单元格字符串 clip;保留上游已标记的 truncated。 */
+/** rows ≤10 rows (over-limit sets truncated), cell strings clipped; an upstream-marked truncated is preserved. */
 function shapeRows(o: Record<string, unknown>): { rows: Record<string, unknown>[]; truncated?: boolean } {
   const raw = Array.isArray(o.rows) ? o.rows : [];
   const over = raw.length > 10;
@@ -232,7 +233,7 @@ function shapeRows(o: Record<string, unknown>): { rows: Record<string, unknown>[
   return { rows, ...(o.truncated === true || over ? { truncated: true } : {}) };
 }
 
-/** db/sql 结果里的「实际执行的 SQL + 绑定参数」：老报告缺省，params 逐项 clip。 */
+/** The "actually executed SQL + bound params" in db/sql results: absent in old reports, params clipped item by item. */
 function shapeSqlText(o: Record<string, unknown>): { sql?: string; params?: unknown[] } {
   const out: { sql?: string; params?: unknown[] } = {};
   if (typeof o.sql === 'string') out.sql = clipText(o.sql);
@@ -260,14 +261,14 @@ function shapeAssertion(v: unknown): HistoryAssertion | undefined {
   };
 }
 
-/** 数据库查询结果的通用形状（sql 步的基形状；2026-11-08 queryDb 下线后不再有独立的 db 字段）。 */
+/** The generic shape of database query results (the sql step's base shape; after queryDb's 2026-11-08 retirement there is no separate db field). */
 export interface HistoryStepDb {
   rowCount: number;
   durationMs: number;
   rows: Record<string, unknown>[];
-  /** 实际执行的 SQL（占位符形态）。老报告缺省。 */
+  /** The actually executed SQL (placeholder form). Absent in old reports. */
   sql?: string;
-  /** 绑定参数值。老报告缺省。 */
+  /** Bound parameter values. Absent in old reports. */
   params?: unknown[];
   truncated?: boolean;
   assertion?: HistoryAssertion;
@@ -311,7 +312,7 @@ export interface HistoryStructured {
   syslog?: HistoryStepSyslog;
 }
 
-/** 单步结构化结果整形(结果详情挑选+截断;screenshot 等大对象不透传)。老报告缺字段→对应 key 缺省。 */
+/** Shapes a single step's structured results (picks result details + truncates; large objects like screenshot never pass through). Old reports missing fields → the corresponding key is omitted. */
 export function shapeStructured(s: Record<string, unknown>): HistoryStructured {
   const out: HistoryStructured = {};
   const sq = asObj(s.sql);
@@ -394,7 +395,7 @@ export function shapeStructured(s: Record<string, unknown>): HistoryStructured {
   return out;
 }
 
-/** 任意 jsonb 深度字符串截断(rca/preflight/datasetSnapshot 等自产小对象通用;数组截 20 项)。 */
+/** Depth-first string truncation over any jsonb (generic for self-produced small objects like rca/preflight/datasetSnapshot; arrays clipped to 20 items). */
 export function clipDeep(v: unknown): unknown {
   if (typeof v === 'string') return clipText(v);
   if (Array.isArray(v)) return v.slice(0, 20).map((x) => clipDeep(x));
@@ -425,7 +426,7 @@ export interface HistoryStep {
   syslog?: HistoryStepSyslog;
 }
 
-/** 单步整形纯函数:归因所需字段子集+统一截断;screenshot/tabIndex/compiled 等不透传。 */
+/** Single-step shaping pure function: the field subset attribution needs + uniform truncation; screenshot/tabIndex/compiled etc. never pass through. */
 export function shapeStep(s: Record<string, unknown>): HistoryStep {
   const out: HistoryStep = {
     order: typeof s.order === 'number' ? s.order : 0,
@@ -475,21 +476,21 @@ export interface HistoryReportDetail {
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string | null;
-  /** 执行前检(URL 可达/登录态/origin),老报告可能缺省 */
+  /** Preflight (URL reachable / login state / origin), may be absent in old reports */
   preflight?: Record<string, unknown>;
-  /** 数据行快照(敏感值落库即 '******',可安全透传) */
+  /** Dataset row snapshot (sensitive values stored as '******', safe to pass through) */
   datasetSnapshot?: Record<string, unknown>;
-  /** 计划成员执行回溯;单用例执行缺省 */
+  /** Backtracked plan-member execution; absent for single-case executions */
   planRunId?: string | null;
   planId?: string | null;
-  /** 计划运行 RCA 结论(save_rca_result / worker 写) */
+  /** Plan-run RCA conclusion (written by save_rca_result / the worker) */
   rca?: Record<string, unknown> | null;
-  /** 触发人显示名 */
+  /** The trigger's display name */
   createdByName?: string | null;
   steps: HistoryStep[];
 }
 
-/** 单报告详情(深度归因)。范围:reportId 必须属于当前项目,否则 null。 */
+/** Single-report detail (deep attribution). Scope: reportId must belong to the current project, otherwise null. */
 export async function reportDetail(projectId: string, reportId: string): Promise<HistoryReportDetail | null> {
   const rows = await db
     .select({
@@ -522,7 +523,7 @@ export async function reportDetail(projectId: string, reportId: string): Promise
   if (!r) return null;
   const raw = Array.isArray(r.stepResults) ? (r.stepResults as Array<Record<string, unknown>>) : [];
   const steps = raw.map((s) => shapeStep(s));
-  // 计划成员报告:回溯 planRunId/planId 与 RCA(与 routes/reports.ts GET /:id 同款两段匹配)
+  // Plan-member reports: backtrack planRunId/planId and RCA (same two-stage matching as routes/reports.ts GET /:id)
   const prcRows = await db
     .select({ planRunId: planRunCases.planRunId, reportId: planRunCases.reportId, reportIds: planRunCases.reportIds, rca: planRunCases.rca })
     .from(planRunCases)
@@ -583,7 +584,7 @@ export interface HistoryReportListItem {
   createdByName: string | null;
 }
 
-/** 报告列表(通过+失败都可查,最新在前)——report_detail 的发现入口。含计划成员执行。 */
+/** Report list (passed + failed both queryable, newest first) — the discovery entry for report_detail. Includes plan-member executions. */
 export async function reportList(
   projectId: string,
   opts: { caseId?: string; status?: string; days?: number; limit?: number } = {},
@@ -660,7 +661,7 @@ export interface HistoryPlanRunDetail {
   finishedAt: string | null;
   durationMs: number | null;
   summary: string | null;
-  /** 触发来源:'manual' 一键执行 / 'schedule' 调度触发 */
+  /** Trigger source: 'manual' one-click execution / 'schedule' scheduler-triggered */
   triggerSource: string;
   triggeredBy: string | null;
   totalCases: number;
@@ -670,8 +671,8 @@ export interface HistoryPlanRunDetail {
   cases: HistoryPlanRunCase[];
 }
 
-/** 单次计划运行明细:run 概要 + 单用例成败(error/rca)。范围:runId 必须属于当前项目,否则 null。
- *  不复用 routes/planRuns.ts 的组装(其耦合 5min 终态缓存与 SSE 分支),工具侧简单查库即可。 */
+/** Single plan-run detail: run summary + per-case pass/fail (error/rca). Scope: runId must belong to the current project, otherwise null.
+ *  Doesn't reuse routes/planRuns.ts's assembly (it couples the 5min terminal-state cache and SSE branches); the tool side can just query the DB simply. */
 export async function planRunDetail(projectId: string, runId: string): Promise<HistoryPlanRunDetail | null> {
   const rows = await db
     .select({
@@ -765,7 +766,7 @@ export interface HistoryPlanRun {
   triggeredBy: string | null;
 }
 
-/** 计划运行列表(最新在前)。versionId 来自 execution_plans(可空→versionName null=无版本)。 */
+/** Plan-run list (newest first). versionId comes from execution_plans (nullable → versionName null = no version). */
 export async function planRunList(
   projectId: string,
   opts: { planId?: string; status?: string; days?: number; limit?: number } = {},

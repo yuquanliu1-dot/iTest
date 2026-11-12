@@ -1,14 +1,15 @@
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
- * 整轮测试共享一个 PG 容器；每个测试文件通过 helpers/pg.createTestDatabase()
- * 在容器内拿到自己的空数据库（隔离语义与"每文件一个容器"等价）。
+ * The whole test run shares one PG container; each test file gets its own empty database
+ * inside the container via helpers/pg.createTestDatabase()
+ * (isolation semantics equivalent to "one container per file").
  *
- * 连接信息走 provide/inject：worker 的 process.env 在 createPool 时已快照，
- * globalSetup 里改 process.env 传不到 worker。
+ * Connection info flows through provide/inject: the worker's process.env is snapshotted at createPool time,
+ * so process.env changes in globalSetup do not reach workers.
  *
- * 注意：本文件不得 import 'vitest'（globalSetup 在独立上下文，inject 会抛），
- * 也不得 import helpers/pg.ts（后者依赖 inject）。
+ * Note: this file must not import 'vitest' (globalSetup runs in an isolated context; inject would throw),
+ * and must not import helpers/pg.ts (the latter depends on inject).
  */
 
 export interface PgInfo {
@@ -21,7 +22,7 @@ export interface PgInfo {
 let container: StartedPostgreSqlContainer;
 
 export default async function setup({ provide }: { provide: (key: string, value: unknown) => void }): Promise<() => Promise<void>> {
-  // max_connections：9 个并发 worker × (应用 pool 5 + 文件自带 pool 10) 峰值 135 > PG 默认 100
+  // max_connections: 9 concurrent workers × (app pool 5 + per-file pool 10) peaks at 135 > PG default 100
   container = await new PostgreSqlContainer('postgres:16-alpine')
     .withCommand(['postgres', '-c', 'max_connections=300'])
     .start();
@@ -33,7 +34,7 @@ export default async function setup({ provide }: { provide: (key: string, value:
   };
   provide('pgInfo', info);
   return async () => {
-    // removeVolumes 默认 true（testcontainers stop 语义），不留悬空卷
+    // removeVolumes defaults to true (testcontainers stop semantics), leaving no dangling volumes
     await container.stop();
   };
 }

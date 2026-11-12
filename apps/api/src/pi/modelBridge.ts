@@ -10,12 +10,13 @@ export interface LlmConfig {
   apiKey: string;
   model: string;
   baseUrl: string | null;
-  /** 单次回复最大输出 token（渠道 maxTokens）；未配置/非法 → undefined，client 用自己的默认。 */
+  /** Max output tokens per reply (channel maxTokens); unconfigured/invalid → undefined, client uses its own default. */
   maxTokens?: number;
 }
 
-/** 读取 LLM 配置（只认 llm_channels 多渠道结构，取默认渠道）；
- *  未配置渠道或渠道缺 apiKey/model → null。pi 路径只承载聊天/蒸馏纯文本调用，不接视觉渠道。 */
+/** Reads LLM config (only understands the llm_channels multi-channel structure, takes the default channel);
+ *  no channels configured or channel missing apiKey/model → null. The pi path carries only chat/distillation
+ *  plain-text calls, no vision channel. */
 export async function readLlmConfig(): Promise<LlmConfig | null> {
   const all = await db
     .select()
@@ -38,9 +39,10 @@ export async function readLlmConfig(): Promise<LlmConfig | null> {
 }
 
 /**
- * settings 里的 model 可以是代理/网关的自定义别名（不在 pi-ai catalog 里，getBuiltinModel 返回
- * undefined）。此时按 provider 合成一个最小合法 Model：api 必须是 pi-ai 的 KnownApi 之一，
- * baseUrl 用 settings 的值（网关）或 provider 默认值。
+ * The model in settings can be a proxy/gateway custom alias (not in the pi-ai catalog, so
+ * getBuiltinModel returns undefined). In that case a minimal valid Model is synthesized per
+ * provider: api must be one of pi-ai's KnownApi values, baseUrl uses the settings value
+ * (gateway) or the provider default.
  */
 export function synthesizeModel(provider: LlmProvider, modelId: string, baseUrl: string | null): Record<string, unknown> {
   const defaults: Record<LlmProvider, { api: string; baseUrl: string }> = {
@@ -56,10 +58,11 @@ export function synthesizeModel(provider: LlmProvider, modelId: string, baseUrl:
     provider,
     baseUrl: baseUrl ?? d.baseUrl,
     reasoning: false,
-    // 'image' 必须声明:pi-ai transformMessages 按 model.input 过滤消息图片块
-    // (downgradeUnsupportedImages → 占位文本)。['text'] 会让用户附件在发往网关前被
-    // 静默剥掉——整条链路"全绿但模型看不见图"。网关路由到无视觉能力的模型时,
-    // 由对端 API 报错兜底,宁可显式失败也不静默丢图。
+    // 'image' must be declared: pi-ai transformMessages filters message image blocks by model.input
+    // (downgradeUnsupportedImages → placeholder text). ['text'] would silently strip user
+    // attachments before they reach the gateway — the whole chain reads "all green but the model
+    // never sees the image". When the gateway routes to a non-vision model, the remote API's
+    // error is the fallback: prefer explicit failure over silently dropping images.
     input: ['text', 'image'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200000,

@@ -12,10 +12,10 @@ interface StageEvent {
   payload?: unknown;
 }
 
-/** 广播舞台事件:Plan 3 前端据此高亮/滚动到被操作的对象。
- *  stage_* 工具发出的 action='stage' / save 后的 action='remove' 共用同一通道。
- *  action='stage' 必带 payload(StageDoc 单条对象),前端 ingest 直接 upsert 到 stagedByThread,
- *  免去 mount 后才看得到暂存对象的滞后。 */
+/** Broadcasts stage events: the Plan 3 frontend uses these to highlight/scroll to the operated object.
+ *  The action='stage' emitted by stage_* tools and the action='remove' after save share this one channel.
+ *  action='stage' always carries a payload (a single StageDoc object); the frontend ingest upserts it directly into stagedByThread,
+ *  removing the lag of staged objects only appearing after mount. */
 export function emitStage(ctx: SpaceToolsContext, e: StageEvent): void {
   if (e.action === 'stage' && e.payload) {
     ctx.emit({ type: 'stage', kind: e.kind, id: e.id, action: 'stage', payload: e.payload });

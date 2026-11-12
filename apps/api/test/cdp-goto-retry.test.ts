@@ -2,10 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import type { Page } from 'playwright-core';
 import { normalizeUrlForLandedCheck, gotoWithLandedRetry } from '../src/execute/cdp.js';
 
-// init goto 落地校验重试单测（prod228 2026-10-27 实录：SOC qiankun 深链冷启动 6 轮中 1 轮
-// 被静态兜底路由弹回首页——重试一次通常能赢路由守卫竞态）。只测 helper 本身，不需要浏览器/DB。
+// init goto landed-check retry unit tests (prod228 2026-10-27 live record: 1 of 6 rounds of the SOC qiankun deep-link cold start
+// got bounced back to the home page by the static fallback route -- retrying once usually wins the route-guard race). Only the helper itself is tested; no browser/DB needed.
 
-/** url() 依调用序返回 urls 中的值（越界取最后一个），模拟每轮 goto 后的最终地址。 */
+/** url() returns the values from urls in call order (out of range returns the last), simulating the final address after each goto round. */
 function fakePage(urls: string[]): Page {
   let i = 0;
   return {
@@ -61,10 +61,10 @@ describe('gotoWithLandedRetry', () => {
   });
 });
 
-// —— 页面内容探针（prod228 02c812ea 回归）——
-// 旧 fakePage 无 evaluate：探针拿不到结果立即放弃等待，上方 4 用例即隐式覆盖该路径。
-// 下面用带 evaluate/waitForTimeout 的 fake（waitForTimeout 立即 resolve，墙钟不推进，
-// 靠 waitForPageSubstance 的 maxIters 兜底终止，与真实 deadline 行为等价）。
+// -- Page content probe (prod228 02c812ea regression) --
+// The old fakePage had no evaluate: the probe gave up waiting immediately without a result, and the 4 cases above implicitly covered that path.
+// Below, a fake with evaluate/waitForTimeout is used (waitForTimeout resolves immediately, the wall clock doesn't advance,
+// and termination relies on waitForPageSubstance's maxIters fallback -- equivalent to the real deadline behavior).
 function substancePage(urls: string[], evaluateResults: boolean[]) {
   let i = 0;
   let e = 0;
@@ -92,7 +92,7 @@ describe('gotoWithLandedRetry — 页面内容探针', () => {
     const page = substancePage([target], [false]);
     const r = await gotoWithLandedRetry(page as unknown as Page, target);
     expect(r.landed).toBe(true);
-    expect(page.goto).toHaveBeenCalledTimes(1); // 内容超时不触发第二轮 goto
+    expect(page.goto).toHaveBeenCalledTimes(1); // a content timeout doesn't trigger a second goto
     expect(page.evaluate.mock.calls.length).toBeGreaterThan(5);
   });
 

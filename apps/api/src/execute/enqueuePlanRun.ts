@@ -1,9 +1,9 @@
 /**
- * 创建 plan_run 并 fire-and-forget 启动 runPlanAsync。
- * HTTP (`POST /plans/:id/run`) 和调度器 worker 都通过这个入口，避免两套重复逻辑。
+ * Creates the plan_run and fire-and-forget starts runPlanAsync.
+ * Both HTTP (`POST /plans/:id/run`) and the scheduler worker go through this entry, avoiding two copies of duplicated logic.
  *
- * callerUser: 用于 projectVisibility 校验。null = 调度器调用，跳过用户级校验（计划本身
- * 已存在并被启用即可）。req.user 路径下传 { userId }，由 plansRoute / middleware 校验。
+ * callerUser: used for projectVisibility validation. null = scheduler invocation, skipping user-level validation (the plan
+ * merely needs to exist and be enabled). The req.user path passes { userId } down; plansRoute / middleware validate it.
  */
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -24,7 +24,7 @@ export interface EnqueuePlanRunOpts {
     userId?: string | null;
     scheduleId?: string | null;
   };
-  /** 传 AuthUser 走 assertProjectVisible；null 表示调度器调用,跳过可见性校验。 */
+  /** Passing an AuthUser runs assertProjectVisible; null means scheduler invocation, skipping visibility validation. */
   callerUser: AuthUser | null;
 }
 
@@ -32,20 +32,20 @@ export interface EnqueuePlanRunResult {
   runId: string;
 }
 
-/** 计划全部分组（按组序）。 */
+/** All groups of the plan (in group order). */
 async function loadGroups(planId: string) {
   return db.select().from(planCaseGroups).where(eq(planCaseGroups.planId, planId)).orderBy(asc(planCaseGroups.order));
 }
 
-/** 组登录来源校验（原计划级 assertLoginPrepareHasSource 的组级版）：组开登录必须有登录用例或组环境凭据。 */
+/** Group-level login source validation (the group-level version of the former plan-level assertLoginPrepareHasSource): a group with login enabled must have a login case or group environment credentials. */
 async function assertGroupsLoginSource(groups: Array<typeof planCaseGroups.$inferSelect>): Promise<void> {
   for (const g of groups) {
     if (!g.loginPrepareEnabled) continue;
-    if (g.loginCaseId) continue; // 已指定登录用例,直接通过
+    if (g.loginCaseId) continue; // login case already designated, pass directly
     if (!g.environmentId) {
       throw new HttpError(422, 'login_case_required', `分组「${g.name}」登录准备已开启:需选择登录用例,或在分组环境中配置登录凭据`);
     }
-    // 与 resolveEnv 的 loginCfg 判据逐字段对齐:有效默认 web(isDefault→最早)payload 需 user 非空 + secret 三元组齐全。
+    // Field-by-field aligned with resolveEnv's loginCfg criteria: a valid default web (isDefault → earliest) payload needs a non-empty user + the full secret triple.
     const objs = await db.select({ payload: environmentObjects.payload }).from(environmentObjects)
       .where(and(eq(environmentObjects.environmentId, g.environmentId), eq(environmentObjects.objectType, 'web')))
       .orderBy(desc(environmentObjects.isDefault), asc(environmentObjects.createdAt), asc(environmentObjects.id))
@@ -59,7 +59,7 @@ async function assertGroupsLoginSource(groups: Array<typeof planCaseGroups.$infe
   }
 }
 
-/** 组级隐身/mobile 冲突：开登录的组内不得有 incognito 用例或非 deprecated mobile 用例。 */
+/** Group-level incognito/mobile conflicts: a group with login enabled must not contain incognito cases or non-deprecated mobile cases. */
 async function assertGroupsCaseConflicts(planId: string, groups: Array<typeof planCaseGroups.$inferSelect>): Promise<void> {
   const loginGroupIds = groups.filter((g) => g.loginPrepareEnabled).map((g) => g.id);
   if (loginGroupIds.length === 0) return;
@@ -92,7 +92,7 @@ export async function enqueuePlanRun(opts: EnqueuePlanRunOpts): Promise<EnqueueP
     projectId: plan.projectId,
     status: 'running',
     strategy: plan.strategy,
-    // 组结构快照：全部组配置字段按组序入 jsonb（老运行为 null,引擎兜底合成为单组）
+    // Group structure snapshot: every group config field enters the jsonb in group order (null on old runs; the engine falls back to synthesizing a single group)
     groups: groups.map((g) => ({
       id: g.id, name: g.name, order: g.order, environmentId: g.environmentId,
       loginPrepareEnabled: g.loginPrepareEnabled, loginCaseId: g.loginCaseId,
@@ -101,7 +101,7 @@ export async function enqueuePlanRun(opts: EnqueuePlanRunOpts): Promise<EnqueueP
       loginUnauthorizedKeywords: g.loginUnauthorizedKeywords, failFast: g.failFast,
       targetConfig: g.targetConfig,
     })),
-    // 旧 UI 兼容标量：任一组开启登录即 true；细粒度配置看 groups 快照
+    // Legacy-UI compatibility scalar: true as soon as any group enables login; fine-grained config lives in the groups snapshot
     loginPrepareEnabled: groups.some((g) => g.loginPrepareEnabled),
     loginCaseId: null,
     detectionUrl: null,
@@ -124,7 +124,7 @@ export async function enqueuePlanRun(opts: EnqueuePlanRunOpts): Promise<EnqueueP
       void runPlanAsync({ planRunId: runId }).catch((err) => logger.error({ err, planRunId: runId, trigger: opts.trigger.source }, 'runPlanAsync crashed'));
     }
   } else {
-    // 无 redis：回落同步启动（调度 worker 启动失败不影响手动执行）
+    // No redis: fall back to synchronous start (scheduler worker startup failure doesn't affect manual execution)
     void runPlanAsync({ planRunId: runId }).catch((err) => logger.error({ err, planRunId: runId, trigger: opts.trigger.source }, 'runPlanAsync crashed'));
   }
   return { runId };

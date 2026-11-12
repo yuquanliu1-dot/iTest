@@ -1,4 +1,4 @@
-/** 失败信号采集：落库带线归并/同键去重/INSERT 失败不打断（fire-and-forget 语义）。 */
+/** Failure signal collection: persistence with line merge / same-key dedupe / INSERT failure does not interrupt (fire-and-forget semantics). */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
@@ -58,7 +58,7 @@ describe('recordNlAiFailSignal', () => {
       await expect(recordNlAiFailSignal({
         threadId: randomUUID(), projectId: randomUUID(), caseId: 'c', stepOrder: 1,
         payload: { caseTitle: 't', stepInstruction: 'i', failureReason: 'x', targetUrl: null, pageUrl: null },
-      })).resolves.toBeUndefined(); // 不抛
+      })).resolves.toBeUndefined(); // no throw
     } finally {
       await pool.query(`ALTER TABLE assistant_failure_signals_bak RENAME TO assistant_failure_signals`);
     }

@@ -1,12 +1,12 @@
 /**
- * Cache 模块单元测试。REDIS_URL 未设置 → client = null → wrap 走 loader,del/delPattern no-op。
- * 直接 mock ioredis 实例绕开真实连接,验证 wrap 的 hit / miss / set / del / delPattern 行为。
+ * Cache module unit tests. REDIS_URL unset -> client = null -> wrap falls through to the loader; del/delPattern are no-ops.
+ * Mocks the ioredis instance directly to bypass real connections; verifies wrap's hit / miss / set / del / delPattern behavior.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { __resetClientForTests, __setClientForTests, cache, del, delPattern, wrap } from '../src/lib/cache.js';
 
-// 不依赖真实 redis。REDIS_URL 不设置时 getClient 走 null 分支。
+// No real redis involved. When REDIS_URL is unset, getClient takes the null branch.
 delete process.env.REDIS_URL;
 
 interface FakeRedis {
@@ -39,7 +39,7 @@ function makeFakeRedis(): FakeRedis {
       return 'OK' as const;
     },
     scan: async (cursor, ...args) => {
-      // 命令签名 [cursor, 'MATCH', pattern, 'COUNT', n] 或 [cursor, ...] 占位
+      // Command signature [cursor, 'MATCH', pattern, 'COUNT', n] or a [cursor, ...] placeholder
       const matchIdx = args.indexOf('MATCH');
       const pattern = matchIdx >= 0 ? String(args[matchIdx + 1] ?? '') : '';
       const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
@@ -75,7 +75,7 @@ describe('cache.wrap', () => {
     process.env.REDIS_URL = 'redis://localhost:6379';
     const fake = makeFakeRedis();
     __setClientForTests(fake as unknown as Parameters<typeof __setClientForTests>[0]);
-    // 预填命中值
+    // Pre-fill the hit value
     fake.store.set('k2', { value: JSON.stringify({ value: 42 }), expiresAt: Date.now() + 30_000 });
 
     const loader = vi.fn(async () => ({ value: 99 }));
@@ -95,7 +95,7 @@ describe('cache.wrap', () => {
     expect(loader).toHaveBeenCalledTimes(1);
     expect(fake.store.get('k3')?.value).toBe(JSON.stringify({ value: 7 }));
 
-    // 第二次命中
+    // Second call hits
     const loader2 = vi.fn(async () => ({ value: 999 }));
     const out2 = await wrap('k3', 30_000, loader2);
     expect(out2).toEqual({ value: 7 });

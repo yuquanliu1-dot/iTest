@@ -1,14 +1,15 @@
 /**
- * A3 独立评审：会话收尾后，对每条 finding 做一次独立判定（这条缺陷到底成不成立）。
+ * A3 independent review: after the session wraps up, each finding gets an independent verdict (does this defect candidate actually hold).
  *
- * 为什么必须独立：探索者是「自己找茬自己报」——同一套推理里既有观察也有结论，
- * 自评天然偏乐观（报上来的都像真的）。评审要换一个视角、只看材料：
- * - 只喂：缺陷描述 + 平台动作留痕（机械记录的事实）+ 决策帧截图；
- * - 不喂：探索者的推理过程（模型自述的「我为什么这么判断」）。
- * 评审结论只是**标注**（findings.judge），绝不改 findings.status——人工审阅才是权威。
+ * Why it must be independent: the explorer is "finding its own bugs and reporting them itself" — the same reasoning
+ * contains both observations and conclusions, and self-assessment is naturally optimistic (everything reported looks true).
+ * The reviewer takes another perspective and looks only at the material:
+ * - Fed in: defect description + platform action trail (mechanically recorded facts) + decision-frame screenshot;
+ * - Not fed in: the explorer's reasoning process (the model's own account of "why I judged this way").
+ * The review conclusion is only an **annotation** (findings.judge); it never changes findings.status — human review is the authority.
  *
- * 幂等：judge_status=done 的会话直接跳过（重复触发不重复烧钱、不覆盖既有结论）。
- * 永不抛错：评审失败只落 judge_status=failed，不影响会话终态。
+ * Idempotent: sessions with judge_status=done are skipped outright (re-triggering burns no money twice and does not overwrite existing verdicts).
+ * Never throws: a review failure only records judge_status=failed and does not affect the session's final state.
  */
 import { eq } from 'drizzle-orm';
 import { readFile } from 'node:fs/promises';
@@ -19,7 +20,7 @@ import { resolveLlmClient } from '../../agent/llmSettings.js';
 import { screenshotDiskPath, withTimeout } from '../../execute/explorationShared.js';
 import { logger } from '../../logger.js';
 
-/** 评审判定：成立 / 不成立 / 材料不足。 */
+/** Review verdict: holds / does not hold / insufficient material. */
 export type JudgeVerdict = 'confirmed' | 'dismissed' | 'unclear';
 
 export interface JudgeFinding {
@@ -29,11 +30,11 @@ export interface JudgeFinding {
   confidence: number;
 }
 
-/** 单次评审调用超时（软失败：超时 = 该条 unclear）。 */
+/** Per-review call timeout (soft failure: timeout = that item is unclear). */
 const JUDGE_TIMEOUT_MS = 90_000;
-/** 单次评审喂的动作留痕步数上限（超长截断——留痕是证据，不是全文转录）。 */
+/** Cap on action-trail steps fed to a single review (overlong trails are truncated — the trail is evidence, not a full transcript). */
 const JUDGE_TRAIL_MAX = 60;
-/** 单次评审喂的描述长度上限。 */
+/** Cap on description length fed to a single review. */
 const JUDGE_DESC_MAX = 2000;
 
 const JUDGE_SYSTEM_PROMPT = `你是独立的缺陷评审员。有人（探索智能体）上报了一条疑似缺陷，你要判断它是否真的成立。
@@ -45,7 +46,7 @@ const JUDGE_SYSTEM_PROMPT = `你是独立的缺陷评审员。有人（探索智
 - dismissed：材料显示这是预期行为，或描述与事实不符
 - unclear：材料不足以判断（截图看不到、留痕与描述对不上、描述含糊）`;
 
-/** 模型输出 → 判定（形状容错 + 中英别名 + 置信度钳位）。形状不符 = null（判 unclear）。 */
+/** Model output → verdict (shape tolerance + zh/en aliases + confidence clamping). Shape mismatch = null (judged unclear). */
 export function parseVerdict(value: unknown): { verdict: JudgeVerdict; reason: string; confidence: number } | null {
   const o = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   const raw = typeof o.verdict === 'string' ? o.verdict.trim().toLowerCase() : '';
@@ -63,12 +64,12 @@ export function parseVerdict(value: unknown): { verdict: JudgeVerdict; reason: s
   if (!verdict) return null;
   const reason = typeof o.reason === 'string' ? o.reason.trim().slice(0, 500) : '';
   const rawConf = typeof o.confidence === 'number' && Number.isFinite(o.confidence) ? o.confidence : 0.5;
-  // 有些模型回 0~100 的百分数——超 1 一律按百分数折算。
+  // Some models return a 0~100 percentage — anything over 1 is folded down as a percentage.
   const confidence = rawConf > 1 ? Math.min(1, rawConf / 100) : Math.min(1, Math.max(0, rawConf));
   return { verdict, reason, confidence };
 }
 
-/** 动作留痕 → 评审可读文本（只给机械事实，不给模型的解释）。 */
+/** Action trail → review-readable text (mechanical facts only, no model explanations). */
 function renderTrail(trail: unknown): string {
   if (!Array.isArray(trail)) return '（无动作留痕）';
   const lines = trail.slice(0, JUDGE_TRAIL_MAX).map((s) => {
@@ -77,7 +78,7 @@ function renderTrail(trail: unknown): string {
     if (o.ok === false) parts.push('失败');
     if (typeof o.key === 'string' && o.key) parts.push(`键=${o.key}`);
     if (typeof o.value === 'string' && o.value) parts.push(`值=${o.value.slice(0, 60)}`);
-    // 结果摘要（平台机械记录的事实：这步看到了什么/变成了什么）——评审判断的关键证据。
+    // Result summary (platform-side mechanically recorded fact: what this step saw / what it became) — key evidence for the review verdict.
     if (typeof o.outcome === 'string' && o.outcome) parts.push(o.outcome.slice(0, 140));
     return parts.join(' ');
   });
@@ -86,7 +87,7 @@ function renderTrail(trail: unknown): string {
   return `${lines.join('\n')}${more}`;
 }
 
-/** 单条 finding 的评审材料（只有证据，不含探索者推理）。 */
+/** Review material for one finding (evidence only, no explorer reasoning). */
 function buildUserMessage(f: {
   title: string;
   description: string;
@@ -111,9 +112,9 @@ function buildUserMessage(f: {
 }
 
 /**
- * 是否可以附决策帧截图：读文件在且渠道能收图。
- * 文本渠道收图可能直接 400（网关图片尺寸/类型限制）——评审是增强项，
- * 不能因为附图把整场评审搞挂：附不了就纯文本判。
+ * Whether the decision-frame screenshot can be attached: the file exists and the channel accepts images.
+ * A text channel receiving an image may 400 outright (gateway image size/type limits) — review is an enhancement
+ * and must not be wrecked by attaching an image: if it cannot be attached, judge on text alone.
  */
 async function readFrameBase64(sessionId: string, order: number): Promise<string | null> {
   try {
@@ -125,15 +126,15 @@ async function readFrameBase64(sessionId: string, order: number): Promise<string
 }
 
 export interface JudgeDeps {
-  /** 注入 LLM 客户端（测试用；缺省取默认渠道）。 */
+  /** Injects the LLM client (for tests; defaults to the default channel). */
   llm?: LLMClient;
-  /** 允许附决策帧截图（false = 纯文本评审）。 */
+  /** Allows attaching the decision-frame screenshot (false = text-only review). */
   vision?: boolean;
 }
 
 /**
- * 评审一个会话的全部 findings：逐条独立判定 → 写 findings.judge + 会话 judge_status/judge_result。
- * 永不抛错。
+ * Reviews all findings of a session: independent verdict per finding → writes findings.judge + session judge_status/judge_result.
+ * Never throws.
  */
 export async function judgeExplorationSession(sessionId: string, deps?: JudgeDeps): Promise<void> {
   try {
@@ -141,7 +142,7 @@ export async function judgeExplorationSession(sessionId: string, deps?: JudgeDep
       await db.select().from(explorationSessions).where(eq(explorationSessions.id, sessionId))
     )[0];
     if (!session) return;
-    if (session.judgeStatus === 'done') return; // 幂等：已评审过不重复烧钱
+    if (session.judgeStatus === 'done') return; // Idempotent: already reviewed, no double spend
     const findings = await db.select().from(explorationFindings).where(eq(explorationFindings.sessionId, sessionId));
     if (findings.length === 0) {
       await db
@@ -152,7 +153,7 @@ export async function judgeExplorationSession(sessionId: string, deps?: JudgeDep
     }
 
     const client = deps?.llm ?? (await resolveLlmClient()).client;
-    // 决策帧默认附上（评审看得见图才判得准）；deps.vision=false 时纯文本评审。
+    // The decision frame is attached by default (the reviewer judges more accurately when it can see the image); deps.vision=false means text-only review.
     const canSeeImage = deps?.vision !== false;
     const results: JudgeFinding[] = [];
     let okCount = 0;
@@ -189,8 +190,8 @@ export async function judgeExplorationSession(sessionId: string, deps?: JudgeDep
         try {
           r = await callJudge(!!frame);
         } catch (e) {
-          // 附图这条路失败（网关收图 400 / 模型不收图）→ 退纯文本再判一次：
-          // 评审是增强项，不能因为一张图把整场评审搞挂。超时则不重试（等下去只会更贵）。
+          // The with-image path failed (gateway rejected the image with 400 / model would not take it) → fall back to text and judge again:
+          // review is an enhancement and must not be wrecked by one image. On timeout, do not retry (waiting only costs more).
           const first = e instanceof Error ? e.message : String(e);
           if (!frame || first === '评审调用超时') throw e;
           r = await callJudge(false);
@@ -206,8 +207,8 @@ export async function judgeExplorationSession(sessionId: string, deps?: JudgeDep
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         lastError = msg;
-        // 评审调用失败 = 材料不足（unclear），不是「缺陷不成立」。失败原因也落
-        // findings.judge——详情页徽标要能看到「为什么这条没判出来」。
+        // A failed review call = insufficient material (unclear), not "the defect does not hold". The failure reason is also
+        // persisted into findings.judge — the detail-page badge must be able to show "why this one came out unjudged".
         const failed: JudgeFinding = { id: f.id, verdict: 'unclear', reason: `评审调用失败：${msg.slice(0, 200)}`, confidence: 0 };
         results.push(failed);
         await db

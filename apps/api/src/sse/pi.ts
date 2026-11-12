@@ -1,29 +1,29 @@
 import type { Response } from 'express';
 
-/** 与 planRunBus 同形的 SSE 帮助函数 — 提供给 pi/space 与 pi 路由使用。 */
+/** SSE helpers shaped like planRunBus's — for use by the pi/space and pi routes. */
 export function sseHeaders(res: Response): void {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  // nginx 对反代响应默认 proxy_buffering on:SSE 事件被整段缓冲后按块 flush,实时帧延迟到达、
-  // 长连接半途像卡死。该响应头让 nginx 对本响应关闭缓冲、逐帧透传——与 execute/liveView.ts
-  // MJPEG 流的 X-Accel-Buffering:no 同款机制,是 proxy_buffering off 的精确版(只作用于 SSE)。
+  // nginx buffers proxied responses by default (proxy_buffering on): SSE events are buffered wholesale and flushed in
+  // chunks, so live frames arrive late and the long connection looks stuck mid-stream. This header turns buffering off
+  // for this response, frame by frame — the same mechanism as execute/liveView.ts's MJPEG X-Accel-Buffering:no (SSE-only).
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
 }
 
-/** SSE 帧写入：单条事件以 JSON 字符串写一行 data:。 */
+/** SSE frame write: one event per line, serialized as a JSON string on a single data: line. */
 export function sseSend(res: Response, event: unknown): void {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
 /**
- * SSE 守护心跳:长任务(verify_case 单步 AI 相可静默 240s;plan run 跨多用例更久)期间保证
- * 字节流不中断,否则 nginx proxy_read_timeout(默认 300s)在读侧静默时段掐掉连接,而
- * react-pi 只在 read 挂起/抛错时重连,半开连接 = 前端永久冻结。每 intervalMs 写一行注释帧
- * `: ping`——EventSource/SSEEventDecoder 对注释行与空 data 帧一概丢弃,只保活不出事件,
- * 与既有流 100% 兼容。
- * 返回 stop():调用方须在 req.on('close')/res.on('error')/写失败时调用,防止定时器泄漏。
+ * SSE keepalive heartbeat: keeps the byte stream unbroken during long tasks (verify_case's single-step AI phase can go
+ * silent for 240s; plan runs span more cases and last longer), else nginx proxy_read_timeout (default 300s) cuts the
+ * connection after a silent read-side window, while react-pi only reconnects when read hangs/throws — half-open =
+ * the frontend frozen forever. Every intervalMs it writes one comment-frame line `: ping` — EventSource/SSEEventDecoder
+ * drop comment lines and empty data frames outright, keepalive only, 100% compatible with existing streams.
+ * Returns stop(): the caller must call it on req.on('close')/res.on('error')/write failure to prevent timer leaks.
  */
 export function startSseHeartbeat(res: Response, intervalMs = 20_000): () => void {
   let timer: NodeJS.Timeout | null = null;

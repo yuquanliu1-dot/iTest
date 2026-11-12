@@ -1,29 +1,33 @@
 /**
- * 抓取被测页面并提取可交互元素清单，供 inspect_page 工具把"页面实际代码"
- * 注入 LLM 上下文。launch 模式与 execute/cdp.ts 一致（CHROMIUM_PATH 覆盖），
- * DOM 提取沿用 domFallback.ts 的 page.evaluate 注入惯例。
- * 防护：仅 http/https + goto 超时 + 元素数/输出长度上限（内网被测地址是核心场景，不做私网拦截）。
- * extractPageElements 供 verify_case 失败页/成功页快照复用（成功页清单约束 agent 下一步只引用真实控件）。
+ * Fetches the SUT page and extracts the interactive element list for the inspect_page tool to
+ * inject "the page's actual code" into LLM context. The launch mode matches execute/cdp.ts
+ * (CHROMIUM_PATH override); DOM extraction follows the page.evaluate injection convention of
+ * domFallback.ts.
+ * Guards: http/https only + goto timeout + element/output length caps (intranet SUT addresses
+ * are the core scenario; no private-network blocking).
+ * extractPageElements is reused by verify_case failure-page/success-page snapshots (the
+ * success-page list constrains the agent's next step to referencing only real controls).
  */
 import { chromium } from 'playwright-core';
 import type { Page } from 'playwright-core';
 
 const GOTO_TIMEOUT_MS = 20_000;
 const SETTLE_MS = 800;
-/** 浏览器端原始候选上限：只防跑飞（大表格页可能上千节点），排序/去重在 TS 侧做。 */
+/** Browser-side raw candidate cap: only guards against runaway (large table pages can have thousands of nodes); sorting/dedup happen on the TS side. */
 const RAW_MAX_CANDIDATES = 800;
-/** 最终输出给模型的元素条目上限（去重后）。 */
+/** Cap on element entries finally output to the model (after dedup). */
 const MAX_ELEMENTS = 90;
-/** 纯 [role] 容器（treeitem/row/gridcell 等数据节点）保留上限：同质、信息量低，但成百上千。 */
+/** Keep cap for pure [role] containers (treeitem/row/gridcell data nodes): homogeneous, low information, but in the hundreds or thousands. */
 const MAX_ROLE_LIKE = 12;
-/** 复选框/单选（多为表格行选择框）保留上限：无文案、高度同质。 */
+/** Keep cap for checkboxes/radios (mostly table row selectors): no text, highly homogeneous. */
 const MAX_BULK_CONTROLS = 6;
 const MAX_OUTPUT_CHARS = 30_000;
 
 /**
- * DOM 提取必须以字符串表达式传给 page.evaluate：tsx/esbuild(keepNames) 会往编译后的
- * 函数体注入 __name(...) 辅助调用，Playwright 按 fn.toString() 序列化回调送到浏览器
- * 执行时浏览器里没有 __name，直接 ReferenceError。字符串形式原样求值，不受影响。
+ * DOM extraction must be passed to page.evaluate as a string expression: tsx/esbuild(keepNames)
+ * injects __name(...) helper calls into compiled function bodies; when Playwright serializes the
+ * callback via fn.toString() and ships it to the browser, __name does not exist there — instant
+ * ReferenceError. The string form is evaluated as-is and is unaffected.
  */
 const EXTRACT_JS = `(() => {
   const rawMax = ${RAW_MAX_CANDIDATES};
@@ -73,7 +77,7 @@ const EXTRACT_JS = `(() => {
   return { title, bodyLen, candidates, overflow };
 })()`;
 
-/** 浏览器端采回的原始候选元素（EXTRACT_JS 产物；字段为空串表示属性缺席）。 */
+/** Raw candidate elements collected from the browser (EXTRACT_JS product; an empty-string field means the attribute is absent). */
 export interface RawElementCandidate {
   tag: string;
   type: string;
@@ -89,12 +93,12 @@ export interface RawElementCandidate {
   selector: string;
 }
 
-/** 分档：action=动作控件（按钮/输入/下拉/链接…）；structure=纯 [role] 容器（treeitem/row 等数据节点）；
- *  bulk=复选框/单选（多为表格行选择框，无文案、高度同质）。 */
+/** Tiers: action = actionable controls (buttons/inputs/dropdowns/links…); structure = pure [role] containers
+ *  (treeitem/row data nodes); bulk = checkboxes/radios (mostly table row selectors, no text, highly homogeneous). */
 type CandidateTier = 'action' | 'structure' | 'bulk';
 
 const CONTROL_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea', 'summary']);
-/** role 值本身即可操作的容器（下拉选项/tab/菜单项等）：无论标签是什么都按动作控件对待。 */
+/** Containers whose role itself is actionable (dropdown options/tabs/menu items etc.): treated as action controls regardless of tag. */
 const ACTIONABLE_ROLES = new Set([
   'button', 'link', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'option', 'tab',
   'menuitem', 'menuitemcheckbox', 'menuitemradio', 'textbox', 'searchbox', 'slider', 'spinbutton',
@@ -109,7 +113,7 @@ function tierOf(c: RawElementCandidate): CandidateTier {
   return 'action';
 }
 
-/** 元素信息量评分（档内排序用）：有可读文案/占位/aria 的控件排前面，匿名垫底。 */
+/** Element information score (for within-tier sorting): controls with readable text/placeholder/aria rank first; anonymous ones sink. */
 function scoreOf(c: RawElementCandidate): number {
   let s = 0;
   if (c.text) s += 25;
@@ -140,15 +144,16 @@ function formatCandidate(c: RawElementCandidate, dup: number): string {
 }
 
 /**
- * 元素清单降噪排序（信噪比重构，2026-10-28）：
- * 旧实现按 DOM 序直出、300 条硬截断——树表格页上 200+ 个 role=treeitem 行与无名复选框
- * 把工具栏按钮（新建/删除/导入/导出/查询）挤到清单末尾，甚至被输出长度上限吃掉；
- * 拿不到真实控件清单的 agent 会臆造页面上不存在的筛选项。
- * 规则：
- * 1. 同选择器去重折叠（×N 计数）——无名复选框/重复行按钮不再逐条罗列；
- * 2. 分档限额：动作控件全保留，纯 [role] 容器 ≤ MAX_ROLE_LIKE，复选框/单选 ≤ MAX_BULK_CONTROLS；
- * 3. 档内按信息量（文案/占位/aria…）降序，跨档合并后仍受 MAX_ELEMENTS 总限；
- * 4. 被省略的量与类别摘要随清单返回（suppressed/suppressedSummary），判断「同类目标是否存在」仍可用。
+ * Element-list denoising sort (signal-to-noise rework, 2026-10-28):
+ * The old implementation emitted in DOM order with a hard 300-entry cut — on tree-table pages
+ * 200+ role=treeitem rows and nameless checkboxes pushed toolbar buttons (new/delete/import/
+ * export/query) to the end of the list, or into the output-length cap;
+ * an agent without the real control list would fabricate filters that do not exist on the page.
+ * Rules:
+ * 1. Same-selector dedup folding (×N count) — nameless checkboxes/repeated row buttons are no longer listed one by one;
+ * 2. Tier caps: action controls all kept, pure [role] containers ≤ MAX_ROLE_LIKE, checkboxes/radios ≤ MAX_BULK_CONTROLS;
+ * 3. Within-tier descending by information (text/placeholder/aria…); after cross-tier merge the MAX_ELEMENTS total cap still applies;
+ * 4. The omitted count and class summary return with the list (suppressed/suppressedSummary), so "does a same-class target exist" stays answerable.
  */
 export function rankPageElements(raw: RawElementCandidate[]): {
   elements: string[];
@@ -208,21 +213,23 @@ export interface PageElementSnapshot {
   bodyLen: number;
   elements: string[];
   truncated: boolean;
-  /** 因同类上限/总量上限被省略的元素个数（含同选择器折叠前的重复条数）。 */
+  /** Number of elements omitted by class caps/total cap (including pre-fold duplicates of the same selector). */
   suppressed?: number;
-  /** 被省略元素的类别摘要（如「role=treeitem ×88」）：判断「同类目标是否存在」时把这些类别计入。 */
+  /** Class summary of omitted elements (e.g. "role=treeitem ×88"): count these classes when judging whether a same-class target exists. */
   suppressedSummary?: string;
-  /** 页面可见候选元素总数（去重/限额前）：页面质量自评用，避免去重把真实页面误判成空壳。 */
+  /** Total visible candidate elements on the page (before dedup/caps): used for page quality self-assessment, so dedup cannot mistake a real page for an empty shell. */
   candidateCount?: number;
 }
 
 export type PageQuality = 'ok' | 'low';
 
-/** 页面抓取质量自评:判断"抓到的是真实功能页还是空壳/错误页",供 inspect_page 告知模型 URL 是否可信。
- *  判据是页面自身特征(可交互元素数 / body 文本长度),不绑定任何具体目标系统——
- *  空壳页(登录外壳、404、未挂载的微前端容器)在任意系统都表现为这两项极低。
- *  阈值:可交互元素 < 5 或 body 文本 < 100 字符判为低质量。元素数取去重前候选总数
- *  （candidateCount）——去重/限额后的清单长度不代表页面真实密度。 */
+/** Page fetch quality self-assessment: decides "real functional page vs empty shell/error page", letting
+ *  inspect_page tell the model whether the URL is trustworthy.
+ *  The criteria are the page's own features (interactive element count / body text length), bound to no
+ *  specific target system — empty shells (login shell, 404, unmounted micro-frontend container) score
+ *  extremely low on both in any system.
+ *  Threshold: interactive elements < 5 or body text < 100 chars means low quality. Element count uses the
+ *  pre-dedup candidate total (candidateCount) — the post-dedup/cap list length does not reflect real density. */
 export function assessPageQuality(
   snap: Pick<PageElementSnapshot, 'title' | 'bodyLen' | 'elements' | 'candidateCount'>,
 ): PageQuality {
@@ -231,8 +238,9 @@ export function assessPageQuality(
   return 'ok';
 }
 
-/** 在已打开的页面上提取可交互元素清单（inspect_page 与 verify_case 页面快照共用：
- *  失败页给 agent 修 locator，成功页给 agent 讨论「下一步用哪个真实控件」）。 */
+/** Extracts the interactive element list from an already-open page (shared by inspect_page and verify_case
+ *  page snapshots: failure pages give the agent locators to fix; success pages give the agent real controls
+ *  to discuss "which real control to use next"). */
 export async function extractPageElements(page: Page, url?: string): Promise<PageElementSnapshot> {
   const raw = (await page.evaluate(EXTRACT_JS)) as {
     title: string;
@@ -253,26 +261,28 @@ export async function extractPageElements(page: Page, url?: string): Promise<Pag
   };
 }
 
-/** 失败页结构证据：阻断性浮层清单。
+/** Failure-page structural evidence: list of blocking overlays.
  *
- *  2026-10-17 归因重构后，missingIds（期望容器缺失判定）退役：它靠解析 css strategy 的
- *  #id/[id=] 形态提取期望容器，换 text=/role/xpath/testId 就失效（打地鼠路线）。容器是否缺席
- *  改为由 failureDiagnosis.probeLocatorHits 对每条 locator 候选做实时命中探测（形态无关）+ 元素清单
- *  联合交给 LLM 归因。此处只保留浮层清单：只凭角色/类名特征（role=dialog、class 含
- *  dialog/drawer/message-box/modal/popup/mask/overlay），不绑定任何具体系统的文案——
- *  「可能弹、可能不弹」的条件性浮层（草稿恢复、权限确认）在任何系统都表现为这类 DOM 特征。
+ *  After the 2026-10-17 attribution rework, missingIds (expected-container-missing verdict) is retired:
+ *  it extracted the expected container by parsing css strategy's #id/[id=] shapes and broke the moment
+ *  text=/role/xpath/testId were used (a whack-a-mole path). Whether a container is absent is now probed
+ *  live per locator candidate by failureDiagnosis.probeLocatorHits (shape-agnostic), jointly fed to the
+ *  LLM with the element list for attribution. Only the overlay list remains here: role/class-name features
+ *  only (role=dialog, class containing dialog/drawer/message-box/modal/popup/mask/overlay), bound to no
+ *  specific system's copy — conditional overlays ("may pop, may not pop": draft recovery, permission
+ *  confirmation) present as exactly these DOM features in any system.
  */
 export interface PageEvidence {
-  /** 覆盖页面上、可能遮挡交互的浮层（弹窗/抽屉/遮罩）。每条：标签 + 可定位选择器 + 文本片段 */
+  /** Overlays on the page that may block interaction (dialogs/drawers/masks). Each: tag + locatable selector + text snippet */
   overlays: Array<{ tag: string; selector: string; text: string }>;
 }
 
-/** 浮层候选选择器：覆盖常见的模态/抽屉/消息框/遮罩实现。只用 DOM 特征，不写具体文案。 */
+/** Overlay candidate selectors: cover common modal/drawer/message-box/mask implementations. DOM features only, no system-specific copy. */
 const EVIDENCE_OVERLAY_SELECTOR =
   '[role="dialog"], [role="alertdialog"], [class*="dialog"], [class*="drawer"], [class*="message-box"], ' +
   '[class*="modal"], [class*="popup"], [class*="mask"], [class*="overlay"]';
 
-/** keepNames 约束（同 EXTRACT_JS）：返回字符串表达式原样送浏览器求值，避免 __name 辅助函数注入。 */
+/** keepNames constraint (same as EXTRACT_JS): the returned string expression is evaluated by the browser as-is, avoiding __name helper injection. */
 const EVIDENCE_JS = `(() => {
   const nodes = document.querySelectorAll('${EVIDENCE_OVERLAY_SELECTOR}');
   const seen = new Set();
@@ -298,7 +308,7 @@ const EVIDENCE_JS = `(() => {
   return { overlays };
 })()`;
 
-/** 在已打开的页面上采集结构证据（verify_case / solidify_case 失败页复用）。异常一律静默降级为空证据。 */
+/** Collects structural evidence from an already-open page (reused by verify_case / solidify_case failure pages). Any exception silently degrades to empty evidence. */
 export async function extractPageEvidence(page: Page): Promise<PageEvidence> {
   try {
     return (await page.evaluate(EVIDENCE_JS)) as PageEvidence;
@@ -323,7 +333,7 @@ export async function inspectPage(rawUrl: string, opts?: { storageState?: unknow
     executablePath: process.env.CHROMIUM_PATH || undefined,
   });
   try {
-    // 内网被测环境普遍用自签名证书,必须忽略校验,否则 inspect_page 在核心场景下不可用
+    // Intranet SUT environments commonly use self-signed certificates; validation must be ignored or inspect_page is unusable in the core scenario
     const context = await browser.newContext({
       viewport: { width: 1280, height: 800 },
       ignoreHTTPSErrors: true,

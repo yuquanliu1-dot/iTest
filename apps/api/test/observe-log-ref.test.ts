@@ -1,13 +1,13 @@
 /**
- * observeLog.syslogRef 的【取哪个连接】决策测试。
- * 不连真 SSH —— 只验 ref → label → 连接的解析链，以及「显式 ref 落空即硬错误」。
+ * Decision tests for observeLog.syslogRef's "which connection to pick".
+ * No real SSH — only verifies the ref → label → connection resolution chain, and that an explicit ref missing is a hard error.
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { EnvCtx } from '../src/execute/envContext.js';
 
 vi.mock('playwright-core', () => ({ chromium: { launch: vi.fn() } }));
 
-/** 最小 EnvCtx 桩：只提供 resolveSyslog 用到的东西。 */
+/** Minimal EnvCtx stub: provides only what resolveSyslog needs. */
 function makeCtx(syslogs: Array<{ label: string; ctx: { host: string; port: number; user: string; filePath: string; authType: 'key' | 'password' }; isDefault: boolean }>): EnvCtx {
   return {
     envName: '测试环境',

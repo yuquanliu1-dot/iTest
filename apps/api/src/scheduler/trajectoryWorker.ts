@@ -1,7 +1,7 @@
 /**
- * 轨迹蒸馏 worker：定位会话 JSONL → 判据核实（verify_case 成功链）→ LLM 蒸馏 → 入库。
- * 失败语义（设计 §4.2）：LLM 超时/输出不合法/文件缺失/项目未归线 → 丢弃 + warn，不重试
- * 不阻塞（transcript 仍在卷上，R3 可重蒸）。
+ * Trajectory distillation worker: locate the session JSONL → criterion verification (verify_case success chain) → LLM distillation → persist.
+ * Failure semantics (design §4.2): LLM timeout/invalid output/missing file/unre-homed project → drop + warn, no retry,
+ * non-blocking (transcript stays on the volume; R3 can re-distill).
  */
 import { access, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -43,14 +43,14 @@ const DistillOutput = z.object({
   digest: z.string().min(1),
 });
 
-/** 定位线程会话文件。DB 里 pi_thread_id 是 sessionFile 完整路径（session.ts:849 回填，
- *  router.ts 同款直探语义）；兼容裸 UUID 形式（按 `*_<piThreadId>.jsonl` 匹配）。 */
+/** Locates the thread's session file. In the DB pi_thread_id is the full sessionFile path (backfilled at session.ts:849,
+ *  same direct-probe semantics as router.ts); also tolerates bare UUID form (matched via `*_<piThreadId>.jsonl`). */
 export async function findSessionFile(sessionsRoot: string, piThreadId: string): Promise<string | null> {
   if (piThreadId.endsWith('.jsonl')) {
     try {
       await access(piThreadId);
       return piThreadId;
-    } catch { /* 路径失效（卷迁移等）→ 落回目录扫描 */ }
+    } catch { /* path invalid (volume migration etc.) → fall back to directory scan */ }
   }
   try {
     const names = await readdir(sessionsRoot);
@@ -61,7 +61,7 @@ export async function findSessionFile(sessionsRoot: string, piThreadId: string):
   }
 }
 
-/** 用例最终形态（DB 读）：标题/预期/步骤指令序列。 */
+/** The case's final shape (read from DB): title/expected outcome/step instruction sequence. */
 async function buildCaseShape(caseId: string): Promise<string> {
   const c = (await db.select().from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
   if (!c) return '（用例已不存在）';
@@ -74,13 +74,13 @@ async function buildCaseShape(caseId: string): Promise<string> {
 export interface TrajectoryJobDeps {
   client: LLMClient;
   sessionsRoot?: string;
-  /** 单 item 蒸馏 LLM 调用上限（默认 180s；测试可注入短值）。 */
+  /** Per-item distill LLM call limit (default 180s; tests can inject short values). */
   llmTimeoutMs?: number;
 }
 
-/** LLM 蒸馏超时护栏：client 未透传 AbortSignal，用 Promise.race 兜底。超时 reject 的
- *  Error 消息带 timeout 字样，由 per-item catch 走丢弃语义。败方 rejection 由 race 内部
- *  处理（race 已 settle 后落败不产生 unhandled rejection），timer 在 finally 必清。 */
+/** LLM distill timeout guard: the client doesn't propagate AbortSignal, so Promise.race is the fallback. The timeout reject's
+ *  Error message contains "timeout", letting the per-item catch apply the drop semantics. The losing rejection is handled
+ *  inside race (a loser after race settled produces no unhandled rejection); the timer is always cleared in finally. */
 function withLlmTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -89,7 +89,7 @@ function withLlmTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-/** 核心：判据核实 → 蒸馏 → 入库。client/sessionsRoot/llmTimeoutMs 可注入（测试）。 */
+/** Core: criterion verification → distillation → persist. client/sessionsRoot/llmTimeoutMs are injectable (tests). */
 export async function processTrajectoryJob(data: TrajectoryJob, deps: TrajectoryJobDeps): Promise<void> {
   const thread = (await db.select({ piThreadId: aiThreads.piThreadId }).from(aiThreads).where(eq(aiThreads.id, data.threadId)).limit(1))[0];
   if (!thread) { logger.warn({ threadId: data.threadId }, 'trajectory: thread not found; skip'); return; }
@@ -136,7 +136,7 @@ export async function processTrajectoryJob(data: TrajectoryJob, deps: Trajectory
   }
 }
 
-/** inline 路径：settings 建 client（未配置 → warn 跳过）。 */
+/** inline path: builds the client from settings (unconfigured → warn and skip). */
 export async function processTrajectoryJobInline(data: TrajectoryJob): Promise<void> {
   const cfg = await readLlmConfig();
   if (!cfg) { logger.warn('trajectory: LLM not configured; skip inline distill'); return; }
@@ -145,7 +145,7 @@ export async function processTrajectoryJobInline(data: TrajectoryJob): Promise<v
 
 let _worker: Worker<TrajectoryJob> | null = null;
 
-/** API 进程启动时调用（index.ts）。无 REDIS → inline 模式（enqueue 直接跑），不建 worker。 */
+/** Called at API process startup (index.ts). No REDIS → inline mode (enqueue runs directly), no worker built. */
 export async function startTrajectoryWorker(): Promise<void> {
   if (!process.env.REDIS_URL) {
     logger.info('REDIS_URL not set; trajectory queue inline mode');
@@ -153,8 +153,8 @@ export async function startTrajectoryWorker(): Promise<void> {
   }
   try {
     const cfg = await readLlmConfig();
-    // REDIS 在而 LLM 未配置：enqueue 走 redis 但无人消费——任务会静默堆积。
-    // warn 点名后果；LLM 配好后重启进程即可消化积压（BullMQ 任务持久在 redis）。
+    // REDIS present but LLM unconfigured: enqueue goes to redis with no consumer — jobs would pile up silently.
+    // The warn spells out the consequence; once LLM is configured, restarting the process drains the backlog (BullMQ jobs persist in redis).
     if (!cfg) { logger.warn('trajectory: LLM not configured; worker not started (enqueued jobs will wait until a worker starts)'); return; }
     const client = getLlmClient({ ...cfg, baseUrl: cfg.baseUrl ?? undefined });
     _worker = buildTrajectoryWorker((job) => processTrajectoryJob(job, { client }));

@@ -1,9 +1,12 @@
 /**
- * 探索式测试会话路由：章程驱动 → AI 在真实浏览器主动找茬 → findings（缺陷候选 + 证据截图）
- * → 人工确认/驳回 → 确认项可升格为用例草稿（平台留痕 best-effort 机械出 DSL，余下走既有 AI 编译流）。
+ * Exploratory testing session routes: charter-driven → AI proactively hunts for issues in a real browser
+ * → findings (defect candidates + evidence screenshots) → human confirms/dismisses → confirmed items can be
+ * promoted into case drafts (the platform's action trail provides best-effort mechanical DSL; the rest goes
+ * through the existing AI compilation flow).
  *
- * 会话执行走 exec 队列（kind:'exploration'），与计划运行/单用例同一 chromium 并发闸门。
- * 取消用 DB 列 cancel_requested（跨副本天然正确），worker 每轮轮询一次。
+ * Session execution goes through the exec queue (kind:'exploration'), sharing the plan-run/single-case chromium
+ * concurrency gate.
+ * Cancellation uses the DB column cancel_requested (naturally correct across replicas); the worker polls it once per turn.
  */
 import { Router } from 'express';
 import { z } from 'zod';
@@ -27,30 +30,32 @@ export const explorationsRoute = Router();
 
 const CreateBody = z.object({
   versionId: z.string().uuid(),
-  /** 探索章程：给 AI 的自然语言目标与范围（10~4000 字）。 */
+  /** Exploration charter: natural-language goal and scope for the AI (10~4000 chars). */
   charter: z.string().trim().min(10).max(4000),
   persona: z.enum(EXPLORATION_PERSONA_KEYS as [string, ...string[]]).default('qa'),
   title: z.string().trim().min(1).max(200).optional(),
   startUrl: z.string().trim().max(2000).optional(),
   /**
-   * 破坏性操作授权（默认拒）：勾了才允许探索点击删除/支付/发送这类不可逆入口。
-   * charter 说辞不算授权——机械闸只认这个显式开关（2026-11-10 prod 实录：章程要求核查
-   * 删除是否真落库 → 模型点了删除 → 资产真被删）。
+   * Destructive operation authorization (denied by default): only with this checked may exploration click
+   * irreversible entries like delete/pay/send.
+   * Charter wording is not authorization — the mechanical gate only trusts this explicit switch (2026-11-10
+   * prod record: the charter asked to verify whether deletion really persisted → the model clicked delete → the asset was truly deleted).
    */
   allowDestructive: z.boolean().default(false),
   /**
-   * 故障注入授权（默认拒）：勾了才允许探索注入断网/慢网/CPU 节流去验证错误处理与降级路径。
-   * 与 allowDestructive 同款口径——章程说辞不算授权（故障会污染被测系统会话状态）。
+   * Fault-injection authorization (denied by default): only with this checked may exploration inject
+   * network outage/slow network/CPU throttling to verify error handling and degradation paths.
+   * Same policy as allowDestructive — charter wording is not authorization (faults pollute the SUT session state).
    */
   allowFaultInjection: z.boolean().default(false),
   /**
-   * 浏览器视口宽高（两态：缺省=默认 1280×800；同给=自定义）。只给一个 → 400 window_required
-   * （复用用例窗口校验的 i18n 文案）。
+   * Browser viewport width/height (two states: absent = default 1280×800; both given = custom). Only one given → 400 window_required
+   * (reuses the case window validation's i18n message).
    */
   windowWidth: z.number().int().positive().optional(),
   windowHeight: z.number().int().positive().optional(),
-  /** 轮次预算（默认 60，4~240）：软预算，超界优雅收尾，已发现的 findings 全保留。
-   *  会话墙钟由轮次物化（每轮 60s，钳在 15~240 分钟）——轮次是深度的唯一旋钮。 */
+  /** Turn budget (default 60, 4~240): a soft budget; exceeding it winds down gracefully and all discovered findings are kept.
+   *  Session wall-clock is materialized from turns (60s per turn, clamped to 15~240 minutes) — turns are the only depth knob. */
   budgetTurns: z.number().int().min(4).max(240).optional(),
 });
 
@@ -60,28 +65,28 @@ const ListQuery = z.object({
 });
 
 /**
- * 人格矩阵建组（C3）：同一章程起 N 个人格会话并行跑（同一 matrix_id 分组）。
- * 不新建表——分组键/展示名/角色三列挂在 exploration_sessions 上。
- * personas 去重后逐个建会话；每个会话 = 一次独立探索（各自章程分解、各自留痕）。
+ * Persona matrix creation (C3): N persona sessions run in parallel on the same charter (grouped by the same matrix_id).
+ * No new table — the grouping key/display name/role columns hang off exploration_sessions.
+ * Sessions are created one per deduplicated persona; each session = one independent exploration (its own charter decomposition, its own action trail).
  */
 const CreateMatrixBody = z.object({
   versionId: z.string().uuid(),
   charter: z.string().trim().min(10).max(4000),
-  /** 人格列表（1~6 个，重复的自动去重）：每个 persona 一个会话。 */
+  /** Persona list (1~6, duplicates auto-deduplicated): one session per persona. */
   personas: z.array(z.enum(EXPLORATION_PERSONA_KEYS as [string, ...string[]])).min(1).max(6),
-  /** 矩阵展示名（缺省按人格数生成）。 */
+  /** Matrix display name (generated from the persona count when absent). */
   label: z.string().trim().min(1).max(120).optional(),
   title: z.string().trim().min(1).max(200).optional(),
   startUrl: z.string().trim().max(2000).optional(),
   allowDestructive: z.boolean().default(false),
-  /** 故障注入授权（默认拒）：矩阵内每个会话同款显式开关——章程说辞不算授权。 */
+  /** Fault-injection authorization (denied by default): the same explicit switch per session in the matrix — charter wording is not authorization. */
   allowFaultInjection: z.boolean().default(false),
   windowWidth: z.number().int().positive().optional(),
   windowHeight: z.number().int().positive().optional(),
   budgetTurns: z.number().int().min(4).max(240).optional(),
 });
 
-/** 会话可见性断言：经 session.projectId 判定，不存在与不可见统一 404。 */
+/** Session visibility assertion: judged via session.projectId; missing and invisible both 404. */
 async function loadSession(sessionId: string, user: { userId: string }) {
   const row = (await db.select().from(explorationSessions).where(eq(explorationSessions.id, sessionId)))[0];
   if (!row) throw new HttpError(404, 'not_found', 'exploration session not found');
@@ -90,8 +95,8 @@ async function loadSession(sessionId: string, user: { userId: string }) {
 }
 
 /**
- * 派发探索会话：redis 就绪入队；add 失败回落 inline；无 redis 直接 inline。
- * 单建与矩阵建组共用这一处——两条路径的派发语义必须一致（否则矩阵会话的排队/内联行为与单建不同）。
+ * Dispatch an exploration session: enqueue when redis is ready; fall back to inline on add failure; inline directly without redis.
+ * Single creation and matrix creation share this — both paths' dispatch semantics must be identical (otherwise matrix sessions would queue/inline differently from single ones).
  */
 async function dispatchExploration(sessionId: string): Promise<void> {
   if (isExecutionQueueReady()) {
@@ -106,13 +111,13 @@ async function dispatchExploration(sessionId: string): Promise<void> {
 }
 
 /**
- * 新建探索会话：落库 pending → 入队执行 → 立即返回（前端轮询详情页看实时画面与 findings）。
- * 入队三段式与 execute.ts 一致：redis 就绪入队；add 失败回落 inline；无 redis 直接 inline。
- * runner 内部对 pending→running 做原子认领，重复派发不会跑两遍。
+ * Create an exploration session: persist pending → enqueue → return immediately (the frontend polls the detail page for the live view and findings).
+ * The three-stage enqueue matches execute.ts: enqueue when redis is ready; fall back to inline on add failure; inline directly without redis.
+ * The runner atomically claims pending→running internally, so duplicate dispatches won't run twice.
  */
 explorationsRoute.post('/', async (req, res) => {
   const body = CreateBody.parse(req.body);
-  // 两态校验：要么都不给（默认 1280×800），要么成对给（自定义）；只给一个 = 参数不完整。
+  // Two-state validation: either neither given (default 1280×800) or both given (custom); only one = incomplete parameters.
   if ((body.windowWidth === undefined) !== (body.windowHeight === undefined)) {
     throw new HttpError(400, 'window_required', 'windowWidth and windowHeight must be provided together');
   }
@@ -133,7 +138,7 @@ explorationsRoute.post('/', async (req, res) => {
       windowHeight: body.windowHeight ?? null,
       budgetTurns: body.budgetTurns ?? null,
       status: 'pending',
-      // 范围解析在 runner 后台做（LLM+git 可能数十秒）——先落 pending，前端轮询详情页看结果。
+      // Scope resolution happens in the runner's background (LLM+git can take tens of seconds) — persist pending first; the frontend polls the detail page for the result.
       codeScopeStatus: 'pending',
       createdByUserId: req.user!.userId,
     })
@@ -145,13 +150,13 @@ explorationsRoute.post('/', async (req, res) => {
   res.status(201).json(inserted);
 });
 
-/** 列表：可按 versionId / projectId 过滤；两者都不给则返回当前用户可见项目的全部会话。 */
+/** List: filterable by versionId / projectId; if neither is given, return all sessions in the current user's visible projects. */
 explorationsRoute.get('/', async (req, res) => {
   const q = ListQuery.parse(req.query);
   const { page, limit } = parsePaging(req.query);
   const filters: SQL[] = [];
   if (q.versionId) {
-    // 带版本过滤也要过可见性：否则知道 versionId 就能列出他组织的会话
+    // Version filtering still needs the visibility check: otherwise knowing a versionId would suffice to list sessions of the org
     const { projectId } = await assertVersionVisible(q.versionId, req.user!);
     filters.push(eq(explorationSessions.versionId, q.versionId));
     filters.push(eq(explorationSessions.projectId, projectId));
@@ -175,7 +180,7 @@ explorationsRoute.get('/', async (req, res) => {
       .offset((page - 1) * limit),
     db.select({ count: sql<number>`count(*)::int` }).from(explorationSessions).where(where),
   ]);
-  // 缺陷候选数（列表页卡片徽标）：一次分组查询挂到各行——不做逐会话详情请求（N+1）。
+  // Defect candidate counts (list page card badges): one grouped query attached to rows — no per-session detail requests (N+1).
   const countRows = items.length
     ? await db
         .select({ sessionId: explorationFindings.sessionId, count: sql<number>`count(*)::int` })
@@ -193,9 +198,9 @@ explorationsRoute.get('/', async (req, res) => {
 });
 
 /**
- * 建人格矩阵（C3）：同一章程 + 多个 persona → 多个并行探索会话（同一 matrix_id）。
- * 一次性返回 matrixId 与全部会话（前端跳到矩阵视图看各会话进度）。
- * 路由必须注册在 `/:id/live` 之前——否则 `/matrix/:id` 会被 `/:id/live` 抢走。
+ * Create a persona matrix (C3): same charter + multiple personas → multiple parallel exploration sessions (same matrix_id).
+ * Returns matrixId and all sessions in one shot (the frontend jumps to the matrix view to watch each session's progress).
+ * The route must be registered before `/:id/live` — otherwise `/matrix/:id` would be swallowed by `/:id/live`.
  */
 explorationsRoute.post('/matrix', async (req, res) => {
   const body = CreateMatrixBody.parse(req.body);
@@ -236,8 +241,8 @@ explorationsRoute.post('/matrix', async (req, res) => {
 });
 
 /**
- * 矩阵视图：矩阵内全部会话 + 它们的 findings（finding 带 crossSessionCount —— ≥2 = 多视角共同发现）。
- * 交集数字由收尾时重算（S2），此处只读。
+ * Matrix view: all sessions in the matrix + their findings (each finding carries crossSessionCount — ≥2 = discovered from multiple perspectives).
+ * The intersection numbers are recomputed at wrap-up (S2); read-only here.
  */
 explorationsRoute.get('/matrix/:matrixId', async (req, res) => {
   const matrixId = req.params.matrixId!;
@@ -262,8 +267,8 @@ explorationsRoute.get('/matrix/:matrixId', async (req, res) => {
 });
 
 /**
- * 取消矩阵：给矩阵内**未终态**的会话置 cancel_requested（与单会话取消同款语义）。
- * 已终态的会话不再改（幂等：重复调用返回 ok）。
+ * Cancel matrix: set cancel_requested on **non-terminal** sessions in the matrix (same semantics as single-session cancel).
+ * Terminal sessions are left unchanged (idempotent: repeated calls return ok).
  */
 explorationsRoute.post('/matrix/:matrixId/cancel', async (req, res) => {
   const matrixId = req.params.matrixId!;
@@ -286,7 +291,7 @@ explorationsRoute.post('/matrix/:matrixId/cancel', async (req, res) => {
   res.json({ ok: true, cancelled: cancelled.length });
 });
 
-/** 详情：会话 + findings（按 order 升序）+ 创建人 + 会话过程（每一步动作留痕）。 */
+/** Detail: session + findings (order ascending) + creator + session process (per-action trail of every step). */
 explorationsRoute.get('/:id', async (req, res) => {
   const session = await loadSession(req.params.id!, req.user!);
   const findings = await db
@@ -295,14 +300,14 @@ explorationsRoute.get('/:id', async (req, res) => {
     .where(eq(explorationFindings.sessionId, session.id))
     .orderBy(asc(explorationFindings.order));
   const [withCreator] = await attachCreators([session]);
-  // 会话级留痕列是整场动作序列；老会话没有这列数据，回落合并各 finding 的片段。
+  // The session-level action-trail column holds the whole run's action sequence; older sessions lack this column's data, fall back to merging each finding's fragments.
   const steps = session.actionsTrail?.length ? session.actionsTrail : mergeExplorationTrails(findings);
   res.json({ ...withCreator, findings, steps });
 });
 
 /**
- * 取消会话：置 cancel_requested=true。幂等——终态会话再调也返回 ok（不再有 worker 轮询它）。
- * pending 期取消：runner 认领后立即走快速收尾路径，不开浏览器。
+ * Cancel session: set cancel_requested=true. Idempotent — calling again on a terminal session still returns ok (no worker polls it anymore).
+ * Cancelling during pending: once claimed, the runner goes straight to the fast wrap-up path without opening a browser.
  */
 explorationsRoute.post('/:id/cancel', async (req, res) => {
   const session = await loadSession(req.params.id!, req.user!);
@@ -314,11 +319,11 @@ explorationsRoute.post('/:id/cancel', async (req, res) => {
 });
 
 /**
- * 删除会话：findings 级联删；截图目录一并清理。
- * running/pending 会话默认禁删（执行器还在往里写截图与 findings）；
- * 但已请求取消（cancel_requested）的会话放行——执行器会在下一轮轮询时优雅收尾，
- * 其迟到写入由 FK/try-catch 兜住，而执行器进程已死（API 重启/崩溃）留下的孤儿会话
- * 永远等不到收尾，不放行就会卡在 running 态既不能删也不能看。
+ * Delete session: findings cascade-delete; the screenshot directory is cleaned up along with it.
+ * running/pending sessions are delete-blocked by default (the executor is still writing screenshots and findings into them);
+ * but sessions with cancel_requested are allowed through — the executor will wrap up gracefully on its next polling round,
+ * and its late writes are caught by FK/try-catch. Orphan sessions left by a dead executor process (API restart/crash)
+ * would never reach wrap-up; without the exception they'd be stuck in running — neither deletable nor viewable.
  */
 explorationsRoute.delete('/:id', async (req, res) => {
   const session = await loadSession(req.params.id!, req.user!);
@@ -336,8 +341,8 @@ explorationsRoute.delete('/:id', async (req, res) => {
 });
 
 /**
- * 实时画面（MJPEG）：runner 注册的 `exploration:<id>` 源，运行中才可连。
- *  ?replay=1 为本轮录制的回放；&speed=N 为回放倍速；?replay=meta 探测录制是否仍可回放。
+ * Live view (MJPEG): the `exploration:<id>` source registered by the runner, connectable only while running.
+ *  ?replay=1 replays this run's recording; &speed=N sets the replay speed; ?replay=meta probes whether the recording is still replayable.
  */
 explorationsRoute.get('/:id/live', async (req, res) => {
   const session = await loadSession(req.params.id!, req.user!);
@@ -354,7 +359,7 @@ const PromoteBody = z.object({
   priority: z.enum(['P0', 'P1', 'P2', 'P3']).optional(),
 });
 
-/** 取 finding 并校验其属于该会话（跨会话/不存在统一 404）。 */
+/** Fetch a finding and verify it belongs to this session (cross-session/missing both 404). */
 async function loadFinding(sessionId: string, findingId: string) {
   const row = (await db.select().from(explorationFindings).where(eq(explorationFindings.id, findingId)))[0];
   if (!row || row.sessionId !== sessionId) throw new HttpError(404, 'not_found', 'finding not found');
@@ -362,8 +367,8 @@ async function loadFinding(sessionId: string, findingId: string) {
 }
 
 /**
- * 审阅 finding：确认（confirmed）或驳回（dismissed）。
- * 只认 pending——已审过的再审报 409，避免静默覆盖审阅结论。
+ * Review a finding: confirm or dismiss.
+ * Only pending is accepted — reviewing an already-reviewed finding returns 409 to avoid silently overwriting the review verdict.
  */
 explorationsRoute.post('/:id/findings/:fid/review', async (req, res) => {
   const session = await loadSession(req.params.id!, req.user!);
@@ -381,11 +386,12 @@ explorationsRoute.post('/:id/findings/:fid/review', async (req, res) => {
 });
 
 /**
- * 升格步骤源（2026-11-11 口径）：优先平台留痕（ground truth，best-effort 机械 DSL——
- * click/fill/navigate 映射 compiled，映射不了的动作保持纯 NL），留痕不可用（老会话无
- * value/ms/key 字段、全部动作失败或取证类被滤）回落模型 reproSteps（纯 NL，待 AI 编译），
- * 双空返回 []（路由据此 400）。此前模型 reproSteps 优先——但它可能脑补，且与机械动作
- * 数量对不上，出不了 DSL。
+ * Promotion step source (2026-11-11 policy): prefer the platform action trail (ground truth, best-effort mechanical
+ * DSL — click/fill/navigate map to compiled, unmappable actions stay pure NL); when the trail is unusable (old
+ * sessions lack value/ms/key fields, all actions failed, or evidence-type actions were filtered) fall back to the
+ * model's reproSteps (pure NL, pending AI compilation); if both are empty return [] (the route returns 400 on that).
+ * Previously the model's reproSteps took priority — but it can hallucinate, its count may disagree with the
+ * mechanical actions, and no DSL could be produced.
  */
 function promoteStepsOf(finding: { reproSteps: unknown; actionsTrail: unknown }): Array<{ instruction: string; compiled: unknown[] | null }> {
   const trail = Array.isArray(finding.actionsTrail) ? finding.actionsTrail : [];
@@ -402,10 +408,10 @@ function promoteStepsOf(finding: { reproSteps: unknown; actionsTrail: unknown })
 }
 
 /**
- * 确认后的 finding 升格为用例草稿：步骤优先取平台动作留痕做 best-effort 机械映射
- * （click/fill/navigate → compiled DSL，回放不走 AI）；映射不了的动作保持
- * instruction + compiled=null，复用既有「compile-missing 阻塞 + UI AI 编译」流程补齐。
- * 探索侧不做 AI 编译（不真跑不验收）——机械映射是零成本转换，不是编译。
+ * Promote a confirmed finding into a case draft: steps prefer the platform action trail with a best-effort
+ * mechanical mapping (click/fill/navigate → compiled DSL, replay doesn't go through AI); unmappable actions keep
+ * instruction + compiled=null and are completed via the existing "compile-missing blocking + UI AI compile" flow.
+ * The exploration side does no AI compilation (no real run, no acceptance) — the mechanical mapping is a zero-cost transformation, not compilation.
  */
 explorationsRoute.post('/:id/findings/:fid/promote', async (req, res) => {
   const session = await loadSession(req.params.id!, req.user!);

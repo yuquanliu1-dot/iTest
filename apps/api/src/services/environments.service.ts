@@ -1,7 +1,7 @@
 /**
- * 环境领域服务:环境与对象(db/syslog)的增删改查。
- * 秘密以 AES-256-GCM {c,i,t} 存 payload.secret;出参一律经 maskObjectPayload 脱敏。
- * 用户可见性(assertProjectVisible/assertEnvironmentVisible)由调用方(HTTP 边界)负责。
+ * Environment domain service: CRUD for environments and their objects (db/syslog).
+ * Secrets are stored AES-256-GCM as {c,i,t} in payload.secret; outputs always go through maskObjectPayload for masking.
+ * User visibility (assertProjectVisible/assertEnvironmentVisible) is the caller's job (HTTP boundary).
  */
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { VAR_NAME_RE, dialectFromJdbcUrl } from '@itest/shared';
@@ -15,8 +15,8 @@ export const OBJECT_MASK = '••••••••';
 const OBJECT_TYPES = ['db', 'syslog', 'web'] as const;
 export type ObjectType = (typeof OBJECT_TYPES)[number];
 
-/** 出参掩码:payload.secret(AES 三元组)→ OBJECT_MASK,同时输出 hasSecret 标志位
- *  让前端可判定"已加密保存",不依赖反向解析被 mask 的 secret。 */
+/** Output masking: payload.secret (AES triplet) → OBJECT_MASK, plus a hasSecret flag so the frontend
+ *  can tell "encrypted and saved" without reverse-parsing the masked secret. */
 export function maskObjectPayload(row: typeof environmentObjects.$inferSelect) {
   const raw = (row.payload ?? {}) as Record<string, unknown>;
   const hasSecret = Boolean(raw.secret);
@@ -26,11 +26,11 @@ export function maskObjectPayload(row: typeof environmentObjects.$inferSelect) {
 }
 
 /**
- * 入参归一:payload.password / payload.privateKey 明文 → 加密写入 payload.secret;
- * 未提供(留空)→ 沿用 prev 旧密文(不覆盖语义)。入参中的 secret 字段一律丢弃
- * (含 OBJECT_MASK 占位串——这是脱敏值,绝不能当作真值写回)。
- * syslog 按 authType 决定加密哪个明文字段(password / privateKey);db / web 用 password。
- * 0041 起 web 携带应用登录凭据:user / loginUrl 原样透传,password 加密落 payload.secret。
+ * Input normalization: payload.password / payload.privateKey plaintext → encrypted into payload.secret;
+ * when absent (left empty) → keep prev's old ciphertext (no-overwrite semantics). The secret field in the input is
+ * always dropped (including the OBJECT_MASK placeholder — it's a masked value and must never be written back as real).
+ * syslog picks which plaintext field to encrypt by authType (password / privateKey); db / web use password.
+ * Since 0041 web carries app login credentials: user / loginUrl pass through as-is, password is encrypted into payload.secret.
  */
 export function normalizeObjectPayload(
   objectType: ObjectType,
@@ -38,7 +38,7 @@ export function normalizeObjectPayload(
   prev?: Record<string, unknown>,
 ): Record<string, unknown> {
   const out = { ...payload };
-  // 入参里的 secret 一律丢弃——可能是脱敏串,绝不写回
+  // The input's secret is always dropped — it may be a masked string and is never written back
   delete out.secret;
   const plain = objectType === 'syslog'
     ? (out.authType === 'password' ? out.password : out.privateKey)
@@ -49,14 +49,14 @@ export function normalizeObjectPayload(
     const e = encrypt(plain);
     out.secret = { c: e.ciphertext.toString('base64'), i: e.iv.toString('base64'), t: e.tag.toString('base64') };
   } else if (prev?.secret && typeof prev.secret === 'object') {
-    // 仅当 prev.secret 是合法 AES 三元组时才沿用(过滤掉历史脏数据里的占位串)
+    // Keep prev.secret only when it's a valid AES triplet (filters placeholder strings left behind by historical dirty data)
     out.secret = prev.secret;
   }
   return out;
 }
 
-/** web 对象 payload 校验:name 可空(空=仅默认服务不可被引用)、合法则须为变量名字符且 ≤64;
- *  scheme http/https(缺省 http);host 必填;port 可空整数。同环境 name 唯一。 */
+/** web object payload validation: name may be empty (empty = default-only service, not referenceable) and when present must be
+ *  variable-name characters ≤64; scheme http/https (default http); host required; port an optional integer. Name unique per environment. */
 async function assertWebPayload(
   tx: Pick<typeof db, 'select'>,
   environmentId: string,
@@ -67,7 +67,7 @@ async function assertWebPayload(
   if (name !== null && !VAR_NAME_RE.test(name)) {
     throw new HttpError(400, 'invalid_web_name', 'web 服务 name 只能包含字母、数字、下划线,且以字母或下划线开头');
   }
-  // name 上限 64,与 test_cases.web_service_ref varchar(64) 对齐
+  // name capped at 64, aligned with test_cases.web_service_ref varchar(64)
   if (name !== null && name.length > 64) {
     throw new HttpError(400, 'invalid_web_name', 'web 服务 name 长度不能超过 64');
   }
@@ -80,8 +80,8 @@ async function assertWebPayload(
   if (payload.port !== undefined && payload.port !== null && !Number.isInteger(payload.port)) {
     throw new HttpError(400, 'invalid_web_port', 'web 服务 port 必须是整数');
   }
-  // 0041 起 web 可携带应用登录凭据(一一对应):user/loginUrl/password 可选,password 为瞬时明文,
-  // 交由 normalizeObjectPayload 加密落 payload.secret,这里只做类型轻校验。
+  // Since 0041 web may carry app login credentials (one-to-one): user/loginUrl/password optional, password is transient plaintext,
+  // handed to normalizeObjectPayload to encrypt into payload.secret; only light type checks here.
   for (const k of ['user', 'loginUrl', 'password'] as const) {
     const v = payload[k];
     if (v !== undefined && v !== null && typeof v !== 'string') {
@@ -100,20 +100,21 @@ async function assertWebPayload(
   }
 }
 
-/** db 对象 payload 校验：dbType 合法；host/dbName/user 是字符串；url 的 jdbc 库型与 dbType 不冲突。
+/** db object payload validation: dbType legal; host/dbName/user are strings; the url's jdbc dialect must not conflict with dbType.
  *
- *  存在的原因（2026-10-28 prod228 实测）：db/syslog payload 此前完全无校验，
- *  AI 工具 upsert 时写什么存什么——写进一条 `url: jdbc:mysql://…` 却漏了 `dbType`
- *  的 db 对象，运行时被「缺省 postgres」当成 PG 去连 MySQL，报出的
- *  `Connection terminated unexpectedly` 完全掩盖真实原因。
+ *  Why it exists (2026-10-28 prod228 field test): db/syslog payloads had no validation at all before,
+ *  and the AI tool's upsert stored whatever was written — a db object with `url: jdbc:mysql://…` but missing
+ *  `dbType` got treated as PG at runtime ("default postgres") while dialing MySQL, and the resulting
+ *  `Connection terminated unexpectedly` completely masked the real cause.
  *
- *  校验两条：
- *  1. dbType 显式给了必须是 postgres/mysql/gauss100 之一（拼错的值早失败，好过运行时静默走缺省）。
- *  2. url 存在时其 jdbc 库型不得与 dbType 冲突（jdbc:mysql:// + dbType=postgres
- *     是自相矛盾的配置，直接拒掉，别让它跑到运行期才炸）。
+ *  Two checks:
+ *  1. When dbType is given explicitly it must be one of postgres/mysql/gauss100 (a misspelled value fails early —
+ *     better than silently walking the default at runtime).
+ *  2. When url is present its jdbc dialect must not conflict with dbType (jdbc:mysql:// + dbType=postgres
+ *     is a self-contradictory config; reject it outright instead of letting it explode at runtime).
  *
- *  校验对象是「合并后的 payload」。继承来的 url 与调用方声明的 dbType 矛盾时，
- *  由 mergeDbPayload 先丢掉那个过期 url 再校验——不该让一次无关的字段修改被历史遗留元数据拒掉。
+ *  The validation target is the "merged payload". When an inherited url contradicts the caller-declared dbType,
+ *  mergeDbPayload drops the stale url before validating — an unrelated field edit shouldn't be rejected by legacy metadata.
  */
 function assertDbPayload(payload: Record<string, unknown>): void {
   const dbType = payload.dbType;
@@ -135,11 +136,11 @@ function assertDbPayload(payload: Record<string, unknown>): void {
   }
 }
 
-/** db payload 合并（update / upsert-已有分支用）：继承 prev 的元数据（url、type 等 UI 不展示的字段）。
+/** db payload merge (used by update / the upsert-existing branch): inherits prev's metadata (url, type, and other fields the UI doesn't show).
  *
- *  只在「调用方显式声明了 dbType、且与继承来的 url 矛盾」时丢弃那个过期的 url——
- *  dbType 才是权威库型（resolveDbDialect 也是 dbType 优先），留着矛盾的 url 只会误导人。
- *  调用方自带 url 时以调用方为准，不丢。
+ *  The stale url is dropped only when "the caller explicitly declared a dbType that contradicts the inherited url" —
+ *  dbType is the authoritative dialect (resolveDbDialect prefers dbType too); keeping a contradictory url only misleads.
+ *  When the caller brings its own url, the caller wins and nothing is dropped.
  */
 function mergeDbPayload(prev: Record<string, unknown>, incoming: Record<string, unknown>): Record<string, unknown> {
   const merged = { ...prev, ...incoming };
@@ -193,8 +194,8 @@ export async function createEnvironment(
   return db.transaction(async (tx) => {
     const inserted = (await tx.insert(testEnvironments).values({ projectId, name: input.name, ...(createdByUserId ? { createdByUserId } : {}) }).returning())[0]!;
     if (input.objects?.length) {
-      // 逐条先校验再插入:web 对象走 assertWebPayload;同事务内后续校验能看到已插入行,
-      // 同请求里两个同名 web 对象因此同样被拒(409)。
+      // Validate each object before inserting: web objects go through assertWebPayload; later checks in the same transaction
+      // can see already-inserted rows, so two same-named web objects in one request are both rejected (409).
       for (const o of input.objects) {
         if (o.objectType === 'web') {
           await assertWebPayload(tx, inserted.id, o.payload);
@@ -233,7 +234,7 @@ export async function updateEnvironment(environmentId: string, patch: { name?: s
   return { ...row, objects: await objectsOf(row.id) };
 }
 
-/** 删除前的引用计数(用例默认环境 + 计划分组环境)。 */
+/** Reference count before delete (case default environments + plan group environments). */
 export async function environmentUsage(environmentId: string): Promise<{ caseCount: number; planCount: number }> {
   const caseCount = (await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.defaultEnvId, environmentId))).length;
   const planCount = (await db.selectDistinct({ id: executionPlans.id }).from(executionPlans)
@@ -247,7 +248,7 @@ export async function deleteEnvironment(environmentId: string): Promise<void> {
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'environment not found');
 }
 
-/** 新建对象(insert 语义,与原路由 POST /environments/:id/objects 一致)。 */
+/** Creates an object (insert semantics, matching the original route POST /environments/:id/objects). */
 export async function insertEnvironmentObject(
   environmentId: string,
   input: { objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
@@ -274,7 +275,7 @@ export async function insertEnvironmentObject(
   return maskObjectPayload(row);
 }
 
-/** upsert(工具语义):同 (environmentId, objectType, label) 存在则合并 payload(旧密文沿用),否则新建。 */
+/** Upsert (tool semantics): when the same (environmentId, objectType, label) exists, merge the payload (keeping the old ciphertext); otherwise create. */
 export async function upsertEnvironmentObject(
   environmentId: string,
   input: { objectType: ObjectType; label?: string; payload: Record<string, unknown>; isDefault?: boolean },
@@ -291,11 +292,11 @@ export async function upsertEnvironmentObject(
     if (existing) {
       const prev = (existing.payload ?? {}) as Record<string, unknown>;
       if (input.objectType === 'web') {
-        // 合并后校验:部分字段 upsert 靠 merge 补全(如只改 port),不能按裸入参全量卡
+        // Validate after merging: partial-field upserts rely on the merge to fill in (e.g. changing only port), so the raw input can't be validated as the whole
         await assertWebPayload(tx, environmentId, { ...prev, ...input.payload }, existing.id);
       }
-      // prev 是从 DB 直读的原始行（含密文三元组），不是掩码后行——直接传进 normalizeObjectPayload 即可
-      // input.payload 通常来自调用方（AI 工具 / HTTP 入参），不含 secret
+      // prev is the raw row read straight from the DB (ciphertext triplet included), not the masked row — pass it directly into normalizeObjectPayload
+      // input.payload usually comes from the caller (AI tool / HTTP input) and carries no secret
       const merged = input.objectType === 'db' ? mergeDbPayload(prev, input.payload) : { ...prev, ...input.payload };
       if (input.objectType === 'db') {
         assertDbPayload(merged);
@@ -326,11 +327,11 @@ export async function updateEnvironmentObject(objectId: string, patch: { label?:
   const existing = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, objectId)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'environment object not found');
   const prev = (existing.payload ?? {}) as Record<string, unknown>;
-  // db 对象 merge prev：payload 里的 url(jdbc:…) 与 type 是 UI 表单不展示的元数据，
-  // 表单每次保存只带 dbType/host/port/dbName/user——不 merge 就会在保存时把 url 抹掉，
-  // 而 url 正是「缺 dbType 时判定库型」的兜底信号（抹掉=库型判据被静默销毁）。
-  // 只对 db 做 merge：web 的 payload 是「用户可清空」的字段集（清空 loginUrl 要能真的清掉），
-  //  blanket merge 会让已清空的字段复活。
+  // db objects merge prev: the payload's url(jdbc:…) and type are metadata the UI form doesn't show;
+  // the form only sends dbType/host/port/dbName/user on each save — without the merge, saving would wipe the url,
+  // and the url is exactly the fallback signal for "dialect when dbType is missing" (wiping it silently destroys the dialect evidence).
+  // Merge only for db: web's payload is a user-clearable field set (clearing loginUrl must actually clear it),
+  // and a blanket merge would resurrect cleared fields.
   const merged = patch.payload !== undefined && existing.objectType === 'db'
     ? mergeDbPayload(prev, patch.payload)
     : patch.payload;
@@ -364,7 +365,7 @@ export async function deleteEnvironmentObject(objectId: string): Promise<void> {
   });
 }
 
-/** 工具 set_secret:直接替换 payload.secret(加密),其余字段不动。返回脱敏行。 */
+/** Tool set_secret: replaces payload.secret (encrypted) directly, leaving every other field untouched. Returns the masked row. */
 export async function setEnvironmentObjectSecret(objectId: string, plain: string) {
   const existing = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, objectId)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'environment object not found');
@@ -378,7 +379,7 @@ export async function setEnvironmentObjectSecret(objectId: string, plain: string
   return maskObjectPayload(updated);
 }
 
-/** 按 (environmentId, objectType, label) 定位对象(工具 set_secret 用)。返回原始行(含密文)。 */
+/** Locates an object by (environmentId, objectType, label) (used by the set_secret tool). Returns the raw row (ciphertext included). */
 export async function findEnvironmentObject(environmentId: string, objectType: ObjectType, label?: string) {
   const row = (await db.select().from(environmentObjects)
     .where(and(eq(environmentObjects.environmentId, environmentId), eq(environmentObjects.objectType, objectType), eq(environmentObjects.label, label ?? '默认')))

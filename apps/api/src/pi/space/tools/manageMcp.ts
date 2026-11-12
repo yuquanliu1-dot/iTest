@@ -1,18 +1,18 @@
 /**
- * manage_mcp：空间助手对话式管理全局 MCP 服务器（assistant_mcp_servers，scope=global）。
- * 与 route 走同一 expose 白名单（mcp.ts MCP_EXPOSURES）与字段规则（mcpServersService.normalizeMcpFields）。
+ * manage_mcp: conversationally manage global MCP servers (assistant_mcp_servers, scope=global) from the space assistant.
+ * Shares the same exposure whitelist as the route (mcp.ts MCP_EXPOSURES) and the same field rules (mcpServersService.normalizeMcpFields).
  *
- * 仅对「有效管理员」线程注册（index.ts 按 ctx.manager 装配）。
- * scope=global 是唯一可管理面：project/version 级归属组织，对话内不做可见性管理。
- * name 在 DB 全局唯一（assistant_mcp_servers_name_uq），故与 manage_skill 一样按 name 寻址。
- * action 语义：
- *   - list   ：global 服务器清单（name/kind/exposure/enabled/command|url）
- *   - create ：新建（name/kind? stdio|http 缺省 stdio/exposure?/command+args?|url/env?/enabled?）
- *   - update ：按 name 定位，改任选 name(renameTo)/enabled/exposure/command/args/url/env/kind
- *   - delete ：按 name 删除
+ * Registered only on "valid manager" threads (index.ts assembles by ctx.manager).
+ * scope=global is the only manageable surface: project/version-level ownership belongs to the org; no visibility management in conversation.
+ * name is globally unique in the DB (assistant_mcp_servers_name_uq), so like manage_skill it is addressed by name.
+ * Action semantics:
+ *   - list   : global server list (name/kind/exposure/enabled/command|url)
+ *   - create : create (name/kind? stdio|http default stdio/exposure?/command+args?|url/env?/enabled?)
+ *   - update : located by name; changes any of name(renameTo)/enabled/exposure/command/args/url/env/kind
+ *   - delete : delete by name
  *
- * 生效口径：MCP 在会话（session_start）装载，改动对【新会话】生效；
- * 当前会话的 MCP 工具仍按构建时的快照（新建/改名要新会话才注册、删除后旧工具残留到重开会话）。
+ * Effectiveness semantics: MCP is loaded at session start (session_start); changes take effect for [new sessions];
+ * the current session's MCP tools stay on the build-time snapshot (new/renamed servers register only in a new session; deleted tools linger until reopening the session).
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
@@ -30,7 +30,7 @@ import {
 
 const Actions = z.object({
   action: z.enum(['list', 'create', 'update', 'delete']),
-  /** create 的名称；update/delete 用它定位（DB 唯一）。 */
+  /** Name for create; update/delete use it for location (DB-unique). */
   name: z.string().min(1).max(120).optional(),
   kind: z.enum(['stdio', 'http']).optional(),
   exposure: z.string().max(12).optional(),
@@ -39,7 +39,7 @@ const Actions = z.object({
   url: z.string().optional(),
   env: z.record(z.string()).optional(),
   enabled: z.boolean().optional(),
-  /** update：改名后的新名称（原 name 仍作定位键）。 */
+  /** update: the new name after renaming (the original name remains the location key). */
   renameTo: z.string().min(1).max(120).optional(),
 });
 

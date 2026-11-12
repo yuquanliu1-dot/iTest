@@ -1,15 +1,15 @@
 /**
- * assistant_mcp_servers 最小 CRUD（管理端，无 UI；管理 UI 归后续需求）。
- * 挂载于 /api/assistant/mcp-servers，router.ts 处 requireManager 保护。
- * 配置期守卫（spec §MCP）：exposure=oauth 及未知值一律拒绝（服务端无 loopback 回调能力）；
- * kind=stdio 必须 command；kind=http 必须 http(s):// url（防 file:// 等本地读取）。
+ * assistant_mcp_servers minimal CRUD (admin side, no UI; admin UI belongs to a later requirement).
+ * Mounted at /api/assistant/mcp-servers, protected by requireManager at router.ts.
+ * Config-time guards (spec §MCP): exposure=oauth and unknown values always rejected (the server has no loopback-callback capability);
+ * kind=stdio must have command; kind=http must have an http(s):// url (preventing file:// and other local reads).
  *
- * 可见性（与 guidesRoute 一致，经 projectAccess.ts 断言）：
- *  - scope=global 的 server 实例级共享（LoadAll 全局加载 + 管理全局可见）；
- *  - scope=project/version 的 server 归属于具体组织，仅该组织（子树）用户可见/可管理，
- *    跨组织访问一律 404（不区分「不存在」与「不可见」，防存在性探测）。
- *    注意：CRUD 控制面与 LOADING（loadEnabledMcpServers）同一套 scope 规则——
- *    global 全量，project/version 跟随线程归属（见 mcp.ts），不做全局全量加载。
+ * Visibility (consistent with guidesRoute, asserted via projectAccess.ts):
+ *  - scope=global servers are instance-level shared (LoadAll loads globally + admin sees them globally);
+ *  - scope=project/version servers belong to a specific org, visible/manageable only by that org's (subtree) users,
+ *    cross-org access always 404 (no distinction between "not found" and "invisible", preventing existence probing).
+ *    Note: the CRUD control plane and LOADING (loadEnabledMcpServers) share one scope rule set —
+ *    global in full, project/version follows thread ownership (see mcp.ts); no global load-everything.
  */
 import { Router } from 'express';
 import { and, asc, eq, inArray } from 'drizzle-orm';
@@ -26,7 +26,7 @@ export const mcpServersRoute = Router();
 
 const SCOPE = ['global', 'project', 'version'] as const;
 
-/** server 行可见性断言：global 共享；project/version 归属组织，跨组织 404。 */
+/** server-row visibility assertion: global shared; project/version org-owned, cross-org 404. */
 async function assertMcpServerVisible(
   row: Pick<typeof assistantMcpServers.$inferSelect, 'scope' | 'projectId' | 'versionId'>,
   user: AuthUser,
@@ -47,7 +47,7 @@ mcpServersRoute.get('/', async (req, res) => {
   if (typeof q.kind === 'string' && q.kind) conds.push(eq(assistantMcpServers.kind, q.kind));
   if (typeof q.enabled === 'string') conds.push(eq(assistantMcpServers.enabled, q.enabled === 'true'));
   const rows = await db.select().from(assistantMcpServers).where(and(...conds)).orderBy(asc(assistantMcpServers.name));
-  // 可见性过滤：global 全量返回；project/version 只在可见项目内返回（一次查可见项目 + 一次 version→project 归并，避免逐行断言）
+  // Visibility filter: global returned in full; project/version returned only within visible projects (one visible-projects query + one version→project merge, avoiding per-row assertions)
   const visible = new Set(await visibleProjectIds(user));
   const versionRows = rows.filter((r) => r.scope === 'version' && r.versionId != null);
   const versionProject = new Map<string, string>();
@@ -64,7 +64,7 @@ mcpServersRoute.get('/', async (req, res) => {
       const pid = r.versionId ? versionProject.get(r.versionId) : undefined;
       return pid != null && visible.has(pid);
     }
-    return true; // global：实例级共享
+    return true; // global: instance-level shared
   });
   res.json(filtered);
 });
@@ -72,9 +72,9 @@ mcpServersRoute.get('/', async (req, res) => {
 mcpServersRoute.post('/', async (req, res) => {
   const user = req.user as AuthUser;
   const b = req.body as Record<string, unknown>;
-  // 无 scope 字段（name/kind/exposure/command|url/args/env）全校验 + 归一化；与 manage_mcp create 同一套规则。
+  // Scope-less fields (name/kind/exposure/command|url/args/env): full validation + normalization; same rule set as manage_mcp create.
   const f = normalizeMcpFields(b);
-  // scope=project/version 归属组织：跨组织 404 且必须在插入前断言（与 guidesRoute 同语义）
+  // scope=project/version org ownership: cross-org 404 and must be asserted before insert (same semantics as guidesRoute)
   const scope = (b.scope as string) ?? 'global';
   if (!SCOPE.includes(scope as never)) throw new HttpError(400, 'bad_request', 'scope 必须是 global|project|version');
   if (scope === 'project') {
@@ -97,7 +97,7 @@ mcpServersRoute.post('/', async (req, res) => {
 
 mcpServersRoute.patch('/:id', async (req, res) => {
   const user = req.user as AuthUser;
-  // PATCH 先载旧行并断言可见性（跨组织 404），再校验/套用 diff（与 guidesRoute 同语义）
+  // PATCH loads the old row and asserts visibility first (cross-org 404), then validates/applies the diff (same semantics as guidesRoute)
   const existing = (await db.select().from(assistantMcpServers).where(eq(assistantMcpServers.id, req.params.id)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'mcp server 不存在');
   await assertMcpServerVisible(existing, user);
@@ -114,12 +114,12 @@ mcpServersRoute.patch('/:id', async (req, res) => {
     if (kind === 'stdio') {
       if (typeof p.command !== 'string' || !p.command.trim()) throw new HttpError(400, 'bad_request', 'kind=stdio 需要 command');
       patch.command = p.command.trim();
-      patch.url = null; // 切到 stdio，清掉 http 列，避免改 kind 后旧列残留
+      patch.url = null; // switching to stdio — clear the http column so no stale column survives a kind change
     }
     if (kind === 'http') {
       if (typeof p.url !== 'string' || !/^https?:\/\//.test(p.url)) throw new HttpError(400, 'bad_request', 'kind=http 需要 http(s):// url');
       patch.url = p.url;
-      patch.command = null; // 切到 http，清掉 command 列
+      patch.command = null; // switching to http — clear the command column
     }
   } else {
     if ('command' in p) {
@@ -138,7 +138,7 @@ mcpServersRoute.patch('/:id', async (req, res) => {
     if (!MCP_EXPOSURES.has(exp)) throw new HttpError(400, 'bad_request', `exposure 必须是 ${[...MCP_EXPOSURES].join('|')}（oauth 不支持）`);
     patch.exposure = exp;
   }
-  // 改 scope 到 project/version 必须在同一次 PATCH 里给对应 id，否则落入陈旧 id（POST 语义一致）
+  // Switching scope to project/version must supply the corresponding id in the same PATCH, otherwise a stale id remains (same semantics as POST)
   if ('scope' in p) {
     const scope = p.scope as string;
     if (!SCOPE.includes(scope as never)) throw new HttpError(400, 'bad_request', 'scope 必须是 global|project|version');
@@ -152,7 +152,7 @@ mcpServersRoute.patch('/:id', async (req, res) => {
     if ('versionId' in p) patch.versionId = typeof p.versionId === 'string' ? (p.versionId as string) : null;
   }
   if ('enabled' in p) patch.enabled = p.enabled === false ? false : true;
-  // 生效后 scope 的可见性：新给/沿用的 project/version id 都必须指向可见项目
+  // Post-change scope visibility: newly supplied or carried-over project/version ids must both point at visible projects
   const effScope = (patch.scope as string | undefined) ?? existing.scope;
   if (effScope === 'project') {
     const pid = patch.projectId !== undefined ? (patch.projectId as string | null) : existing.projectId;
@@ -173,7 +173,7 @@ mcpServersRoute.patch('/:id', async (req, res) => {
 
 mcpServersRoute.delete('/:id', async (req, res) => {
   const user = req.user as AuthUser;
-  // 先载旧行并断言可见性（跨组织 404），再删除（与 guidesRoute 同语义）
+  // Loads the old row and asserts visibility first (cross-org 404), then deletes (same semantics as guidesRoute)
   const existing = (await db.select().from(assistantMcpServers).where(eq(assistantMcpServers.id, req.params.id)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'mcp server 不存在');
   await assertMcpServerVisible(existing, user);

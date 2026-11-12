@@ -7,8 +7,8 @@ import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 import type { ToolExecutor } from '../src/pi/tools.js';
 import { resolveConfirmation } from '../src/pi/space/confirm.js';
 
-// 注意:buildEnvironmentsTools 链上静态引入 db/client(DATABASE_URL 在 beforeAll 才指向容器),
-// 必须在测试体内动态 import(与 space-tools-cases.test.ts 同模式),否则查询打到默认本地库。
+// Note: the buildEnvironmentsTools chain statically imports db/client (DATABASE_URL only points at the container inside beforeAll),
+// so it must be dynamically imported inside the test body (same pattern as space-tools-cases.test.ts), otherwise queries hit the default local DB.
 async function toolOf(ctx: SpaceToolsContext): Promise<ToolExecutor> {
   return (await import('../src/pi/space/tools/environments.js')).buildEnvironmentsTools(ctx)[0]!;
 }
@@ -39,7 +39,7 @@ function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContex
   return { ctx, events };
 }
 
-/** execute 在 confirm 前有异步 DB 查询 → 轮询等 confirm_request。 */
+/** execute runs async DB queries before confirm → poll and wait for confirm_request. */
 async function untilConfirm(events: Array<Record<string, unknown>>): Promise<string> {
   for (let i = 0; i < 100; i++) {
     const e = events.find((x) => x.type === 'confirm_request');
@@ -79,7 +79,7 @@ describe('manage_environments 工具', () => {
     const secret = tool.execute({ action: 'set_secret', environmentId: envId, objectType: 'db', value: 'SUPER-SECRET' });
     const cid = await untilConfirm(events);
     const req = events.find((e) => e.type === 'confirm_request') as Record<string, unknown>;
-    expect(String(req.summary)).not.toContain('SUPER-SECRET'); // summary 不回显明文
+    expect(String(req.summary)).not.toContain('SUPER-SECRET'); // the summary never echoes plaintext
     expect(String(req.risk)).toBe('secret');
     resolveConfirmation(cid, true);
     expect(await secret).toMatchObject({ ok: true, data: '凭据已加密保存' });
@@ -107,7 +107,7 @@ describe('manage_environments 工具', () => {
 
     events.length = 0;
     const pending = await tool.execute({ action: 'set_secret', environmentId: envId, objectType: 'syslog', label: '默认', value: 'k' });
-    // syslog 对象不存在 → 不进确认,直接报错
+    // syslog object doesn't exist → no confirmation, direct error
     expect(pending).toMatchObject({ ok: false });
     expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
 
@@ -150,7 +150,7 @@ describe('manage_environments 工具', () => {
     expect(stage.diff).toContain('name: 灰度环境 → 改名环境');
     expect((await pool.query(`SELECT name, is_default FROM test_environments WHERE id=$1`, [envId])).rows[0]).toMatchObject({ name: '改名环境', is_default: true });
 
-    // patch 为空、仅 objects 合并 → 保持自动执行,不进确认
+    // Empty patch, objects-only merge → stays auto-executing, no confirmation
     events.length = 0;
     const objOnly = await tool.execute({ action: 'upsert', environmentId: envId, objects: [{ objectType: 'db', payload: { host: 'h' } }] });
     expect(objOnly).toMatchObject({ ok: true });

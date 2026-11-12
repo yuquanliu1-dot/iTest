@@ -55,13 +55,13 @@ describe('EXPLORATION_SYSTEM_PROMPT_BASE - 协议与安全规则', () => {
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('子目标清单');
   });
 
-  // 2026-11-11 prod 实录：excluded 形状原先排在「actions 元素类型」列表里，
-  // 模型把它当成一种 action → 整场探索零申报，账本恒空。必须显式声明为顶层字段。
+  // 2026-11-11 prod record: the excluded shape was originally listed under 「actions 元素类型」,
+  // the model treated it as an action type → the whole exploration declared zero, the ledger stayed empty. Must be declared as a top-level field.
   it('负面结果账本：excluded 是顶层字段（与 actions/findings 同级，不在 actions 里）', () => {
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('顶层字段 "excluded"');
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('与 actions / findings 同级');
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).toContain('"excluded": [...]');
-    // 不得再以 actions 元素类型的形态出现（那是模型误读的根源）
+    // Must never appear again as an actions element type (that was exactly the source of the model's misreading)
     expect(EXPLORATION_SYSTEM_PROMPT_BASE).not.toContain('- {"excluded"');
   });
 
@@ -211,7 +211,7 @@ describe('coerceFindings', () => {
   it('max 覆盖 + 批内去重 + 跨轮去重（existingTitles 归一化后比对）', () => {
     const r1 = coerceFindings([ok, { ...ok }], { max: 5 });
     expect(r1.accepted).toHaveLength(1);
-    // 尾随空格 + 大小写差异在 normalizeTitle 后视为同一条
+    // Trailing spaces + case differences count as the same entry after normalizeTitle
     const r2 = coerceFindings([ok], { existingTitles: ['删除按钮无二次确认 '] });
     expect(r2.accepted).toHaveLength(0);
     expect(r2.dropped).toBe(1);
@@ -226,8 +226,8 @@ describe('coerceFindings', () => {
     expect(r.invalid).toBe(2);
   });
 
-  // 2026-11-10 prod 实录：模型输出 {title,severity:"中",location,evidence}，
-  // 旧实现只认 description → 全员静默丢弃（摘要说 5 条、库里 0 条）。
+  // 2026-11-10 prod record: the model output {title,severity:"中",location,evidence},
+  // the old implementation accepted only description → all silently dropped (summary said 5, DB had 0).
   it('字段别名容错：description ← evidence/detail/desc，location 并入描述', () => {
     const r = coerceFindings([
       { title: '责任人显示 undefined', severity: '中', location: '列表第2行「责任人」列', evidence: '单元格渲染为 undefined' },
@@ -267,10 +267,10 @@ describe('coerceFindings', () => {
   });
 });
 
-// 2026-11-10 prod 实录：一次探索落了 7 条 ≈ 3 个真缺陷（标题逐字去重挡不住近义重报）。
+// 2026-11-10 prod record: one exploration landed 7 entries ≈ 3 real defects (verbatim title dedupe can't stop near-duplicate re-reports).
 describe('coerceFindings 近义标题合并', () => {
   const f = (title: string) => ({ title, description: 'd' });
-  /** prod 实录的 7 条标题，期望聚成 3 组。 */
+  /** The 7 prod-record titles, expected to cluster into 3 groups. */
   const PROD7 = [
     '资产表格出现 undefined 与 NaN 展示',
     '资产列表出现 undefined / NaN 展示',
@@ -286,7 +286,7 @@ describe('coerceFindings 近义标题合并', () => {
     expect(r.accepted).toHaveLength(3);
     expect(r.dropped).toBe(4);
     expect(r.invalid).toBe(0);
-    // 保留的是每组首条
+    // What is kept is the first entry of each group
     expect(r.accepted.map((x) => x.title)).toEqual([PROD7[0]!, PROD7[2]!, PROD7[4]!]);
   });
 
@@ -321,8 +321,8 @@ describe('coerceFindings 近义标题合并', () => {
   });
 });
 
-// 2026-11-10 prod 实录（会话 988ef20c）：模型输出 {type,描述,证据} 三轮共 8 条全 invalid
-// （type 不在 title 别名表、证据不在 description 别名表）→ 库 0 行、摘要说 3 条。
+// 2026-11-10 prod record (session 988ef20c): the model output {type,描述,证据} — 8 entries over 3 turns, all invalid
+// (type is not in the title alias table, 证据 not in the description alias table) → 0 DB rows, summary said 3.
 describe('coerceFindings 再容错之三：{type,描述,证据} 形状', () => {
   it('type 当标题兼分类词；描述为主描述、证据并作补充段', () => {
     const r = coerceFindings([
@@ -406,7 +406,7 @@ describe('mergeExplorationTrails - 老会话回落合并', () => {
   });
 });
 
-// 升格用例的 best-effort 机械映射（2026-11-11 口径）：平台留痕 → {instruction, compiled|null}[]。
+// Best-effort mechanical mapping for case promotion (the 2026-11-11 definition): platform trail → {instruction, compiled|null}[].
 describe('trailToCaseSteps - 留痕升格用例步骤', () => {
   it('click/fill/navigate 映射机械 DSL；instruction 与 trailToSteps 同口径', () => {
     const steps = trailToCaseSteps([

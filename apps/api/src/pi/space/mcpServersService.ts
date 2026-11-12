@@ -1,14 +1,15 @@
 /**
- * assistant_mcp_servers 共用层：global 级 CRUD（校验 + 落库 + scope 守卫）。
- * 服务端 exposure 白名单在 mcp.ts（MCP_EXPOSURES），此处从那里取，route 与工具不再各写一份。
+ * assistant_mcp_servers shared layer: global-level CRUD (validation + persistence + scope guards).
+ * The server-side exposure allow-list lives in mcp.ts (MCP_EXPOSURES); it is imported from there,
+ * so the route and the tool no longer each keep their own copy.
  *
- * 分工：
- *  - normalizeMcpFields      全局（与 scope 无关的字段集）校验——route POST 与 manage_mcp create 共用。
- *  - createGlobalMcpServer   manage_mcp 用；route POST 走自身 scope 分支（scope/projectId/versionId 断言留在 route）。
- *  - update/delete/list      manage_mcp 用；一律「scope=global 才可改动」——project/version 级归属组织，
- *                            对话内不管理（设置页/route 负责，那里有可见性断言）。
- *  - 注意：route PATCH 因可见性 + scope 内聚逻辑保留自己的全局字段校验副本；与这里的规则必须同语义
- *    （kind ∈ stdio|http、exposure ∈ MCP_EXPOSURES、http url ^https?://、stdio 必 command）。
+ * Division of labor:
+ *  - normalizeMcpFields      global (scope-independent field set) validation — shared by route POST and manage_mcp create.
+ *  - createGlobalMcpServer   used by manage_mcp; route POST goes through its own scope branch (scope/projectId/versionId assertions stay in the route).
+ *  - update/delete/list      used by manage_mcp; always "only scope=global may be changed" — project/version level is org-owned
+ *                            and not managed from conversation (the settings page/route handles it, where visibility assertions exist).
+ *  - Note: route PATCH keeps its own copy of the global-field validation due to visibility + scope cohesion logic; it must stay semantically identical
+ *    to the rules here (kind ∈ stdio|http, exposure ∈ MCP_EXPOSURES, http url ^https?://, stdio requires command).
  */
 import { and, asc, eq, ne } from 'drizzle-orm';
 import { db } from '../../db/client.js';
@@ -18,7 +19,7 @@ import { MCP_EXPOSURES } from './mcp.js';
 
 export const MCP_KINDS = ['stdio', 'http'] as const;
 
-/** 与 scope 无关的字段校验 + 归一化（route POST 与工具 create 共用同一套规则）。 */
+/** Scope-independent field validation + normalization (route POST and the tool's create share the same rule set). */
 export function normalizeMcpFields(b: Record<string, unknown>): {
   name: string;
   kind: (typeof MCP_KINDS)[number];
@@ -54,7 +55,7 @@ export function normalizeMcpFields(b: Record<string, unknown>): {
   };
 }
 
-/** 建 global 级 server（manage_mcp create；route POST 的 global 分支语义一致）。 */
+/** Creates a global-level server (manage_mcp create; route POST's global branch is semantically identical). */
 export async function createGlobalMcpServer(raw: Record<string, unknown>) {
   const f = normalizeMcpFields(raw);
   await assertMcpNameUnique(f.name);
@@ -68,7 +69,7 @@ export async function createGlobalMcpServer(raw: Record<string, unknown>) {
   return rows[0]!;
 }
 
-/** name 全局唯一（DB 唯一约束）；冲突 → 409（干净报错而非 PG duplicate key 500）。 */
+/** name globally unique (DB unique constraint); conflict → 409 (clean error instead of a PG duplicate-key 500). */
 async function assertMcpNameUnique(name: string, excludeId?: string): Promise<void> {
   const conds = [eq(assistantMcpServers.name, name)];
   if (excludeId) conds.push(ne(assistantMcpServers.id, excludeId));
@@ -76,7 +77,7 @@ async function assertMcpNameUnique(name: string, excludeId?: string): Promise<vo
   if (dup) throw new HttpError(409, 'conflict', 'mcp server 名称已存在');
 }
 
-/** 更新 global 级 server（manage_mcp update）：scope=global 才可改；partial 语义与 route PATCH 全局字段一致。 */
+/** Updates a global-level server (manage_mcp update): only scope=global may change; partial semantics match the route PATCH's global fields. */
 export async function updateGlobalMcpServer(id: string, raw: Record<string, unknown>) {
   const existing = (await db.select().from(assistantMcpServers).where(eq(assistantMcpServers.id, id)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'mcp server 不存在');
@@ -96,12 +97,12 @@ export async function updateGlobalMcpServer(id: string, raw: Record<string, unkn
     if (kind === 'stdio') {
       if (typeof p.command !== 'string' || !p.command.trim()) throw new HttpError(400, 'bad_request', 'kind=stdio 需要 command');
       patch.command = p.command.trim();
-      patch.url = null; // 切到 stdio，清掉 http 列
+      patch.url = null; // switching to stdio — clear the http column
     }
     if (kind === 'http') {
       if (typeof p.url !== 'string' || !/^https?:\/\//.test(p.url)) throw new HttpError(400, 'bad_request', 'kind=http 需要 http(s):// url');
       patch.url = p.url;
-      patch.command = null; // 切到 http，清掉 command 列
+      patch.command = null; // switching to http — clear the command column
     }
   } else {
     if ('command' in p) {
@@ -130,7 +131,7 @@ export async function updateGlobalMcpServer(id: string, raw: Record<string, unkn
   return updated[0]!;
 }
 
-/** 删除（manage_mcp delete）：scope=global 才可删。 */
+/** Delete (manage_mcp delete): only scope=global may be deleted. */
 export async function deleteMcpServerIfGlobal(id: string): Promise<void> {
   const existing = (await db.select().from(assistantMcpServers).where(eq(assistantMcpServers.id, id)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'mcp server 不存在');
@@ -139,7 +140,7 @@ export async function deleteMcpServerIfGlobal(id: string): Promise<void> {
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'mcp server 不存在');
 }
 
-/** global 级清单（manage_mcp list；scope=project/version 行不在此面上）。 */
+/** Global-level listing (manage_mcp list; scope=project/version rows are not on this surface). */
 export function listGlobalMcpServers() {
   return db.select().from(assistantMcpServers).where(eq(assistantMcpServers.scope, 'global')).orderBy(asc(assistantMcpServers.name));
 }

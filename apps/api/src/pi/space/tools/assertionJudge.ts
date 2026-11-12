@@ -1,28 +1,29 @@
 /**
- * 步骤级 assertion 文本体检：判定「这是真实 UI 文案」还是「描述性短语」。
+ * Step-level assertion text triage: decide whether this is real UI copy or a descriptive phrase.
  *
- * 动机：AI 常写出「登录表单正常展示」「账号已触发锁定」「登录请求已发出」这类描述性短语。
- * 它们会被规整成 `target:'page' match:'contains'` 的整页子串断言，回放时拿
- * `document.body.innerText` 必然命中不到 → 整步 fail。历史上用 28 词黑名单
- * （DESCRIPTIVE_PHRASES）过滤，但硬编码措辞列表和曾经的 CAPTCHA_FAIL_RE 是同一类反模式：
- * 每遇一种新写法就得加词，永远追不完，还误伤真实文案（含「提示」「需」等字的按钮/toast 会被丢弃）。
+ * Motivation: the AI often writes descriptive phrases like 「登录表单正常展示」「账号已触发锁定」「登录请求已发出」.
+ * They get normalized into whole-page substring assertions with `target:'page' match:'contains'`, and replaying against
+ * `document.body.innerText` can never hit them → the whole step fails. Historically a 28-word blacklist
+ * (DESCRIPTIVE_PHRASES) filtered them, but a hardcoded phrase list is the same antipattern as the old CAPTCHA_FAIL_RE:
+ * every new phrasing needs another word, the chase never ends, and real copy gets caught in the crossfire
+ * (buttons/toasts containing 「提示」「需」 etc. were being dropped).
  *
- * 改为交给 LLM 判：它理解自然语言语义，能区分「保存」（真实按钮文案）与
- * 「保存成功」（描述性断言）。只在 verify_case 的真实页面上跑一次，判定依据是
- * 页面实际存在的文案，不是猜。
+ * Switched to letting the LLM judge: it understands natural-language semantics and can tell 「保存」 (real button copy)
+ * from 「保存成功」 (a descriptive assertion). It runs once on verify_case's real page; the judgment basis is the copy
+ * actually present on the page, not guessing.
  *
- * 关键设计：best-effort + 不静默丢弃。判定为描述性时返回 null 让调用方降级，
- * 但任何异常（LLM 未配置 / 网络失败 / 非法 JSON）都返回 null 之外的「保留」结论——
- * 宁可留一条可能失败的断言，也不静默吃掉用户的断言。
+ * Key design: best-effort + never silently drop. When judged descriptive, return null and let the caller degrade,
+ * but on any exception (LLM unconfigured / network failure / invalid JSON) return a "keep" verdict instead of null —
+ * better to keep one assertion that might fail than to silently swallow the user's assertion.
  */
 import type { LLMClient } from '../../../agent/llm-client.js';
 import { tryParseJson } from '../../../agent/llm-client.js';
 import { aiLangFrom, type AiLang } from '../../../agent/langDirective.js';
 
 export interface AssertionJudgeResult {
-  /** true = 真实 UI 文案，可作断言；false = 描述性短语，应丢弃。 */
+  /** true = real UI copy, usable as an assertion; false = descriptive phrase, should be dropped. */
   real: boolean;
-  /** 一句话理由，供 verify 回传给用户/LLM 参考。 */
+  /** One-sentence reason, fed back to the user/LLM by verify for reference. */
   reason: string;
 }
 
@@ -37,7 +38,7 @@ const ASSERTION_JUDGE_PROMPT = `你是测试断言审核员。给你一条测试
 - 判不准时倾向 real=true（保留断言，交由回放实测），不要误杀。
 - 只输出 JSON，不要 markdown 包裹：{"real":true|false,"reason":"≤30 字理由"}`;
 
-/** 页面可见文本（截断防爆），与断言文本一起交给 LLM 作判断依据。 */
+/** Page-visible text (truncated to avoid blowing up), handed to the LLM together with the assertion text as the judgment basis. */
 function buildUserMessage(assertion: string, pageText: string): string {
   const page = pageText.slice(0, 3000);
   return [
@@ -47,7 +48,7 @@ function buildUserMessage(assertion: string, pageText: string): string {
 }
 
 /**
- * 判定一条断言是否为真实 UI 文案。best-effort：任何异常都返回 real=true（保留）。
+ * Judge whether an assertion is real UI copy. best-effort: any exception returns real=true (keep).
  */
 export async function judgeAssertionText(
   assertion: string,
@@ -71,7 +72,7 @@ export async function judgeAssertionText(
       reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 100) : '',
     };
   } catch {
-    // LLM 未配置 / 网络失败 → 保留断言（宁可回放失败，也不静默丢用户的断言）
+    // LLM unconfigured / network failure → keep the assertion (better a replay failure than silently dropping the user's assertion)
     return { real: true, reason: '判定不可用，保留断言' };
   }
 }

@@ -1,13 +1,16 @@
 /**
- * 探索会话（pi 链路）的模型解析与能力探针。
+ * Model resolution and capability probes for exploration sessions (pi chain).
  *
- * 渠道选择：视觉渠道优先（探索是看图指认的任务），未配视觉渠道回落默认渠道。
- * synthesizeModel 已诚实声明 input:['text','image']——但网关别名静默剥图的事故
- * （图被换成占位文本）不能靠声明防住，靠视觉探针在读回唯一码上实证；读不出 →
- * 会话降级为纯文本元素清单模式（工具不附图），绝不静默让模型对着一堆剥图空转。
+ * Channel selection: the vision channel takes precedence (exploration is a look-at-image-and-identify task);
+ * without a configured vision channel it falls back to the default channel. synthesizeModel honestly declares
+ * input:['text','image'] — but the gateway-alias silently stripping images incident (image replaced by placeholder
+ * text) cannot be prevented by a declaration; it is proven by the vision probe reading back a unique code. If the
+ * code cannot be read → the session degrades to plain-text element-list mode (tools attach no images), never silently
+ * letting the model spin against stripped images.
  *
- * 探针在开跑前做：渠道不支持工具调用时立刻给可行动报错并终止会话，
- * 而不是让它跑满轮次预算后才发现模型全程只会说话（2026-11-11 记忆项）。
+ * Probes run before the start: when the channel does not support tool calls, the session fails immediately with an
+ * actionable error, instead of burning the full turn budget before discovering the model could only talk all along
+ * (2026-11-11 memory item).
  */
 import type { Page } from 'playwright-core';
 import { inArray } from 'drizzle-orm';
@@ -17,14 +20,14 @@ import { CHANNEL_KEYS, parseChannels } from '../../agent/llmSettings.js';
 import { ENV_BY_PROVIDER, synthesizeModel } from '../modelBridge.js';
 import { logger } from '../../logger.js';
 
-/** 探索用 pi Model 描述符 + 渠道名（日志/用量统计用）。 */
+/** pi Model descriptor for exploration + channel name (for logs/usage stats). */
 export interface ExplorationModel {
   model: Record<string, unknown>;
   channelName: string;
   provider: string;
 }
 
-/** 从 settings 读渠道（视觉渠道优先，未配则默认渠道）→ pi Model 描述符 + 注入 provider env key。 */
+/** Reads the channel from settings (vision channel first, default channel otherwise) → pi Model descriptor + injects the provider env key. */
 export async function resolveExplorationModel(): Promise<ExplorationModel> {
   const rows = await db
     .select()
@@ -49,9 +52,10 @@ export async function resolveExplorationModel(): Promise<ExplorationModel> {
 }
 
 /**
- * 工具调用探针：给模型一个探针工具并要求调用。返回 null = 通过；非 null = 可行动错误文本。
- * 判据 = 响应含 toolCall 块——不支持原生工具调用的渠道（纯文本补全网关）回的是纯文本，
- * 这正是要拦的形态。探针失败必须立刻失败整个会话，不空跑轮次预算。
+ * Tool-calling probe: hands the model a probe tool and asks it to call it. Returns null = pass; non-null = actionable error text.
+ * The criterion = the response contains a toolCall block — channels without native tool calling (plain-text
+ * completion gateways) answer in plain text, which is exactly the shape to intercept. A probe failure must fail the
+ * whole session immediately, without burning the turn budget.
  */
 export async function toolCallingProbeFailure(model: Record<string, unknown>): Promise<string | null> {
   const { complete, Type } = await import('@earendil-works/pi-ai/compat');
@@ -78,24 +82,26 @@ export async function toolCallingProbeFailure(model: Record<string, unknown>): P
   }
 }
 
-/** 视觉探针唯一码：探针图上渲染的文本，读回即证明模型真看到了图。 */
+/** Vision probe unique code: the text rendered on the probe image; reading it back proves the model truly saw the image. */
 const VISION_PROBE_CODE = 'PX-7349';
 
 /**
- * 视觉探针：浏览器渲染含唯一码的 data: URL 页面 → 截图 → 问模型读码。
- * 返回 null = 视觉可用；非 null = 降级说明（读不出 = 网关别名静默剥图/无视觉能力 → 文本模式）。
- * 降级不是失败——探索照常跑，只是工具不附图。
+ * Vision probe: the browser renders a page containing the unique code → screenshot → ask the model to read the code.
+ * Returns null = vision available; non-null = degradation explanation (unreadable = gateway alias silently strips
+ * images / no vision capability → text mode).
+ * Degradation is not failure — the exploration runs as usual; tools just attach no images.
  */
 export async function visionProbeFailure(page: Page, model: Record<string, unknown>): Promise<string | null> {
   const { complete } = await import('@earendil-works/pi-ai/compat');
   try {
-    // setContent 而非 data: URL——未转义的 data URL（裸空格/引号）在 chromium 里渲染成
-    // 空白文档，prod228 实证：截图全白 → 模型如实读出空码 → 会话被误降级为纯文本模式。
+    // setContent instead of a data: URL — an unescaped data URL (bare spaces/quotes) renders as a blank document in
+    // chromium; proven on prod228: the screenshot came back all white → the model faithfully read an empty code →
+    // the session was wrongly degraded to plain-text mode.
     await page.setContent(
       `<body style="margin:0"><div style="font:700 64px monospace;color:#000;background:#fff;padding:40px">${VISION_PROBE_CODE}</div></body>`,
       { timeout: 10_000, waitUntil: 'load' },
     );
-    // 15s：冷启动 headless 首张截图可能远慢于 5s（prod228 实证 5s 超时误降级纯文本）。
+    // 15s: a cold-started headless browser's first screenshot can be far slower than 5s (prod228 proved a 5s timeout wrongly degraded to text mode).
     const buf = await page.screenshot({ timeout: 15_000, type: 'png' });
     const r = await complete(
       model as never,
@@ -112,8 +118,9 @@ export async function visionProbeFailure(page: Page, model: Record<string, unkno
           },
         ],
       },
-      // 500：推理型模型在图上犹豫时会先烧 thinking 预算，100 会顶到 length 上限、
-      // 回复为空 → 探针误判「无视觉」。多几百 token 的代价远低于一次误降级。
+      // 500: reasoning models burn thinking budget first when hesitating over an image; at 100 the reply hits the
+      // length cap and comes back empty → the probe misjudges "no vision". A few hundred extra tokens cost far less
+      // than one wrongful degradation.
       { maxTokens: 500 },
     );
     if (r.stopReason === 'error') return `视觉探针调用失败：${r.errorMessage ?? '未知错误'}`;

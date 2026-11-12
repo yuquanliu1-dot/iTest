@@ -4,9 +4,9 @@ import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-// 机械步骤 locator 修复记忆测试：真 cdp.ts + playwright-core / aiTask.js 打桩 + testcontainer PG。
-// 链路：作者候选全败 → AI 降级重做成功（degraded）→ 目标 selector 落 step_locator_cache；
-// 后续回放缓存 locator 追加候选链末位零 LLM 命中；缓存失灵 → 再降级 → 覆写（hits 保留）。
+// Mechanical-step locator repair memory test: real cdp.ts + playwright-core / aiTask.js stubbed + testcontainer PG.
+// Chain: author candidates all fail -> AI degrade redo succeeds (degraded) -> target selector lands in step_locator_cache;
+// on later replays the cached locator is appended at the end of the candidate chain and hits with zero LLM; cache misses -> degrade again -> overwrite (hits preserved).
 vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/execute/aiTask.js')>();
   return {
@@ -30,8 +30,8 @@ vi.mock('../src/agent/llmSettings.js', () => ({
   })),
 }));
 vi.mock('playwright-core', () => {
-  // deadSelectors：让指定选择器 count()=0（作者候选全败/缓存失灵的注入点），
-  // 其余选择器 count()=1；filter() mockReturnThis 使可见性探测复用同一 count。
+  // deadSelectors: makes the given selector's count()=0 (the injection point for author-candidate failures / cache misses),
+  // all other selectors count()=1; filter() mockReturnThis makes the visibility probe reuse the same count.
   const state = { clicks: [] as string[], failClicks: 0, deadSelectors: new Set<string>() };
   const makeLocator = (sel: string) => ({
     click: vi.fn(async () => {
@@ -83,7 +83,7 @@ vi.mock('playwright-core', () => {
   };
 });
 
-// cdp.js → db/client.js 在模块加载时读 DATABASE_URL，必须等 beforeAll 起好容器再动态 import。
+// cdp.js -> db/client.js reads DATABASE_URL at module load; the dynamic import must wait until beforeAll has started the container.
 let executeCaseReal: typeof import('../src/execute/cdp.js').executeCaseReal;
 let runAiTask: ReturnType<typeof vi.fn>;
 let testState: { clicks: string[]; failClicks: number; deadSelectors: Set<string> };
@@ -92,7 +92,7 @@ let pool: Pool;
 let groupId: string;
 let versionId: string;
 
-/** 每次回放的 runAiTask 行为脚本（onAction 注入 + 可注入 reject）。 */
+/** Per-replay runAiTask behavior script (onAction injection + injectable reject). */
 let aiActions: Array<[Record<string, unknown>, boolean]> = [];
 let aiError: Error | null = null;
 
@@ -136,7 +136,7 @@ beforeEach(async () => {
   versionId = seed.versionId;
 });
 
-/** 造一个单机械步骤的 DB 用例（作者候选 css，附行级指令供降级），返回 (caseId, stepId)。 */
+/** Seeds a DB case with a single mechanical step (author candidate css, plus a step-level instruction for degrade), returning (caseId, stepId). */
 async function seedMechCase(
   instruction: string,
   compiled: Array<Record<string, unknown>>,
@@ -178,7 +178,7 @@ async function cacheRowCount(): Promise<number> {
   return r.rows[0]!.n as number;
 }
 
-/** 缓存写入 / 命中计数是 fire-and-forget（回放不阻塞在缓存上），断言前轮询等它落库。 */
+/** Cache writes / hit counting are fire-and-forget (replay never blocks on the cache); poll until persisted before asserting. */
 async function waitForCache(
   stepId: string,
   check: (row: NonNullable<Awaited<ReturnType<typeof cacheRow>>>) => boolean,
@@ -203,7 +203,7 @@ describe('机械步骤 locator 修复记忆', () => {
     const results = await replay(caseId, [{ order: 1, id: stepId, instruction: '点击提交按钮', compiled: clickStep('点击提交按钮') }]);
     expect(results[0]).toMatchObject({ status: 'passed', degraded: true });
     expect(results[0]!.warning).toContain('机械执行失败（');
-    expect(results[0]!.healed).toBeUndefined(); // 降级通过不算 healed（口径不变）
+    expect(results[0]!.healed).toBeUndefined(); // a degraded pass doesn't count as healed (semantics unchanged)
     expect(runAiTask).toHaveBeenCalledTimes(1);
     const row = await waitForCache(stepId, (r) => r.locator?.value === '#fixed-btn');
     expect(row).toMatchObject({ action_kind: 'click', hits: 0 });
@@ -217,12 +217,12 @@ describe('机械步骤 locator 修复记忆', () => {
     await replay(caseId, [{ order: 1, id: stepId, instruction: '点击提交按钮', compiled: clickStep('点击提交按钮') }]);
     await waitForCache(stepId, (r) => r.locator?.value === '#fixed-btn');
 
-    aiActions = []; // 若误走 AI 相也无动作可收
+    aiActions = []; // if the AI phase is wrongly entered, there are no actions to collect anyway
     runAiTask.mockClear();
     const results = await replay(caseId, [{ order: 1, id: stepId, instruction: '点击提交按钮', compiled: clickStep('点击提交按钮') }]);
     expect(results[0]).toMatchObject({ status: 'passed' });
-    expect(results[0]!.degraded).toBeUndefined(); // 纯机械命中不进降级口径
-    expect(results[0]!.aiUsage).toBeUndefined(); // 零 LLM
+    expect(results[0]!.degraded).toBeUndefined(); // a pure mechanical cache hit doesn't enter the degraded accounting
+    expect(results[0]!.aiUsage).toBeUndefined(); // zero LLM
     expect(results[0]!.hitLocator).toEqual({ kind: 'repair-cache', value: '#fixed-btn' });
     expect(results[0]!.warning).toContain('locator 修复缓存命中：#fixed-btn');
     expect(runAiTask).not.toHaveBeenCalled();
@@ -244,7 +244,7 @@ describe('机械步骤 locator 修复记忆', () => {
     expect(runAiTask).toHaveBeenCalledTimes(1);
     const row = await waitForCache(stepId, (r) => r.locator?.value === '#fixed-v2');
     expect(row.action_kind).toBe('click');
-    expect(row.hits).toBe(3); // upsert 覆写不动计数
+    expect(row.hits).toBe(3); // the upsert overwrite doesn't touch the counter
   });
 
   it('(d1) 指令含数据集变量：降级可过但不落缓存（防物化 selector 跨行冻结）', async () => {
@@ -291,7 +291,7 @@ describe('机械步骤 locator 修复记忆', () => {
       if ((await cacheRowCount()) !== 0) throw new Error('cache should stay empty');
     }, { timeout: 500, interval: 20 });
     expect(await cacheRowCount()).toBe(0);
-    void stepId; // DB 行 id 与运行时 step id 无关（运行时用的是 staged-1）
+    void stepId; // the DB row id is unrelated to the runtime step id (the runtime uses staged-1)
   });
 
   it('(e) kind 隔离：缓存只注入同 kind 动作，click 不吃 fill 的缓存', async () => {
@@ -301,18 +301,18 @@ describe('机械步骤 locator 修复记忆', () => {
     ];
     const { caseId, stepId } = await seedMechCase('填写并提交', compiled);
     testState.deadSelectors.add('#gone');
-    aiActions = [[{ type: 'click', selector: '#fixed-btn' }, true]]; // AI 修的是 fill 目标
+    aiActions = [[{ type: 'click', selector: '#fixed-btn' }, true]]; // AI repairs the fill target
     await replay(caseId, [{ order: 1, id: stepId, instruction: '填写并提交', compiled }]);
     const row = await waitForCache(stepId, (r) => r.locator?.value === '#fixed-btn');
     expect(row.action_kind).toBe('fill');
 
-    // 二次回放：fill 吃缓存命中；click 的 #btn2 也挂了——若 kind 隔离失效（click 误吃缓存）则零 LLM 通过
+    // Second replay: fill takes the cache hit; click's #btn2 is also dead -- if kind isolation were broken (click wrongly eating the cache) it would pass with zero LLM
     testState.deadSelectors.add('#btn2');
     aiActions = [];
     runAiTask.mockClear();
     const results = await replay(caseId, [{ order: 1, id: stepId, instruction: '填写并提交', compiled }]);
-    expect(results[0]!.status).toBe('passed'); // fill 缓存命中后 click 失败 → 再次降级兜底
-    expect(runAiTask).toHaveBeenCalledTimes(1); // click 未受缓存保护 → 必再走一次 AI
-    expect(await cacheRow(stepId)).toMatchObject({ action_kind: 'fill' }); // 无 click/fill selector 可收 → 缓存不被覆写
+    expect(results[0]!.status).toBe('passed'); // after fill's cache hit, click fails -> degrade fallback again
+    expect(runAiTask).toHaveBeenCalledTimes(1); // click has no cache protection -> must go through AI once more
+    expect(await cacheRow(stepId)).toMatchObject({ action_kind: 'fill' }); // no click/fill selector collectable -> the cache is not overwritten
   });
 });

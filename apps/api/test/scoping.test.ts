@@ -9,12 +9,12 @@ import { SCHEMA_SQL, SEED_USER_PASSWORD } from './helpers/db.js';
 let pool: Pool;
 let app: import('express').Express;
 
-// 组织 A（含子组织 A2）与组织 B 互相隔离
+// Organization A (including sub-organization A2) and organization B are isolated from each other
 let orgA: string; let pathA: string;
 let orgA2: string; let pathA2: string;
 let orgB: string; let pathB: string;
 let adminA: string;
-let memberB: string; // B 的普通成员（非管理员）
+let memberB: string; // B's regular member (non-manager)
 let adminCookieA: string;
 let memberCookieB: string;
 
@@ -40,7 +40,7 @@ function insertOrg(name: string, parentId: string | null, parentPath: string | n
 
 async function insertProject(orgId: string, name: string): Promise<string> {
   const id = randomUUID();
-  // R2：项目无 organization_id——先在该组织下建一条线，再把项目挂上去。
+  // R2: projects have no organization_id — first create a line under that org, then attach the project to it.
   const lineId = randomUUID();
   await pool.query(`INSERT INTO product_lines(id, organization_id, name) VALUES ($1, $2, $3)`, [lineId, orgId, `线-${name}`]);
   await pool.query(`INSERT INTO projects(id, product_line_id, name) VALUES ($1, $2, $3)`, [id, lineId, name]);
@@ -64,7 +64,7 @@ beforeAll(async () => {
   process.env.DATABASE_URL = pgDb.uri;
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后再动态加载
+  // helpers/auth depends on the src service chain (which loads the db client transitively), so it must be loaded dynamically only after DATABASE_URL points at the test container
   const { authCookie, managerUserOf, memberUserOf } = await import('./helpers/auth.js');
 
   ({ id: orgA, path: pathA } = await insertOrg('组织A', null, null));
@@ -76,9 +76,9 @@ beforeAll(async () => {
   memberB = await createUser('member-b', SEED_USER_PASSWORD);
   await pool.query(`INSERT INTO organization_members(organization_id, user_id, is_manager, is_user) VALUES ($1, $2, false, true)`, [orgB, memberB]);
 
-  // A 管理员的身份（直接铸 token，requireAuth 回查 tokenVersion 通过）
+  // A admin's identity (token minted directly; requireAuth re-checks tokenVersion and passes)
   adminCookieA = authCookie(managerUserOf(adminA, 'admin-a', orgA, pathA));
-  // B 普通成员（无管理子树，仅靠 membership 可见）
+  // B regular member (no management subtree, visible only via membership)
   memberCookieB = authCookie(memberUserOf(memberB, 'member-b', orgB, pathB));
 
   projectA = await insertProject(orgA, 'A 的项目');
@@ -90,7 +90,7 @@ beforeAll(async () => {
   groupB = await insertGroup(projectB, 'B 默认分组');
   caseB = await insertCase(groupB, 'B 的用例');
 
-  // B 项目下造 plan + planRun + report
+  // Create plan + planRun + report under B's project
   planB = randomUUID();
   await pool.query(
     `INSERT INTO execution_plans(id, project_id, name, strategy) VALUES ($1, $2, 'B 的计划', 'run_all')`,
@@ -147,7 +147,7 @@ describe('组织 A 管理员的可见范围', () => {
     expect(r.status).toBe(200);
     const ids = r.body.map((p: { id: string }) => p.id);
     expect(ids).toContain(projectA);
-    expect(ids).toContain(projectA2); // 管理子树可见
+    expect(ids).toContain(projectA2); // management subtree is visible
     expect(ids).not.toContain(projectB);
   });
 

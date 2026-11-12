@@ -1,4 +1,4 @@
-/** manage_plans:计划列表/详情/创建/更新/加用例/移用例/调度 CRUD。创建自动执行;update/add_cases/remove_cases/_schedule 走阻塞确认,变更走 stage 事件。 */
+/** manage_plans: plan list/detail/create/update/add-cases/remove-cases/schedule CRUD. create runs directly; update/add_cases/remove_cases/_schedule go through the blocking confirmation, and changes emit stage events. */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
 import * as svc from '../../../services/plans.service.js';
@@ -24,7 +24,7 @@ const Actions = z.object({
   enabled: z.boolean().optional(),
 });
 
-/** update_schedule 字段未变化时短路,生成 diff 文本(不依赖 diffText,因为 schedule 行带 updatedAt/nextRunAt 等列)。 */
+/** Short-circuits when the update_schedule fields are unchanged; builds the diff text itself (not via diffText, since the schedule row carries updatedAt/nextRunAt and similar columns). */
 function scheduleDiff(before: { cronExpr: string; timezone: string; enabled: boolean }, patch: { cronExpr?: string; timezone?: string; enabled?: boolean }): string | undefined {
   const lines: string[] = [];
   if (patch.cronExpr !== undefined && patch.cronExpr !== before.cronExpr) lines.push(`cron: ${before.cronExpr} → ${patch.cronExpr}`);
@@ -99,7 +99,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               let added = 0;
               if (v.caseIds?.length) {
                 try {
-                  // 计划级不再承载用例编排:建「默认分组」承载 create 传入的 caseIds
+                  // Plan level no longer carries case orchestration: create a 「默认分组」 group to hold the caseIds passed to create
                   const g = await svc.createPlanGroup(plan.id, { name: '默认分组' });
                   added = await svc.setPlanGroupCases(plan.id, g.id, v.caseIds);
                 } catch (e) {
@@ -119,7 +119,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (v.name !== undefined) patch.name = v.name;
               if (v.strategy !== undefined) patch.strategy = v.strategy;
               if (Object.keys(patch).length === 0) return { ok: false, error: 'update 未提供任何要修改的字段(name/strategy);环境配置已下沉到分组,请到 UI 的分组设置里调整' };
-              // 挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
+              // Precompute the diff before the confirmation gate (old values vs synthesized new values); the confirmation card and the actual execution share one copy of the data
               const diff = diffText(before ?? {}, { ...(before ?? {}), ...patch });
               if (diff !== undefined) {
                 const approved = await requestConfirmation(
@@ -137,10 +137,10 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (!v.planId || !v.caseIds?.length) return { ok: false, error: 'add_cases 需要 planId 与 caseIds' };
               const pid = await svc.planProjectId(v.planId);
               if (pid !== ctx.projectId) return { ok: false, error: '计划不存在或不属于当前项目' };
-              // 门控前校验用例归属:跨项目用例直接报错并点名,不弹确认卡(否则用户确认的是必然失败的操作)
+              // Validate case ownership before the gate: cross-project cases error out immediately and get named, no confirmation card (otherwise the user would be confirming an operation destined to fail)
               const outside = await svc.caseIdsOutsideProject(ctx.projectId, v.caseIds);
               if (outside.length > 0) return { ok: false, error: `用例不属于当前项目:${outside.join('、')}` };
-              // 挂起前算精确增量(重复 id 去重、已在计划任何组即跳过——计划级去重,跨组重复属 UI 高级用法);N=0 短路不执行
+              // Compute the exact delta before the confirmation gate (dedupe repeated ids; skip ids already in any plan group — plan-level dedup; cross-group duplicates are a UI advanced usage); N=0 short-circuits without executing
               const detail = await svc.getPlanDetail(v.planId);
               const have = new Set((detail?.cases ?? []).map((c) => c.id));
               const pendingCount = [...new Set(v.caseIds)].filter((c) => !have.has(c)).length;
@@ -162,7 +162,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (!v.planId || !v.caseIds?.length) return { ok: false, error: 'remove_cases 需要 planId 与 caseIds' };
               const pid = await svc.planProjectId(v.planId);
               if (pid !== ctx.projectId) return { ok: false, error: '计划不存在或不属于当前项目' };
-              // 挂起前算精确增量(重复 id 去重、只计在计划中的);N=0 短路不执行
+              // Compute the exact delta before the confirmation gate (dedupe repeated ids; count only ids already in the plan); N=0 short-circuits without executing
               const detail = await svc.getPlanDetail(v.planId);
               const have = new Set((detail?.cases ?? []).map((c) => c.id));
               const pendingCount = [...new Set(v.caseIds)].filter((c) => have.has(c)).length;
@@ -191,7 +191,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (!v.planId || !v.cronExpr) return { ok: false, error: 'create_schedule 需要 planId 与 cronExpr' };
               const pid = await svc.planProjectId(v.planId);
               if (pid !== ctx.projectId) return { ok: false, error: '计划不存在或不属于当前项目' };
-              // 门控前先跑一遍 cron 校验：非法 cron 直接报错,不弹卡(同 update/add_cases 一致)
+              // Run the cron validation before the gate: an invalid cron errors out immediately, no card (same as update/add_cases)
               try {
                 sched.validateCron(v.cronExpr, v.timezone ?? 'Asia/Shanghai');
               } catch (e) {
@@ -211,8 +211,8 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
                 cronExpr: v.cronExpr,
                 timezone: tz,
                 enabled: v.enabled,
-                // createdByUserId 是 FK；工具上下文无 userId → 暂留 null，由 DB on delete set null 兜底。
-                // 这里用 createdByUserId 字段（service 接受 null）；若 FK 不允许 null 则 FK 设计本身就需要 NULLABLE。
+                // createdByUserId is an FK; the tool context has no userId → leave null for now, with the DB's on delete set null as the fallback.
+                // The createdByUserId field is used here (the service accepts null); if the FK didn't allow null, the FK design itself would need to be NULLABLE.
                 createdByUserId: null,
               });
               emitStage(ctx, { kind: 'plan', id: v.planId, action: 'create_schedule' });
@@ -220,7 +220,7 @@ export function buildPlansTools(ctx: SpaceToolsContext): ToolExecutor[] {
             }
             case 'update_schedule': {
               if (!v.scheduleId) return { ok: false, error: 'update_schedule 需要 scheduleId' };
-              // 不存在 scheduleId → 短路,不弹卡(同 delete_schedule 的语义)
+              // Nonexistent scheduleId → short-circuit, no card (same semantics as delete_schedule)
               const existing0 = await sched.getPlanSchedule(v.scheduleId);
               if (!existing0) return { ok: true, data: '调度不存在或已删除' };
               if (v.cronExpr === undefined && v.timezone === undefined && v.enabled === undefined) {

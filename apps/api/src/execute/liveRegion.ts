@@ -1,21 +1,22 @@
 /**
- * live-region 消息提取 + 可观测变化闸（借鉴 testomatio/explorbot html-diff.ts / ai/tools.ts）。
- * 动机：toast/提示全靠模型读截图辨认（11-08 实录 toast 确认盲区），且点击空转只烧预算没有
- * 反馈信号。动作执行前后各采样一次：新增消息（aria-live 区域一手文本）回喂模型；四路信号
- * （URL/视觉指纹/请求数/新消息）全无变化 = 点击无效，反馈模型换目标。
+ * live-region message extraction + observable-change gate (borrowed from testomatio/explorbot html-diff.ts / ai/tools.ts).
+ * Motivation: toasts/notices were recognized only by the model reading screenshots (the 11-08 record's toast-confirmation blind spot),
+ * and a no-op click just burned budget with no feedback signal. Sample once before and once after each action: new messages
+ * (first-hand text from aria-live regions) are fed back to the model; all four signals
+ * (URL / visual fingerprint / request count / new messages) unchanged = the click had no effect — tell the model to switch targets.
  */
 import type { Page } from 'playwright-core';
 
-/** explorbot 口径：五个 live region role + <output> 标签 + aria-live 显式两档（默认档不算——
- * 很多容器误挂 aria-live="off"，噪声大）。 */
+/** The explorbot definition: five live region roles + the <output> tag + both explicit aria-live tiers (the default tier doesn't count —
+ * many containers wrongly carry aria-live="off"; too noisy). */
 const LIVE_REGION_SELECTOR =
   '[role="alert"],[role="alertdialog"],[role="status"],[role="log"],[role="tooltip"],output,[aria-live="polite"],[aria-live="assertive"]';
 
 const MESSAGE_MAX_LENGTH = 200;
 const MESSAGE_LIMIT = 8;
 
-/** 采样当前页面所有 live-region 可见文本（toast/提示一手证据）。
- *  任何失败（导航瞬间 execution context destroyed 等）→ 空数组，调用方按「无消息」处理。 */
+/** Samples all live-region visible text on the current page (first-hand toast/notice evidence).
+ *  Any failure (execution context destroyed mid-navigation etc.) → empty array; the caller treats it as「无消息」. */
 export async function captureLiveRegionMessages(page: Page): Promise<string[]> {
   return page
     .evaluate((sel) => {
@@ -30,26 +31,26 @@ export async function captureLiveRegionMessages(page: Page): Promise<string[]> {
     .catch(() => [] as string[]);
 }
 
-/** 新增消息 = after 里有、before 里没有的（对称子串包含：完整重复与「旧文本的前缀截断」都算旧）。
- *  比 explorbot 单向包含严一档：role=log 这类累积区域每轮全文变长，单向包含会把「整段新日志」
- *  当新消息反复回喂，对称包含把它压成噪声——toast（一次性短文本）两种口径等价。 */
+/** New messages = present in after, absent from before (symmetric substring containment: exact duplicates and「旧文本的前缀截断」both count as old).
+ *  One notch stricter than explorbot's one-way containment: cumulative regions like role=log grow their full text every turn, and one-way containment
+ *  would feed back 「整段新日志」 as new messages over and over; symmetric containment compresses it into noise — for toasts (one-shot short text) the two definitions are equivalent. */
 export function diffNewMessages(before: string[], after: string[]): string[] {
   return after.filter((m) => !before.some((b) => b.includes(m) || m.includes(b)));
 }
 
-/** 可观测变化快照：点击前后各采一次。 */
+/** Observable-change snapshot: sampled once before and once after the click. */
 export interface ChangeSnapshot {
   url: string;
-  /** pageFingerprint 视觉指纹（pageSettle.ts）。 */
+  /** pageFingerprint visual fingerprint (pageSettle.ts). */
   fingerprint: number;
-  /** 页面网络请求累计计数（runAiTask 的 page.on('request') 计数器）。 */
+  /** Cumulative page network-request count (runAiTask's page.on('request') counter). */
   requests: number;
-  /** 动作前 live-region 消息（新增消息由 diffNewMessages 单独算）。 */
+  /** Pre-action live-region messages (new messages are computed separately by diffNewMessages). */
   messages: string[];
 }
 
-/** 四路信号任一有变化即算「页面观测到了变化」（explorbot hasObservablePageChange 口径）。
- *  宽进严出：误放行（把有变化判无）只损失一次提示，误拦截（把无变化判有）会让模型对死目标空转。 */
+/** Any one of the four signals changing counts as 「页面观测到了变化」 (the explorbot hasObservablePageChange definition).
+ *  Loose entry, strict exit: a false pass (change judged as none) loses one feedback hint; a false block (no change judged as change) makes the model spin on a dead target. */
 export function hasObservableChange(before: ChangeSnapshot, after: ChangeSnapshot, newMessages: string[]): boolean {
   return (
     before.url !== after.url ||

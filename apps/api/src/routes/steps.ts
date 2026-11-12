@@ -19,8 +19,8 @@ const AppendBody = z.object({
       z.object({
         order: z.number().int().nonnegative(),
         source: z.enum(['agent', 'recorder', 'manual']),
-        // 2026-10-07：action 允许缺省 —— compiled 是 source of truth,新 client 不传 action。
-        // POST 老路径继续严格:action 传了必须合 StepAction 规范,否则 400。
+        // 2026-10-07: action may be absent — compiled is the source of truth, new clients don't send action.
+        // The old POST path stays strict: if action is sent it must conform to the StepAction spec, otherwise 400.
         action: StepAction.optional(),
         assertion: z.unknown().optional(),
         instruction: z.string().max(2000).optional(),
@@ -35,13 +35,13 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   await assertCaseVisible(req.params.caseId!, req.user!);
-  // 绑定数据集的列名 = 回放初始变量（与 PUT 替换路由一致），datasetId 为 null 时不传。
+  // Column names of the bound dataset = replay initial variables (same as the PUT replacement route); not sent when datasetId is null.
   let initialVars: string[] | undefined;
   if (exists[0]!.datasetId) {
     const ds = (await db.select().from(datasets).where(eq(datasets.id, exists[0]!.datasetId)).limit(1))[0];
     if (ds) initialVars = ds.columns.map((c) => c.name);
   }
-  // 重排为接续现有最大 order 的连续序号，避免重复。
+  // Reorder into consecutive numbers continuing from the existing max order, avoiding duplicates.
   const maxRow = await db
     .select({ maxOrder: sql<number>`coalesce(max(${testSteps.order}), 0)` })
     .from(testSteps)
@@ -67,8 +67,9 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
     .insert(testSteps)
     .values(
       body.steps.map((s) => {
-        // 手动改步骤路径也走 sanitize + migrate：客户端已传规范 StepAction 时也再过一遍 sanitize
-        // （从 `equals` 字段提取字符串），保证描述性断言不会通过该入口溜进库。
+        // The manual step-edit path also goes through sanitize + migrate: even when the client already sent a canonical
+        // StepAction, sanitize runs again (extracting the string from the `equals` field), ensuring descriptive assertions
+        // don't sneak into the DB through this entry.
         const raw = s.assertion as { equals?: unknown; text?: unknown } | null | undefined;
         const text = typeof raw?.equals === 'string'
           ? raw.equals
@@ -79,10 +80,12 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
         const assertion = clean !== null
           ? (migrateAction({ kind: 'assertText', text: clean }) as object)
           : null;
-        // instruction 缺省存空 —— 显示层（用例页/报告页）有 stepSummary 实时兜底,
-        // 服务端不再捏造"点击"这类裸标签（会遮蔽实时摘要、污染 AI 降级输入）。
+        // instruction stored as empty when absent — the display layer (case page/report page) has stepSummary as a
+        // real-time fallback, so the server no longer fabricates bare labels like "click" (they would obscure the live
+        // summary and pollute AI fallback input).
         const instruction = s.instruction?.trim() ?? '';
-        // compiled 元素做 migrate 同步:sensitive 字段保留(由 dispatcher 决定是否入密),value 入密后从 compiled 里抹掉避免泄漏。
+        // compiled elements get a migrate sync: the sensitive field is kept (the dispatcher decides whether to encrypt),
+        // and value is erased from compiled after encryption to avoid leakage.
         const compiled = Array.isArray(s.compiled)
           ? (s.compiled.map((c) => {
               const m = migrateAction(c) as Record<string, unknown>;
@@ -112,7 +115,7 @@ stepsRoute.post('/:caseId/steps', async (req, res) => {
 
 const ReorderBody = z.object({ stepIds: z.array(z.string().uuid()).min(1) });
 
-/** 按传入的 id 顺序重排（stepIds 须恰好覆盖该用例全部步骤），order 重写为 1..n。 */
+/** Reorder by the given id order (stepIds must cover exactly all of the case's steps); order rewritten to 1..n. */
 stepsRoute.put('/:caseId/steps/reorder', async (req, res) => {
   const { stepIds } = ReorderBody.parse(req.body);
   await assertCaseVisible(req.params.caseId!, req.user!);
@@ -148,7 +151,7 @@ stepsRoute.delete('/:caseId/steps/:stepId', async (req, res) => {
   if (!target) throw new HttpError(404, 'not_found', 'step not found');
   const remaining = rows.filter((r) => r.id !== target.id).map((r) => r.id);
   await db.delete(testSteps).where(inArray(testSteps.id, [target.id]));
-  // 剩余步骤 order 紧凑化为 1..n
+  // Remaining steps' orders compacted to 1..n
   for (let i = 0; i < remaining.length; i++) {
     await db.update(testSteps).set({ order: i + 1 }).where(eq(testSteps.id, remaining[i]!));
   }
@@ -156,19 +159,19 @@ stepsRoute.delete('/:caseId/steps/:stepId', async (req, res) => {
   res.json({ ok: true });
 });
 
-/** 全量替换步骤（步骤维护/粘贴/撤销的统一写入口）。 */
+/** Full replacement of steps (the unified write entry for step maintenance/paste/undo). */
 stepsRoute.put('/:caseId/steps', async (req, res) => {
   const body = z
     .object({
       steps: z.array(
         z.object({
-          // 2026-10-07：放宽 action —— locator 允许空数组（占位未编译步骤）,
-          //   dispatch 读 compiled 时仍会抛 compile-missing 阻断执行。
-          // 用 z.union 拆三档：
-          //   1) StepAction(规范)  2) PlaceholderAction(kind 存在但 locator 缺省)
-          //   3) EmptyAction({} 兜底) —— 老数据「等待页面跳转到…」等无具体 kind 的步骤,
-          //      action 已存为 {},再保存时若按原值上传会绕 Z。
-          // action 可缺省 —— compiled 是 2026-10-06 起的 source of truth,旧 UI 可能不传 action。
+          // 2026-10-07: action relaxed — locator may be an empty array (placeholder unsolidified steps);
+          //   dispatch still throws compile-missing when reading compiled, blocking execution.
+          // z.union splits into three tiers:
+          //   1) StepAction (canonical)  2) PlaceholderAction (kind present but locator absent)
+          //   3) EmptyAction ({} fallback) — legacy data like "wait for page to navigate to..." with no concrete kind;
+          //      action was stored as {}, and re-saving it as-is would bypass Z.
+          // action may be absent — compiled is the source of truth since 2026-10-06; the old UI might not send action.
           action: z
             .union([
               StepAction,
@@ -181,9 +184,9 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
             .optional(),
           source: z.enum(['agent', 'recorder', 'manual']).default('manual'),
           delayMs: z.number().int().nonnegative().max(60000).optional(),
-          /** 行级自然语言（人看/给 LLM 起手用；回放不读）。缺省存空,显示层走 stepSummary 兜底。 */
+          /** Row-level natural language (for humans / LLM starting point; replay doesn't read it). Stored as empty when absent; display layer falls back to stepSummary. */
           instruction: z.string().max(2000).optional(),
-          /** 已编译 DSL 数组；缺省时按"未编译"处理（dispatcher 阻塞执行）。 */
+          /** Compiled DSL array; treated as "unsolidified" when absent (the dispatcher blocks execution). */
           compiled: z.array(z.unknown()).optional(),
         }),
       ),
@@ -200,21 +203,21 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
   const g = (await db.select().from(groups).where(eq(groups.id, groupId)))[0];
   if (!g) throw new HttpError(404, 'not_found', 'group not found');
   const caseProjectId = g.projectId;
-  // 绑定数据集的列名 = 回放初始变量：体检时传入 buildVariableReport，避免 {{列名}} 被误报未定义。
+  // Column names of the bound dataset = replay initial variables: passed into buildVariableReport during the checkup, so {{columnName}} isn't falsely reported as undefined.
   let initialVars: string[] | undefined;
   if (exists[0]!.datasetId) {
     const ds = (await db.select().from(datasets).where(eq(datasets.id, exists[0]!.datasetId)).limit(1))[0];
     if (ds) initialVars = ds.columns.map((c) => c.name);
   }
   for (const s of body.steps) {
-    // upload/sensitive 等语义检查从 compiled[0] 读取(action 可能缺省 —— 2026-10-07 起 compiled 是 source of truth)。
+    // upload/sensitive semantic checks read from compiled[0] (action may be absent — compiled is the source of truth since 2026-10-07).
     const c0 = (Array.isArray(s.compiled) && s.compiled.length > 0
       ? (s.compiled[0] as { kind?: string; fileId?: string; sensitive?: boolean; value?: unknown })
       : undefined);
     const a = s.action as { kind?: string; fileId?: string; sensitive?: boolean; locator?: unknown[] } | undefined;
     const kind = a?.kind ?? c0?.kind;
-    // 2026-10-07：占位未编译行 (compiled 为空数组) 跳过 upload/sensitive 等具体字段语义检查 —— 它反正不会被 dispatcher 派发。
-    // action 缺省时,如果 compiled 非空就走正常检查(只靠 compiled 决定语义)。
+    // 2026-10-07: placeholder unsolidified rows (compiled is an empty array) skip concrete-field semantic checks like upload/sensitive — they won't be dispatched by the dispatcher anyway.
+    // When action is absent but compiled is non-empty, run the normal checks (semantics decided by compiled alone).
     const isPlaceholder = Array.isArray(s.compiled) && s.compiled.length === 0;
     if (isPlaceholder) continue;
     if (kind === 'upload') {
@@ -235,10 +238,10 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
       ensureKeyLoaded();
     }
   }
-  // 2026-10-07：体检输入按 compiled 全量扁平化（多动作链里第 2+ 个动作的 {{var}} 也要扫）；
-  // 老数据无 compiled 时回退 action（须有 kind 且 locator 非空）。占位（compiled 空数组）自然跳过。
-  // 扁平化后动作下标 ≠ 步骤下标，记录每个动作所属步骤下标，把 report 里的 order 重映射回步骤序号
-  // （UI/报错文案按"步骤 N"展示，N 必须对得上 steps 列表）。
+  // 2026-10-07: checkup input fully flattened over compiled (the {{var}} of the 2nd+ actions in multi-action chains must be scanned too);
+  // legacy data without compiled falls back to action (must have kind and a non-empty locator). Placeholders (empty compiled array) naturally skip.
+  // After flattening, the action index ≠ the step index, so record each action's owning step index and remap the report's order back to step numbers
+  // (UI/error text presents "step N", and N must line up with the steps list).
   const stepIndexOfAction: number[] = [];
   const actionsForReport = body.steps.flatMap((s, si): StepAction[] => {
     if (Array.isArray(s.compiled)) {
@@ -293,9 +296,9 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
             secretIv = enc.iv.toString('base64');
             secretTag = enc.tag.toString('base64');
           }
-          // compiled 是回放唯一依据,客户端可能只传 compiled(action 缺省),
-          // 此处对 compiled 元素补一遍 migrate 以保证存储形态规范(老 client 行为兼容)。
-          // 同时:sensitive 字段写入时一定要抹掉,value 入密后也抹掉(避免 JSON 回写泄漏)。
+          // compiled is the sole basis for replay, and the client may send only compiled (action absent),
+          // so compiled elements get a migrate pass here to keep the stored shape canonical (backward compatible with old clients).
+          // Also: the sensitive field must always be erased on write, and value erased after encryption (avoiding JSON write-back leakage).
           const compiled = Array.isArray(s.compiled)
             ? (s.compiled.map((c) => {
                 const m = migrateAction(c) as Record<string, unknown>;
@@ -305,8 +308,9 @@ stepsRoute.put('/:caseId/steps', async (req, res) => {
                 return m;
               }) as unknown[])
             : null;
-          // instruction 缺省存空 —— 显示层（用例页/报告页）有 stepSummary 实时兜底,
-          // 服务端不再捏造"点击"这类裸标签（会遮蔽实时摘要、污染 AI 降级输入）。
+          // instruction stored as empty when absent — the display layer (case page/report page) has stepSummary as a
+          // real-time fallback, so the server no longer fabricates bare labels like "click" (they would obscure the live
+          // summary and pollute AI fallback input).
           const instruction = s.instruction?.trim() ?? '';
           return {
             caseId: req.params.caseId,
@@ -333,7 +337,7 @@ const CompileExtractBody = z.object({
   sampleText: z.string().min(1).max(5000),
 });
 
-/** 智能抽取编译：根据用户自然语言描述 + 样本文本，调用 LLM 生成正则。失败返回 200 + error 字段。 */
+/** Smart extraction compile: given the user's natural-language description + sample text, call the LLM to generate a regex. On failure returns 200 + an error field. */
 stepsRoute.post('/:caseId/steps/extract/compile', async (req, res) => {
   const { description, sampleText } = CompileExtractBody.parse(req.body);
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));

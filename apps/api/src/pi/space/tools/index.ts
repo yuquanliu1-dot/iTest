@@ -1,7 +1,7 @@
 /**
- * 空间助手工具装配(原单文件 tools.ts 的目录化接缝)。
- * Plan 2:repo 沙箱(后台异步检出,cwd 动态解析)+ announce_plan + inspect_page + 四个领域工具。
- * 保持与 pi/tools.ts 相同的 ToolExecutor 形状(TypeBox schema + 可单测 execute)。
+ * Space assistant tool assembly (the directory-form seam of the former single-file tools.ts).
+ * Plan 2: repo sandbox (background async checkout, dynamic cwd resolution) + announce_plan + inspect_page + four domain tools.
+ * Keeps the same ToolExecutor shape as pi/tools.ts (TypeBox schema + unit-testable execute).
  */
 import type { ToolExecutor } from '../../tools.js';
 import { buildRepoSandboxTools } from '../../repo.js';
@@ -61,24 +61,24 @@ export {
 
 export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   const tools: ToolExecutor[] = [];
-  // repo 工具恒注册:cwd 经共享 RepoState 每次调用动态解析,后台检出完成前
-  // 调用收到"尚未就绪"错误(而非工具缺席导致 AI 困惑)。
+  // repo tools are always registered: cwd is resolved dynamically per call via the shared RepoState, and before the
+  // background checkout completes calls receive a "not ready yet" error (rather than tool absence confusing the AI).
   tools.push(...buildRepoSandboxTools(() => repoToolCwd(ctx.repo)));
   tools.push(buildAnnounceTool(ctx), buildInspectTool(ctx));
-  // stage_* / stage_case_op / manage_* 三个家族并存：
-  //   - stage_case     → 暂存「全新用例」，用户在 StagePanel 勾选 → 选目标分组 → 落库
-  //   - stage_case_op  → 暂存「对已有用例/步骤的修改」，同上
-  //   - manage_cases   → 仅负责 search/get/create_group（实时读 + 仅分组创建仍保留实时写）
+  // Three coexisting families: stage_* / stage_case_op / manage_*:
+  //   - stage_case     → stages a "brand-new case"; the user checks it in StagePanel → picks the target group → persisted
+  //   - stage_case_op  → stages "modifications of an existing case/steps", ditto
+  //   - manage_cases   → only handles search/get/create_group (real-time reads + only group creation keeps real-time writes)
   tools.push(...buildLoginTools(ctx));
   tools.push(buildReadSkillTool());
-  // R1 短期记忆：chat/rca 线程均可用（产品线内共享，写入门禁在工具 description）
+  // R1 short-term memory: available on chat/rca threads alike (shared within the product line; write gating is in the tool description)
   tools.push(...buildMemoryTools(ctx));
-  // R2 成功轨迹检索：建用例前取同线 exemplar 做 few-shot（读路径，禁照抄线内事实）
+  // R2 success-trajectory retrieval: fetch same-line exemplars as few-shot before authoring a case (read path; copying in-line facts is forbidden)
   tools.push(...buildTrajectoryTools(ctx));
   tools.push(buildRunSkillScriptTool(ctx));
   tools.push(buildReadThreadAttachmentTool(ctx));
-  // 管理类工具（manage_skill / manage_mcp / import_skill）只对「有效管理员」线程注册：改动全局共享配置
-  // （skill 脚本 / MCP command 会在 API 容器上执行），非管理员会话无此面，防模型幻觉调用。
+  // Management tools (manage_skill / manage_mcp / import_skill) are registered only on "valid manager" threads: they change globally shared config
+  // (skill scripts / MCP commands execute on the API container); non-manager sessions have no such surface, guarding against hallucinated model calls.
   if (ctx.manager) {
     tools.push(buildManageSkillTool(ctx));
     tools.push(buildManageMcpTool(ctx));
@@ -96,7 +96,7 @@ export function buildSpaceTools(ctx: SpaceToolsContext): ToolExecutor[] {
   tools.push(...buildDevicesTools(ctx));
   tools.push(...buildPlansTools(ctx));
   tools.push(...buildHistoryTools(ctx));
-  // RCA 专用落库工具：仅根因分析后台线程可见，普通对话线程不出现该工具面。
+  // RCA-only persistence tool: visible only on root-cause-analysis background threads; ordinary chat threads never see this tool surface.
   if (ctx.purpose === 'rca') {
     tools.push(buildSaveRcaResultTool(ctx));
   }

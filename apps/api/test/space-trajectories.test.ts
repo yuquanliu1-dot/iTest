@@ -50,11 +50,11 @@ describe('R2 trajectories：表与约束', () => {
       VALUES ($1,$2,'T','k','d','C','m',$3)
       ON CONFLICT DO NOTHING`;
     await pool.query(base, [randomUUID(), lineId, caseId]);
-    await pool.query(base, [randomUUID(), lineId, caseId]); // 必须不抛
+    await pool.query(base, [randomUUID(), lineId, caseId]); // must not throw
     let n = (await pool.query(`SELECT count(*)::int n FROM assistant_trajectories`)).rows[0]!;
     expect(n.n).toBe(1);
     await pool.query(`UPDATE assistant_trajectories SET status='deleted' WHERE source_case_id=$1`, [caseId]);
-    await pool.query(base, [randomUUID(), lineId, caseId]); // 软删后可再插
+    await pool.query(base, [randomUUID(), lineId, caseId]); // insertable again after soft-delete
     n = (await pool.query(`SELECT count(*)::int n FROM assistant_trajectories`)).rows[0]!;
     expect(n.n).toBe(2);
   });
@@ -110,13 +110,13 @@ describe('R2 trajectories：服务层', () => {
     big.split('\n').filter((l) => l.startsWith('- ')).forEach((l) => {
       expect(many.some((m) => `- ${m.taskTitle}（用例：${m.caseTitle}）`.startsWith(l) || l === `- ${m.taskTitle}（用例：${m.caseTitle}）`.slice(0, l.length))).toBe(true);
     });
-    // 对抗形态：列宽上限（title/caseTitle 各 200）的胖行密集排列——仍不超帽、只截完整行
+    // Adversarial shape: dense fat rows at the column-width caps (title/caseTitle each 200) — still under the cap, only complete lines truncated
     const fat = Array.from({ length: 30 }, (_, i) => ({ taskTitle: `F${i}${'f'.repeat(199)}`, caseTitle: 'k'.repeat(200) }));
     const fatOut = buildTrajectoriesSection(fat);
     expect(fatOut.length).toBeLessThanOrEqual(TRAJECTORY_SECTION_MAX_CHARS);
     const fatLines = fatOut.split('\n');
-    expect(fatLines[0]).toBe('# 成功用例轨迹'); // 头部恒在
-    expect(fatLines[fatLines.length - 1]).toContain('禁止照抄'); // 脚注恒在
+    expect(fatLines[0]).toBe('# 成功用例轨迹'); // header always present
+    expect(fatLines[fatLines.length - 1]).toContain('禁止照抄'); // footer always present
     fatLines.filter((l) => l.startsWith('- ')).forEach((l) => {
       expect(fat.some((m) => `- ${m.taskTitle}（用例：${m.caseTitle}）`.startsWith(l))).toBe(true);
     });
@@ -132,8 +132,8 @@ describe('R2 trajectories：服务层', () => {
     await insertRow(lineOther, { title: '他线 登录', caseId: randomUUID() });
     const { searchTrajectoriesByQuery } = await import('../src/pi/space/trajectories.js');
     const r = await searchTrajectoriesByQuery(lineId, '登录');
-    expect(r.hits.length).toBe(2); // 本线只有 2 条含「登录」
-    expect(r.hits[0]!.taskTitle).toBe('登录 失败 提示'); // title+keywords+caseTitle 三字段命中 > 单字段
+    expect(r.hits.length).toBe(2); // this line has only 2 rows containing 「登录」
+    expect(r.hits[0]!.taskTitle).toBe('登录 失败 提示'); // title+keywords+caseTitle three-field hit > single field
     const hits = (await pool.query(`SELECT hit_count::int h FROM assistant_trajectories WHERE source_case_id = ANY($1)`, [[c1, c2]])).rows;
     expect(hits.every((x) => x.h === 1)).toBe(true);
     const miss = await searchTrajectoriesByQuery(lineId, '不存在词');
@@ -168,9 +168,9 @@ describe('R2 trajectories：服务层', () => {
       sourceCaseId: randomUUID(), sourceProjectId: null, sourceVersionId: null, createdByUserId: null, distillModel: 'm',
     })).toBe(true);
     const row = (await pool.query(`SELECT task_title, task_keywords, digest FROM assistant_trajectories`)).rows[0]!;
-    expect(row.task_title).not.toMatch(/[\r\n]/); // 换行伪造 system prompt 段结构——堵死
+    expect(row.task_title).not.toMatch(/[\r\n]/); // newlines forging system-prompt section structure — plugged shut
     expect(row.task_title.length).toBeLessThanOrEqual(200);
-    expect(row.task_title.startsWith('标')).toBe(true); // 截断保留前缀
+    expect(row.task_title.startsWith('标')).toBe(true); // truncation keeps the prefix
     expect(row.task_keywords).not.toMatch(/[\r\n]/);
     expect(row.task_keywords.length).toBeLessThanOrEqual(500);
     expect(row.digest.length).toBe(8_000);
@@ -252,7 +252,7 @@ describe('R2 trajectories：管理路由', () => {
 
     const p1 = await request(managerApp).get('/api/assistant/trajectories?page=1&limit=2').expect(200);
     expect(p1.body.items).toHaveLength(2);
-    expect(p1.body.total).toBe(5); // 他组织线轨迹不可见，不计入
+    expect(p1.body.total).toBe(5); // other-org line's trajectories invisible, not counted
     expect(p1.body.page).toBe(1);
     expect(p1.body.limit).toBe(2);
 
@@ -266,16 +266,16 @@ describe('R2 trajectories：管理路由', () => {
     }
     expect(seen.size).toBe(5);
 
-    // 筛某条可见线 → 只回该线
+    // Filter by a visible line → only that line is returned
     const one = await request(managerApp).get(`/api/assistant/trajectories?productLineId=${line1}`).expect(200);
     expect(one.body.total).toBe(5);
 
-    // 筛不可见线 → 空
+    // Filter by an invisible line → empty
     const other = await request(managerApp).get(`/api/assistant/trajectories?productLineId=${line2}`).expect(200);
     expect(other.body.total).toBe(0);
     expect(other.body.items).toHaveLength(0);
 
-    // 非法分页参数被钳制
+    // Invalid pagination params are clamped
     const bad = await request(managerApp).get('/api/assistant/trajectories?page=0&limit=0').expect(200);
     expect(bad.body.page).toBe(1);
     expect(bad.body.limit).toBe(1);
@@ -314,7 +314,7 @@ describe('R2 trajectories：system prompt 注入', () => {
     expect(iMem).toBeGreaterThan(iGuides);
     expect(iTraj).toBeGreaterThan(iMem);
     expect(iWorkspace).toBeGreaterThan(iTraj);
-    // 缺省第 5 参（旧调用）编译期兼容
+    // The 5th argument defaulting (old call shape) is compile-time compatible
     expect(() => buildSpaceSystemPrompt(null, 'zh-CN', [], '')).not.toThrow();
   });
 });

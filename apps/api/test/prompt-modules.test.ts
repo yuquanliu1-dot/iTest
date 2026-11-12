@@ -1,4 +1,4 @@
-/** promptModules 单元+DB：frontmatter 剥离/工具文案覆盖/注册表枚举/值解析/幂等插入。 */
+/** promptModules unit + DB: frontmatter stripping / tool text overrides / registry enumeration / value resolution / idempotent inserts. */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,8 +16,8 @@ beforeAll(async () => {
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   tmpDataDir = mkdtempSync(join(tmpdir(), 'itest-pm-'));
-  // SKILLS_ROOT = <PI_DATA_DIR>/skills（skillsStore 经 repo.ts 的 DATA_DIR 模块级推导；
-  // 本文件对 promptModules 的引用全部是测试内动态 import，求值发生在 beforeAll 之后）
+  // SKILLS_ROOT = <PI_DATA_DIR>/skills (skillsStore derives DATA_DIR at module level via repo.ts;
+  // every reference to promptModules in this file is a dynamic import inside tests, evaluated after beforeAll)
   process.env.PI_DATA_DIR = tmpDataDir;
 }, 60_000);
 
@@ -91,7 +91,7 @@ describe('版本链语义', () => {
     const { loadPromptModuleOverrides, textOverrideOf, insertPromptModuleVersion } = await import('../src/pi/space/promptModules.js');
     await insertPromptModuleVersion({ moduleKey: 'space.style.zh', value: 'A', source: 'manual_edit' });
     await insertPromptModuleVersion({ moduleKey: 'space.style.zh', value: 'B', source: 'manual_edit' });
-    await insertPromptModuleVersion({ moduleKey: 'space.style.zh', value: null, source: 'manual_edit' }); // 恢复默认
+    await insertPromptModuleVersion({ moduleKey: 'space.style.zh', value: null, source: 'manual_edit' }); // restore default
     const ov = await loadPromptModuleOverrides();
     expect(ov.get('space.style.zh')!.value).toBeNull();
     expect(textOverrideOf(ov, 'space.style.zh')).toBeUndefined();

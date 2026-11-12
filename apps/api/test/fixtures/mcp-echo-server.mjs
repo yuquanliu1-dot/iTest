@@ -1,6 +1,6 @@
-// 零依赖 stdio NDJSON MCP echo server（冒烟/测试用）。
-// 协议：每个 JSON-RPC 消息一行；initialize 成功时写 MCP_ECHO_MARKER 文件（用于测试断言"已建连"），
-// 随后注册一个 echo 工具。tools/call 原样回显 text。
+// Zero-dependency stdio NDJSON MCP echo server (for smoke/testing).
+// Protocol: one JSON-RPC message per line; on successful initialize, writes the MCP_ECHO_MARKER file (used by tests to assert "connection established"),
+// then registers an echo tool. tools/call echoes text back verbatim.
 import fs from 'node:fs';
 import readline from 'node:readline';
 
@@ -17,7 +17,7 @@ rl.on('line', (line) => {
     send({ jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'echo', version: '0.0.1' } } });
     return;
   }
-  // notification（无 id）：silent
+  // notification (no id): silent
   if (id === undefined || id === null) return;
   if (method === 'ping') { send({ jsonrpc: '2.0', id, result: {} }); return; }
   if (method === 'tools/list') {

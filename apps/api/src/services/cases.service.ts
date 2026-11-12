@@ -1,7 +1,7 @@
 /**
- * 用例/分组领域服务:HTTP 路由与空间 AI 工具共用。
- * 这里只做数据完整性与归属校验(实体 ∈ project/version/org);
- * 用户可见性(assertProjectVisible 等)由调用方(HTTP 边界)负责。
+ * Case/group domain service: shared by HTTP routes and the space AI tools.
+ * Only data-integrity and ownership validation lives here (entity ∈ project/version/org);
+ * user visibility (assertProjectVisible etc.) is the caller's job (HTTP boundary).
  */
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -24,23 +24,23 @@ export async function groupProjectId(groupId: string): Promise<string | null> {
   return row?.projectId ?? null;
 }
 
-/** 用例列表缓存(GET /cases?projectId=)失效入口。projectId 为空静默跳过(实体已不存在)。 */
+/** Invalidation entry for the case-list cache (GET /cases?projectId=). Silently skips when projectId is empty (entity no longer exists). */
 export async function invalidateCasesCache(projectId: string | null | undefined): Promise<void> {
   if (!projectId) return;
   await cache.del(casesForProjectKey(projectId));
 }
 
-/** 按 caseId 解析所属项目后失效列表缓存;case 不存在静默跳过。 */
+/** Resolves the owning project by caseId, then invalidates the list cache; silently skips when the case is gone. */
 export async function invalidateCasesCacheForCase(caseId: string): Promise<void> {
   const row = (await db.select({ groupId: testCases.groupId }).from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
   if (!row) return;
   await invalidateCasesCache(await groupProjectId(row.groupId));
 }
 
-/** 校验 tagIds 都属于 projectId 所属组织;缺失 404,跨组织 400。 */
+/** Verifies every tagId belongs to projectId's organization; missing → 404, cross-org → 400. */
 export async function assertTagsBelongToOrg(tagIds: string[], projectId: string): Promise<void> {
   if (tagIds.length === 0) return;
-  // 项目的组织由产品线推导（projects 已无 organization_id 列）。
+  // The project's organization is derived from its product line (projects no longer has an organization_id column).
   const [proj] = await db
     .select({ organizationId: productLines.organizationId })
     .from(projects)
@@ -57,7 +57,7 @@ export async function assertTagsBelongToOrg(tagIds: string[], projectId: string)
   if (wrong.length > 0) throw new HttpError(400, 'tag_org_mismatch', 'tag belongs to another organization');
 }
 
-/** 批量取出 caseIds 关联的所有 tag,按 caseId 分组。空集合返回空 Map。 */
+/** Bulk-fetches all tags linked to caseIds, grouped by caseId. Returns an empty Map for an empty set. */
 export async function tagsForCases(caseIds: string[]): Promise<Map<string, Array<{ id: string; name: string; color: string }>>> {
   const map = new Map<string, Array<{ id: string; name: string; color: string }>>();
   if (caseIds.length === 0) return map;
@@ -97,16 +97,16 @@ export interface CreateCaseInput {
   windowHeight?: number | null;
   incognito?: boolean;
   requirementId?: string | null;
-  /** 需求编号（外部编号自由文本，非 requirements FK）。AI 生成路径由 stage_case 带下来。 */
+  /** Requirement number (free-text external number, not a requirements FK). Carried down by stage_case on the AI generation path. */
   requirementNo?: string | null;
   scenarioId?: string | null;
   tagIds?: string[];
   expectedOutcome?: string | null;
-  /** 本条覆盖的测试类型（COVERAGE_TYPE_KEYS 子集）；AI 生成路径由 stage_case 带下来。 */
+  /** This case's coverage types (a subset of COVERAGE_TYPE_KEYS); carried down by stage_case on the AI generation path. */
   coverageTypes?: string[];
-  /** 绑定数据集（space-assistant stage 保存路径：数据集先落库再回填）。 */
+  /** Bound dataset (space-assistant stage save path: the dataset is persisted first, then backfilled). */
   datasetId?: string | null;
-  /** 创建人（对齐 plan_schedules.created_by_user_id 约定）；caller 未传则 null。 */
+  /** Creator (aligned with the plan_schedules.created_by_user_id convention); null when the caller doesn't pass it. */
   createdByUserId?: string | null;
 }
 
@@ -137,16 +137,16 @@ export async function createCase(input: CreateCaseInput) {
 export interface AiTaskInput {
   instruction: string;
   assertion?: string | null;
-  /** 已编译 DSL;缺失/null 视作未编译,dispatcher 阻塞执行。 */
+  /** Compiled DSL; missing/null counts as uncompiled, and the dispatcher blocks execution. */
   compiled?: unknown[] | null;
 }
 
-/** 创建用例并写步骤。
- *  - 每条 step 的 instruction 来自 input.instruction(自然语言);
- *  - compiled 原样落库：缺失/null 即「未编译」，dispatcher 抛 compile-missing、UI 阻塞执行。
- *    视觉模式必须由调用方显式给 [{kind:'aiTask',instruction}]——服务端不做 null→aiTask 兜底，
- *    否则「已放弃/漏编译」会被悄悄变成可执行的 AI 步骤，掩盖缺失（与 stage-tools 的 null 语义一致）。
- *  - 老 action 列已于 0030 迁移 DROP,新代码不再写。 */
+/** Creates a case and writes its steps.
+ *  - Each step's instruction comes from input.instruction (natural language);
+ *  - compiled is stored as-is: missing/null means "uncompiled", dispatcher throws compile-missing and the UI blocks execution.
+ *    Vision mode must be explicitly supplied by the caller as [{kind:'aiTask',instruction}] — the server does no null→aiTask fallback,
+ *    otherwise "abandoned / missed compilation" would silently become an executable AI step, masking the gap (same null semantics as stage-tools).
+ *  - The old action column was DROPped in migration 0030; new code no longer writes it. */
 export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiTaskInput[] }) {
   const created = await createCase(input);
   if (input.steps?.length) {
@@ -156,8 +156,8 @@ export async function createCaseWithSteps(input: CreateCaseInput & { steps?: AiT
         source: 'agent' as const,
         instruction: s.instruction,
         compiled,
-        // 先 sanitize：描述性断言（"登录表单正常展示"等）→ null，回放阶段跳过断言。
-        // 再 migrate：把 `{kind,text}` 老形态规整为 dispatch 认识的 `{equals,target,match,locator}`。
+        // Sanitize first: descriptive assertions ("login form renders correctly" etc.) → null, skipping the assertion at replay.
+        // Then migrate: normalizes the old `{kind,text}` shape into the `{equals,target,match,locator}` dispatch understands.
         assertion: (() => {
           const clean = sanitizeAssertion(s.assertion);
           if (clean === null) return null;
@@ -192,7 +192,7 @@ export interface UpdateCasePatch {
   scenarioId?: string | null;
   defaultEnvId?: string | null;
   datasetId?: string | null;
-  /** 数据集行选择：启用行下标数组。[] = 所有启用行；null = 清空选择（等价 []）。 */
+  /** Dataset row selection: an array of enabled-row indexes. [] = all enabled rows; null = clears the selection (equivalent to []). */
   datasetRowIndexes?: number[] | null;
   windowStrategy?: string;
   windowWidth?: number | null;
@@ -201,7 +201,7 @@ export interface UpdateCasePatch {
   tagIds?: string[];
   expectedOutcome?: string | null;
   requirementNo?: string | null;
-  // 2026-10-07: 移动端支持
+  // 2026-10-07: mobile support
   platform?: 'web' | 'mobile';
   mobileOs?: 'ios' | 'android' | null;
   mobileDeviceTargetId?: string | null;
@@ -211,7 +211,7 @@ export interface UpdateCasePatch {
 export async function updateCase(caseId: string, patch: UpdateCasePatch) {
   const existing = (await db.select().from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'case not found');
-  // 用例现属项目始终以其分组为准;移动分组时目标分组必须仍在同一项目
+  // The case's current project always follows its group; when moving groups, the target group must stay in the same project
   const currentPid = await groupProjectId(existing.groupId);
   if (!currentPid) throw new HttpError(404, 'not_found', 'group not found');
   let targetPid = currentPid;
@@ -243,11 +243,11 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
     if (!dsPid) throw new HttpError(404, 'not_found', 'dataset not found');
     if (dsPid !== targetPid) throw new HttpError(400, 'dataset_project_mismatch', 'dataset does not belong to this project');
   }
-  // 数据集行选择与 datasetId 联动：
-  //  - 显式带了选择 → 以请求为准（前端「先换数据集再选行、一次保存」要能落库）
-  //  - 没带选择且换了数据集（含解绑）→ 清空（下标空间属于旧数据集）
-  //  - 选择下标必须落在目标数据集的启用行范围内
-  //  null = 清空（归一为 []）；undefined = 不动。
+  // Dataset row selection interacts with datasetId:
+  //  - selection explicitly sent → the request wins (the frontend's "switch dataset then pick rows, save once" must persist)
+  //  - no selection sent and the dataset changed (including unbinding) → clear (the index space belongs to the old dataset)
+  //  - selected indexes must fall within the target dataset's enabled-row range
+  //  null = clear (normalized to []); undefined = untouched.
   let datasetRowIndexes = patch.datasetRowIndexes;
   if (datasetRowIndexes === undefined) {
     if (patch.datasetId !== undefined && patch.datasetId !== existing.datasetId) {
@@ -259,16 +259,16 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
   if (datasetRowIndexes && datasetRowIndexes.length > 0) {
     await assertDatasetRowIndexes(patch.datasetId ?? existing.datasetId, datasetRowIndexes);
   }
-  // 2026-10-07: 移动端 device target 跨项目断言（service 兜底）
+  // 2026-10-07: mobile device target cross-project assertion (service-level fallback)
   if (patch.mobileDeviceTargetId !== undefined && patch.mobileDeviceTargetId !== null) {
     const dtPid = await resolveDeviceTargetProjectId(patch.mobileDeviceTargetId);
     if (!dtPid) throw new HttpError(404, 'not_found', 'device target not found');
     if (dtPid !== targetPid) throw new HttpError(400, 'device_target_project_mismatch', 'device target does not belong to this project');
   }
   if (patch.tagIds !== undefined) await assertTagsBelongToOrg(patch.tagIds, targetPid);
-  // 换数据集/解绑：该用例在所有计划里的行级覆盖一并清空（下标空间属于旧数据集）。
-  // 计划级置 null（跟随用例级），与用例级清空同触发；用例删除无需处理（plan_cases.caseId 外键 CASCADE）。
-  // 该用例被组登录准备引用时，login_dataset_row_indexes 同口径清空。
+  // Dataset switched/unbound: this case's row-level overrides in every plan are cleared together (the index space belongs to the old dataset).
+  // Plan level is set null (following case level), triggered alongside the case-level clear; case deletion needs nothing (plan_cases.caseId FK CASCADE).
+  // When the case is referenced by a group's login prepare, login_dataset_row_indexes is cleared by the same criteria.
   if (patch.datasetId !== undefined && patch.datasetId !== existing.datasetId) {
     await db.update(planCases).set({ datasetRowIndexes: null }).where(eq(planCases.caseId, caseId));
     await db.update(planCaseGroups).set({ loginDatasetRowIndexes: null }).where(eq(planCaseGroups.loginCaseId, caseId));
@@ -291,17 +291,17 @@ export async function updateCase(caseId: string, patch: UpdateCasePatch) {
 }
 
 export async function deleteCase(caseId: string): Promise<void> {
-  // 项目归属必须在删除前解析:行没了之后 group 链路断,失效无从谈起
+  // Project ownership must be resolved before the delete: once the row is gone the group chain is broken and invalidation has nothing to work from
   const existing = (await db.select({ groupId: testCases.groupId }).from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
   const deleted = await db.delete(testCases).where(eq(testCases.id, caseId)).returning({ id: testCases.id });
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'case not found');
   await invalidateCasesCache(existing ? await groupProjectId(existing.groupId) : null);
 }
 
-/** 单步骤补丁:AI 编译助手回流落库通道。
- *  - 只允许 instruction / compiled;其它列(敏感值/source/order/tab_ref)走既有写路径,
- *    避免绕过 tools 注册表的边界。
- *  - 落库后回行 + 旧 instruction 拼短 instruction(若新 instruction 为空,保留旧值)。 */
+/** Single-step patch: the write-back channel for the AI compile assistant.
+ *  - Only instruction / compiled allowed; all other columns (sensitive values / source / order / tab_ref) go through the existing
+ *    write paths, avoiding a bypass of the tools-registry boundary.
+ *  - After persisting, returns the row + old instruction concatenated with the short instruction (keeps the old value when the new instruction is empty). */
 export async function updateCaseStep(stepId: string, patch: { compiled?: unknown[] | null; instruction?: string }) {
   const row = (await db.select().from(testSteps).where(eq(testSteps.id, stepId)).limit(1))[0];
   if (!row) throw new HttpError(404, 'not_found', 'step not found');
@@ -314,8 +314,8 @@ export async function updateCaseStep(stepId: string, patch: { compiled?: unknown
   return updated ?? row;
 }
 
-/** 单步骤插入(AI 助手 + 后续重排):插在 afterOrder 之后(若提供),否则追加到末尾。
- *  复用 testSteps 表的 order 列连续紧凑语义,落库后把 afterOrder 之后的步骤 order +1。 */
+/** Single-step insert (AI assistant + later reordering): inserts after afterOrder (when given), otherwise appends to the end.
+ *  Reuses the testSteps order column's contiguous-compact semantics; after persisting, steps after afterOrder get order +1. */
 export async function insertCaseStep(
   caseId: string,
   body: { instruction: string; compiled?: unknown[] | null; afterOrder?: number; source?: string },
@@ -337,7 +337,7 @@ export async function insertCaseStep(
       compiled: body.compiled ?? null,
     })
     .returning();
-  // 后续步骤 order 紧凑化(把 targetOrder 起所有行 +1)
+  // Compact the following steps' order (shift every row from targetOrder on by +1)
   const after = rows.filter((r) => r.order >= targetOrder);
   for (let i = 0; i < after.length; i++) {
     await db.update(testSteps).set({ order: targetOrder + 1 + i }).where(eq(testSteps.id, after[i]!.id));
@@ -346,7 +346,7 @@ export async function insertCaseStep(
   return inserted!;
 }
 
-/** 详情:步骤脱敏(去 secret 三元组列)+ 解析后的入口 URL + tags。不存在返回 null。 */
+/** Detail: steps sanitized (secret-triplet columns stripped) + resolved entry URL + tags. Returns null when missing. */
 export async function getCaseDetail(caseId: string) {
   const row = (await db.select().from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
   if (!row) return null;
@@ -380,8 +380,9 @@ export async function searchCasesInVersion(versionId: string, o: { keyword?: str
   if (o.groupId) out = out.filter((r) => r.groupId === o.groupId);
   const kw = o.keyword?.trim().toLowerCase();
   if (kw) {
-    // 召回面不止标题：AI 建例前检索同类用例时,业务对象/动作词常落在步骤指令、预期结果与标签里。
-    // 一次把本版本用例的步骤文本与标签名拉回来在内存匹配,返回形状不变(列表项仍不含步骤全文)。
+    // Recall covers more than titles: when the AI searches for similar cases before authoring, business objects/action words often land in
+    // step instructions, expected outcomes, and tags. Pull this version's step texts and tag names back in one shot and match in memory;
+    // the return shape is unchanged (list items still don't carry full step text).
     const ids = out.map((r) => r.id);
     const [stepRows, tagRows] = await Promise.all([
       ids.length
@@ -407,7 +408,7 @@ export async function searchCasesInVersion(versionId: string, o: { keyword?: str
   const limited = out.slice(0, o.limit ?? 50);
   return await Promise.all(
     limited.map(async (r) => ({
-      // description/expectedOutcome 只参与召回匹配,不进列表项(看全文走 get,列表形状保持不变)
+      // description/expectedOutcome only feed recall matching, not list items (full text via get; the list shape stays unchanged)
       id: r.id,
       title: r.title,
       priority: r.priority,
@@ -440,7 +441,7 @@ export async function updateGroup(groupId: string, patch: { name: string }) {
   return (await db.update(groups).set({ name: patch.name, updatedAt: new Date() }).where(eq(groups.id, groupId)).returning())[0]!;
 }
 
-/** 分组下用例数(删除前 not_empty 闸门,对齐 web 409 语义)。 */
+/** Case count under a group (the not_empty gate before delete, aligned with the web 409 semantics). */
 export async function countGroupCases(groupId: string): Promise<number> {
   const rows = await db.select({ count: sql<number>`count(*)` }).from(testCases).where(eq(testCases.groupId, groupId));
   return Number(rows[0]?.count ?? 0);
@@ -471,31 +472,31 @@ function nextCopyTitle(base: string, existing: string[]): string {
 export interface CopyCaseInput {
   caseId: string;
   targetGroupId: string;
-  /** null = 沿用源用例所在版本（同版本复制）。 */
+  /** null = keep the source case's version (same-version copy). */
   targetVersionId: string | null;
 }
 
-/** 复制用例到目标分组（可跨版本）：克隆步骤（instruction/compiled/assertion）与标签关联，标题追加「副本 N」。
- *  只做机械复制；源/目标的存在性与可见性由调用方校验（HTTP 边界查 per-user，AI 工具查项目归属）。
- *  createdByUserId = 执行复制操作的用户（副本的创建人）。 */
+/** Copies a case to the target group (may cross versions): clones steps (instruction/compiled/assertion) and tag links, appending "副本 N" (copy N) to the title.
+ *  Purely mechanical copying; source/target existence and visibility are the caller's job (HTTP boundary checks per-user, AI tools check project ownership).
+ *  createdByUserId = the user performing the copy (the copy's creator). */
 export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: CopyCaseInput, createdByUserId?: string | null) {
   const src = (await db.select().from(testCases).where(eq(testCases.id, caseId)).limit(1))[0];
   if (!src) throw new HttpError(404, 'not_found', 'case not found');
   const siblings = await db.select({ title: testCases.title }).from(testCases).where(eq(testCases.groupId, targetGroupId));
   const title = nextCopyTitle(src.title, siblings.map((s) => s.title));
-  // 目标分组所属项目：项目内绑定的对象（数据集/设备/环境）只有落在目标项目里才随拷贝携带。
+  // The target group's project: project-bound objects (dataset/device/environment) travel with the copy only if they live in the target project.
   const targetGroupRow = (await db
     .select({ projectId: groups.projectId })
     .from(groups)
     .where(eq(groups.id, targetGroupId))
     .limit(1))[0];
   const targetProjectId = targetGroupRow?.projectId ?? null;
-  /** 源对象是否属于目标项目；跨项目复制时这些绑定一律置空，避免副本指向别的项目的资源。 */
+  /** Whether the source object belongs to the target project; on cross-project copies these bindings are all nulled, so the copy never points at another project's resources. */
   const ownedByTarget = async (ownerProjectId: string | null | undefined): Promise<boolean> =>
     !!targetProjectId && !!ownerProjectId && ownerProjectId === targetProjectId;
-  // 数据集绑定随拷贝：仅当源数据集与目标分组同项目时携带（跨项目不外带，置空回退单次执行）。
+  // Dataset binding travels with the copy: carried only when the source dataset is in the same project as the target group (not carried cross-project; nulled, falling back to single-run).
   let datasetId: string | null = null;
-  // 行选择随数据集绑定一起携带：同一数据集的下标空间相同，跨项目丢绑定时也一并丢弃。
+  // Row selection travels with the dataset binding: the same dataset shares one index space, so losing the binding cross-project drops the selection too.
   let datasetRowIndexes: number[] = [];
   if (src.datasetId) {
     const srcDs = (await db
@@ -508,13 +509,13 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
       datasetRowIndexes = [...(src.datasetRowIndexes ?? [])];
     }
   }
-  // 默认环境同理：环境属项目内资源，跨项目引用会被执行期「环境与项目不匹配」拦下。
+  // Same for the default environment: environments are project-scoped resources; a cross-project reference gets blocked at execution by "environment does not belong to this project".
   let defaultEnvId: string | null = null;
   if (src.defaultEnvId) {
     const envPid = await resolveEnvironmentProjectId(src.defaultEnvId);
     if (await ownedByTarget(envPid)) defaultEnvId = src.defaultEnvId;
   }
-  // 设备目标同理（移动端）。
+  // Same for the device target (mobile).
   let mobileDeviceTargetId: string | null = null;
   if (src.mobileDeviceTargetId) {
     const dtPid = await resolveDeviceTargetProjectId(src.mobileDeviceTargetId);
@@ -525,7 +526,7 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
     .values({
       title,
       description: src.description,
-      // 需求编号是本条用例自身的描述性属性,随拷贝携带。
+      // The requirement number is this case's own descriptive attribute; travels with the copy.
       requirementNo: src.requirementNo,
       priority: src.priority,
       groupId: targetGroupId,
@@ -533,22 +534,22 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
       url: src.url,
       datasetId,
       datasetRowIndexes,
-      // 用例级语义随拷贝携带：预期结果与覆盖类型是本条用例自身的描述。
+      // Case-level semantics travel with the copy: expected outcome and coverage types describe this case itself.
       expectedOutcome: src.expectedOutcome,
       coverageTypes: src.coverageTypes,
-      // 窗口/隐私模式：执行参数，跨项目同样适用。
+      // Window/incognito mode: execution parameters, equally valid cross-project.
       windowStrategy: src.windowStrategy,
       windowWidth: src.windowWidth,
       windowHeight: src.windowHeight,
       incognito: src.incognito,
-      // 移动端配置：device target 属项目内资源,只有落在目标项目才携带(否则置空);
-      // appRef/bundleId 是应用自身标识,跨项目仍可用。
+      // Mobile config: the device target is a project-scoped resource, carried only when it lives in the target project (nulled otherwise);
+      // appRef/bundleId identify the app itself and remain usable cross-project.
       platform: src.platform,
       mobileOs: src.mobileOs,
       mobileDeviceTargetId,
       appRef: src.appRef,
-      // 环境侧绑定（default env / 命名 web 服务）指向项目内的环境对象：
-      // 跨项目复制时置空——否则副本会指向别的项目的环境，执行时报「环境与项目不匹配」。
+      // Environment-side bindings (default env / named web service) point at project-scoped environment objects:
+      // nulled on cross-project copies — otherwise the copy would point at another project's environment and execution fails with "environment does not belong to this project".
       defaultEnvId,
       webServiceRef: defaultEnvId ? src.webServiceRef : null,
       ...(createdByUserId ? { createdByUserId } : {}),
@@ -565,7 +566,7 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
         instruction: s.instruction,
         compiled: s.compiled,
         assertion: s.assertion,
-        // 敏感步骤的密文三元组一并克隆：否则副本的敏感字段变成「敏感但没值」,录制器取不到密文。
+        // The sensitive step's ciphertext triplet is cloned too: otherwise the copy's sensitive fields become "sensitive but valueless" and the recorder can't fetch the ciphertext.
         sensitive: s.sensitive,
         secretCiphertext: s.secretCiphertext,
         secretIv: s.secretIv,
@@ -581,7 +582,7 @@ export async function copyCaseCore({ caseId, targetGroupId, targetVersionId }: C
   if (srcTagRows.length > 0) {
     await db.insert(caseTags).values(srcTagRows.map((r) => ({ caseId: newCase.id, tagId: r.tagId })));
   }
-  // 跨项目复制时源项目列表不变,只需失效目标项目
+  // On cross-project copies the source project's list is unchanged; only the target project needs invalidation
   await invalidateCasesCache(targetProjectId);
   return newCase;
 }

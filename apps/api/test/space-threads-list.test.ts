@@ -12,10 +12,11 @@ let pool: Pool;
 let app: import('express').Express;
 let tmpDir: string;
 
-/** 造一条 kind='version' 线程;sessionFile 给真实文件路径则过 fs 探测,不给则指向不存在
- *  的路径(非空 piThreadId 过 SQL where、被 fs 探测滤掉——对应生产上 session 文件被清的线程)。
- *  createdAt 用显式分钟差保证 (createdAt,id) 全序确定;updatedAt 缺省同刻,可单独后拨
- *  模拟改名/新消息落题(排序不应被它带跑)。 */
+/** Create one kind='version' thread; if sessionFile is given a real file path it passes the fs probe, otherwise it points at a
+ *  nonexistent path (non-empty piThreadId passes the SQL where clause but is filtered by the fs probe — matching production threads
+ *  whose session file was cleaned up). createdAt uses explicit minute offsets so the (createdAt,id) total order is deterministic;
+ *  updatedAt defaults to the same instant and can be bumped forward separately to simulate rename/new-message title landing
+ *  (the ordering must not be driven by it). */
 async function insertThread(versionId: string, opts: { updatedAt: string; updatedAtLater?: string; title?: string; sessionFile?: string }): Promise<string> {
   const id = randomUUID();
   const sessionFile = opts.sessionFile ?? path.join(tmpDir, 'missing', `${randomUUID()}.jsonl`);
@@ -32,12 +33,12 @@ const at = (minutesAgo: number): string => {
   return d.toISOString().slice(0, 19).replace('T', ' ');
 };
 
-/** 每个用例独立版本空间,互不串数据。 */
+/** Each case gets an isolated version space so data never bleeds between them. */
 async function freshVersion(): Promise<string> {
   return (await seedProject(pool)).versionId;
 }
 
-/** 批量造带真实 session 文件的线程,返回 id 集合。 */
+/** Bulk-create threads with real session files, returning the id set. */
 async function seedRealThreads(versionId: string, count: number, startMinutesAgo: number): Promise<Set<string>> {
   const ids = new Set<string>();
   for (let i = 0; i < count; i++) {
@@ -92,7 +93,7 @@ describe('GET /api/assistant/threads 分页契约(?limit=)', () => {
       pageSizes.push(res.body.threads.length);
       for (const t of res.body.threads) {
         expect(typeof t.id).toBe('string');
-        expect(typeof t.title).toBe('string'); // 有题线程出字符串
+        expect(typeof t.title).toBe('string'); // titled threads come out as strings
         seen.push(t.id);
       }
       hasMore = res.body.hasMore;
@@ -105,7 +106,7 @@ describe('GET /api/assistant/threads 分页契约(?limit=)', () => {
 
   it('无 session 文件的线程被过滤且不占页配额(循环取数)', async () => {
     const versionId = await freshVersion();
-    // 5 真 + 5 假 + 5 真:limit=10 应跳过假的凑满 10 真,hasMore 精确为 false(库里已耗尽)
+    // 5 real + 5 fake + 5 real: limit=10 should skip the fakes to fill 10 reals, with hasMore exactly false (DB exhausted)
     await seedRealThreads(versionId, 5, 100);
     for (let i = 0; i < 5; i++) await insertThread(versionId, { updatedAt: at(50 + i) });
     await seedRealThreads(versionId, 5, 40);
@@ -124,7 +125,7 @@ describe('GET /api/assistant/threads 分页契约(?limit=)', () => {
       await fs.writeFile(file, '');
       ties.add(await insertThread(versionId, { updatedAt: at(200), title: `线程${i}`, sessionFile: file }));
     }
-    // 同刻排序必为 id desc;逐页(limit=1)拉完三行,页间不重不漏;第 3 页 hasMore 精确 false
+    // Same-instant ordering is necessarily id desc; pull all three rows page by page (limit=1), no overlap or omission between pages; page 3 hasMore exactly false
     const seen: string[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 3; page++) {
@@ -139,14 +140,14 @@ describe('GET /api/assistant/threads 分页契约(?limit=)', () => {
 
   it('排序锚点是创建时间:老线程 updatedAt 被改名/新消息顶新也不上浮', async () => {
     const versionId = await freshVersion();
-    // A 先建(300 分钟前)但最近活跃(updated_at=now);B 后建(100 分钟前)无活跃
+    // A created earlier (300 min ago) but recently active (updated_at=now); B created later (100 min ago) with no activity
     const fileA = path.join(tmpDir, `${randomUUID()}.jsonl`);
     const fileB = path.join(tmpDir, `${randomUUID()}.jsonl`);
     await fs.writeFile(fileA, '');
     await fs.writeFile(fileB, '');
     const a = await insertThread(versionId, { updatedAt: at(300), updatedAtLater: at(0), title: 'A-老会话新活跃', sessionFile: fileA });
     const b = await insertThread(versionId, { updatedAt: at(100), title: 'B-较新会话', sessionFile: fileB });
-    // 旧契约(裸数组,20 硬顶)与分页契约都必须 B 在前:按创建时间,B 比 A 新
+    // Both the old contract (bare array, hard cap 20) and the paged contract must put B first: by creation time, B is newer than A
     const legacy = await list(versionId, '');
     expect((legacy.body as { id: string }[]).map((t) => t.id)).toEqual([b, a]);
     const paged = await list(versionId, '&limit=10');

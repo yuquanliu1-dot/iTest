@@ -10,18 +10,18 @@ import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
 let pool: Pool;
 let app: import('express').Express;
-/** 隔离的 .data 根:fake 会话的落盘文件写这里,不污染开发者真实的 apps/api/.data(须先于任何动态 import 设好)。 */
+/** Isolated .data root: the fake session's disk files are written here, never touching the developer's real apps/api/.data (must be set before any dynamic import). */
 let tmpDataDir: string;
 
-/** 捕获 prompt 的入参与 options，供图片透传断言用（每个用例在 beforeEach 清空）。 */
+/** Captures prompt inputs and options for image-passthrough assertions (cleared in beforeEach for every case). */
 const capturedPrompts: { text: string; options?: { streamingBehavior?: string; images?: { data: string; mimeType: string }[] } }[] = [];
-/** threadId → fake 会话的落盘路径，供 DELETE 清文件断言用（beforeEach 清空）。 */
+/** threadId → the fake session's disk path, for DELETE file-cleanup assertions (cleared in beforeEach). */
 const fakeSessionFiles = new Map<string, string>();
 
 /**
- * 模拟 pi 持久化的可观测面：persist=true 时建会话即分配 sessionFile 路径（eager），
- * 但只有首条消息 prompt() 才真正写盘。列表判据=文件存在性，草稿线程=有路径无文件。
- * 不重造 pi 的 JSONL 结构——列表接口只 fs.access，从不解析内容。
+ * Simulates pi's persistence observable surface: with persist=true, creating a session assigns the sessionFile path immediately (eager),
+ * but only the first message's prompt() actually writes to disk. List criterion = file existence; a draft thread = path without a file.
+ * Does not re-create pi's JSONL structure — the list API only fs.access, it never parses content.
  */
 function makeFakeSession(threadId?: string) {
   const listeners = new Set<(e: unknown) => void>();
@@ -45,9 +45,9 @@ function makeFakeSession(threadId?: string) {
 }
 
 /**
- * 默认 stub 工厂:复刻真工厂的完整契约——建 fake 会话并把它的 sessionFile 落库
- * (真工厂 createSpaceSessionFactory 末尾 db.update(piThreadId=session.sessionFile) 同一步)。
- * 少了这步,DB 里 pi_thread_id 永远是空串,列表判据(文件存在性)永远进不了列表。
+ * Default stub factory: replicates the real factory's full contract — create the fake session and persist its sessionFile
+ * (the same step as the real factory's createSpaceSessionFactory ending with db.update(piThreadId=session.sessionFile)).
+ * Without this step, pi_thread_id in the DB stays an empty string forever and the list criterion (file existence) never admits anything into the list.
  */
 async function stubFactory(ctx: { threadId: string }) {
   const s = makeFakeSession(ctx.threadId);
@@ -63,8 +63,8 @@ beforeAll(async () => {
   vi.resetModules();
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // DELETE /threads 清暂存会触及全部 6 张 ai_stage_* 表;SCHEMA_SQL 只建了 ai_stage_cases,
-  // 其余 5 张在此补齐(IF NOT EXISTS,列定义照 src/db/schema.ts)。
+  // DELETE /threads staging cleanup touches all 6 ai_stage_* tables; SCHEMA_SQL only creates ai_stage_cases,
+  // so the other 5 are topped up here (IF NOT EXISTS, column definitions per src/db/schema.ts).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ai_stage_case_ops (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, case_id uuid NOT NULL, op varchar(30) NOT NULL, payload jsonb NOT NULL DEFAULT '{}', summary text NOT NULL, diff text, staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_case_ops_pk PRIMARY KEY(thread_id, local_id));
     CREATE TABLE IF NOT EXISTS ai_stage_scenarios (thread_id text NOT NULL, local_id text NOT NULL, version_id uuid NOT NULL, requirement_id uuid NOT NULL, title varchar(200) NOT NULL, description text, case_local_ids text[] NOT NULL DEFAULT '{}', staged_at timestamp NOT NULL DEFAULT now(), CONSTRAINT ai_stage_scenarios_pk PRIMARY KEY(thread_id, local_id));
@@ -129,10 +129,10 @@ describe('space wire contract', () => {
     expect(r.status).toBe(502);
     expect(r.body.error).toBe('llm_not_configured');
     expect(r.body.message).toContain('LLM 未配置');
-    // 初始化失败的线程行必须清掉,不进列表
+    // A thread row whose initialization failed must be cleaned up, never entering the list
     const rows = await pool.query(`SELECT count(*)::int AS n FROM ai_threads WHERE kind='version'`);
     expect(rows.rows[0]!.n).toBe(0);
-    // 其它初始化错误 → 500 session_init_failed
+    // Other initialization errors → 500 session_init_failed
     setSpaceSessionFactory(async () => { throw new Error('boom'); });
     const r2 = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     expect(r2.status).toBe(500);
@@ -153,7 +153,7 @@ describe('space wire contract', () => {
     const { versionId } = await seedProject(pool);
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     await request(app).post(`/api/assistant/threads/${t.body.metadata.id}/messages`).send({ input: { content: '查一下环境' } });
-    // 后台 ensure+prompt 异步落标题;轮询等待,避免固定 sleep 在慢机上 flake
+    // Background ensure+prompt sets the title asynchronously; poll and wait to avoid fixed sleeps flaking on slow machines
     let list!: request.Response;
     for (let i = 0; i < 10; i++) {
       list = await request(app).get(`/api/assistant/threads?versionId=${versionId}`);
@@ -175,14 +175,14 @@ describe('space wire contract', () => {
 
   it('GET /threads?versionId= 会话文件不存在的线程不进列表(草稿/未落盘)', async () => {
     const { versionId } = await seedProject(pool);
-    // fake 会话建会话即分配 sessionFile 路径(pi 同款 eager 语义),但没 prompt 过 → 磁盘无文件
+    // The fake session assigns the sessionFile path at creation (pi's same eager semantics), but with no prompt yet → no file on disk
     const draft = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
-    // pi_thread_id 为空串的老行:被 SQL 下推条件先挡掉
+    // Legacy row with an empty-string pi_thread_id: filtered out first by the SQL push-down condition
     await pool.query(
       `INSERT INTO ai_threads(id, kind, version_id, pi_thread_id, title) VALUES ($1,'version',$2,'','旧会话')`,
       [crypto.randomUUID(), versionId],
     );
-    // 有路径但文件不存在(草稿线程的真实形态)——判据必须是文件存在性,不能是路径非空
+    // A path exists but the file doesn't (the real shape of a draft thread) — the criterion must be file existence, not a non-empty path
     await pool.query(
       `INSERT INTO ai_threads(id, kind, version_id, pi_thread_id, title) VALUES ($1,'version',$2,$3,'路径已分配')`,
       [crypto.randomUUID(), versionId, path.join(tmpDataDir, 'pi-sessions', 'never-flushed.jsonl')],
@@ -190,7 +190,7 @@ describe('space wire contract', () => {
     const list = await request(app).get(`/api/assistant/threads?versionId=${versionId}`);
     expect(list.status).toBe(200);
     expect(list.body).toEqual([]);
-    expect(draft.body.metadata.id).toBeTruthy(); // 草稿线程本身创建成功,只是不进列表
+    expect(draft.body.metadata.id).toBeTruthy(); // the draft thread itself was created fine; it just doesn't enter the list
   });
 
   it('GET /threads/:id 返回快照;requirement 线程 404(本契约只管 version 线程)', async () => {
@@ -210,8 +210,8 @@ describe('space wire contract', () => {
     const { versionId } = await seedProject(pool);
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     const threadId = t.body.metadata.id as string;
-    // 冷内存判定用「零消息」:发版重启后 ensure 重建出来的会话本来就该是空的,
-    // 关键在于它被建起来了(record 不再是 null)——修复前 GET 不 ensure,record 永远 null。
+    // Cold-memory detection uses "zero messages": after a release restart, the session rebuilt by ensure should naturally be empty;
+    // the key point is that it got built (record is no longer null) — before the fix, GET didn't ensure, so record stayed null forever.
     const { resetSpaceSessions, snapshotOfThread } = await import('../src/pi/space/session.js');
     resetSpaceSessions();
     expect(await snapshotOfThread(threadId)).toBeNull();
@@ -219,7 +219,7 @@ describe('space wire contract', () => {
     const g = await request(app).get(`/api/assistant/threads/${threadId}`);
     expect(g.status).toBe(200);
     expect(g.body.metadata.messageCount).toBe(0);
-    // 修复的核心断言:GET 之后 record 已建成(下一次 GET 命中内存,不再依赖 SSE 顺带建)
+    // The fix's core assertion: after GET the record has been built (the next GET hits memory, no longer relying on SSE to build it incidentally)
     expect(await snapshotOfThread(threadId)).not.toBeNull();
   });
 
@@ -267,14 +267,14 @@ describe('space wire contract', () => {
     const ok = await request(app).post(`/api/assistant/threads/${threadId}/cancel`);
     expect(ok.status).toBe(204);
     expect(aborted).toBe(1);
-    // 完全未知的 id:路由可见性校验 404(不入 DB 不存在静默通道)
+    // A fully unknown id: route visibility check 404 (no DB row means no silent channel)
     expect((await request(app).post(`/api/assistant/threads/${crypto.randomUUID()}/cancel`)).status).toBe(404);
-    // 无 session 记录的孤儿线程(已落库但建 session 失败,如 LLM 未配置)同样 204(静默 no-op)
+    // Orphan thread with no session record (row persisted but session creation failed, e.g. LLM unconfigured) also 204 (silent no-op)
     const orphanId = crypto.randomUUID();
     await pool.query(`INSERT INTO ai_threads(id, kind, version_id, pi_thread_id) VALUES ($1,'version',$2,'')`, [orphanId, versionId]);
     expect((await request(app).post(`/api/assistant/threads/${orphanId}/cancel`)).status).toBe(204);
     expect(aborted).toBe(1);
-    // 恢复默认 stub
+    // Restore the default stub
     setSpaceSessionFactory(stubFactory as never);
   });
 
@@ -282,7 +282,7 @@ describe('space wire contract', () => {
     const { versionId } = await seedProject(pool);
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     const threadId = t.body.metadata.id as string;
-    await request(app).get(`/api/assistant/threads/${threadId}`); // 确保记录存在(工厂 stub 已注入)
+    await request(app).get(`/api/assistant/threads/${threadId}`); // make sure the record exists (the factory stub is injected)
 
     const server = app.listen(0);
     const port = (server.address() as AddressInfo).port;
@@ -299,7 +299,7 @@ describe('space wire contract', () => {
       expect(Buffer.from(second.value!).toString('utf8')).toContain('confirm_request');
       await reader.cancel();
     } finally {
-      // SSE 连接是长连接,closeAllConnections 确保 server.close() 不挂起
+      // SSE connections are long-lived; closeAllConnections ensures server.close() doesn't hang
       server.close();
       server.closeAllConnections();
     }
@@ -308,7 +308,7 @@ describe('space wire contract', () => {
   it('events 对无 record 的持久化线程先 ensure:后续自定义事件可达(修复早订阅竞态)', async () => {
     const { versionId } = await seedProject(pool);
     const id = crypto.randomUUID();
-    // 直接 SQL 落行:resetSpaceSessions 后 record 不存在 —— 旧实现订阅到 noop 上,emit 会丢
+    // Direct SQL row insert: after resetSpaceSessions the record doesn't exist — the old implementation subscribed to a noop and emit was lost
     await pool.query(`INSERT INTO ai_threads(id, kind, version_id, pi_thread_id) VALUES ($1,'version',$2,'')`, [id, versionId]);
 
     const server = app.listen(0);
@@ -335,7 +335,7 @@ describe('space wire contract', () => {
 });
 
 describe('线程列表作用域与改名/删除(react-pi ThreadList 契约)', () => {
-  /** 建线程并发一条消息(让它进列表——列表过滤 messageCount>0)。 */
+  /** Create a thread and send one message (to get it into the list — the list filters on messageCount>0). */
   async function activeThread(versionId: string): Promise<string> {
     const created = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     const id = created.body.metadata.id as string;
@@ -363,7 +363,7 @@ describe('线程列表作用域与改名/删除(react-pi ThreadList 契约)', ()
     expect(a.status).toBe(200);
     expect(a.body).toHaveLength(1);
     expect(a.body[0]!.status).toBe('idle');
-    // Pi 契约:status 必须是非空字符串;列表条目不带 archived
+    // Pi contract: status must be a non-empty string; list entries carry no archived
     expect(typeof a.body[0]!.status).toBe('string');
     expect(a.body[0]!.archived).toBeUndefined();
   });
@@ -397,7 +397,7 @@ describe('线程列表作用域与改名/删除(react-pi ThreadList 契约)', ()
   it('列表含 title=null 线程时,title 缺省而非 null(react-pi isOptionalString 拒 null,整列表会挂)', async () => {
     const { versionId } = await seedProject(pool);
     const id = await activeThread(versionId);
-    // 真实竞态:首条消息 flush 落盘先于后台落题 → 列表读到 null 标题
+    // Real race: the first message's flush to disk lands before the background title write → the list reads a null title
     await pool.query(`UPDATE ai_threads SET title=NULL WHERE id=$1`, [id]);
     const list = await request(app).get(`/api/assistant/threads?versionId=${versionId}`);
     expect(list.status).toBe(200);
@@ -418,7 +418,7 @@ describe('线程列表作用域与改名/删除(react-pi ThreadList 契约)', ()
 
     const del = await request(app).delete(`/api/assistant/threads/${id}`);
     expect(del.status).toBe(204);
-    // 落盘的会话文件一并删除(Task 5 行为;activeThread 发过消息 → fake 已 flush 文件)
+    // The persisted session file is deleted too (Task 5 behavior; activeThread sent a message → the fake already flushed the file)
     const file = fakeSessionFiles.get(id);
     expect(file).toBeTruthy();
     await expect(fs.access(file!)).rejects.toThrow();
@@ -426,11 +426,11 @@ describe('线程列表作用域与改名/删除(react-pi ThreadList 契约)', ()
     for (const t of ['ai_stage_cases', 'ai_stage_case_ops', 'ai_stage_scenarios', 'ai_stage_environments', 'ai_stage_plans', 'ai_stage_datasets']) {
       expect((await pool.query(`SELECT count(*)::int AS n FROM ${t} WHERE thread_id=$1`, [id])).rows[0]!.n).toBe(0);
     }
-    // 内存 record 已 drop:快照接口 404(行没了),且旧会话不再被 status 查询命中
+    // In-memory record already dropped: the snapshot API 404s (row gone), and the old session is no longer hit by status queries
     expect((await request(app).get(`/api/assistant/threads/${id}`)).status).toBe(404);
     const { snapshotOfThread } = await import('../src/pi/space/session.js');
     expect(await snapshotOfThread(id)).toBeNull();
-    // 再删一次:行不存在 → 404(可见性校验先拦截;客户端 deleteThread 对 404 同样容忍)
+    // Delete again: row doesn't exist → 404 (the visibility check intercepts first; the client's deleteThread tolerates 404 the same way)
     expect((await request(app).delete(`/api/assistant/threads/${id}`)).status).toBe(404);
   });
 });
@@ -458,12 +458,12 @@ describe('推荐追问(suggestions)', () => {
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     const id = t.body.metadata.id;
     const { resetSpaceSessions, snapshotOfThread } = await import('../src/pi/space/session.js');
-    resetSpaceSessions(); // 等价发版重启:piThreadId 已落库但内存 record 冷
+    resetSpaceSessions(); // equivalent of a release restart: piThreadId persisted but the in-memory record is cold
     expect(await snapshotOfThread(id)).toBeNull();
     const r = await request(app).post(`/api/assistant/threads/${id}/suggestions`);
     expect(r.status).toBe(200);
     expect(r.body).toEqual([]);
-    expect(await snapshotOfThread(id)).not.toBeNull(); // ensure 已从「有 piThreadId」路径重建会话
+    expect(await snapshotOfThread(id)).not.toBeNull(); // ensure rebuilt the session via the "has piThreadId" path
   });
 
   it('有转写但 LLM 未配置 → 502 llm_not_configured', async () => {
@@ -492,13 +492,13 @@ describe('suggestions 纯函数', () => {
       { role: 'user', content: [] },
       { role: 'assistant', content: [{ type: 'text', text: '最终答' }] },
     ]);
-    // assistant 段只取最后一轮的正文(中途思考被末轮覆盖),空 user 被跳过
+    // The assistant section takes only the last turn's body (mid-conversation thinking is overwritten by the last turn); empty user messages are skipped
     expect(out).toBe('用户: 第一问\n助手: 最终答');
   });
 
   it('buildTranscript:超预算时从最旧整行丢弃,保留最新行', async () => {
     const { buildTranscript } = await import('../src/pi/space/suggestions.js');
-    const big = 'x'.repeat(6_000); // 单行超预算(TRANSCRIPT_CHAR_BUDGET=6000)
+    const big = 'x'.repeat(6_000); // single line over budget (TRANSCRIPT_CHAR_BUDGET=6000)
     const msgs = [
       { role: 'user', content: big },
       { role: 'assistant', content: big },
@@ -519,13 +519,13 @@ describe('suggestions 纯函数', () => {
 });
 
 describe('图片附件透传', () => {
-  /** 建线程并发一条消息,返回 threadId;prompt 是 fire-and-forget,这里轮询等它落地。 */
+  /** Create a thread and send one message, returning the threadId; prompt is fire-and-forget, so poll here until it lands. */
   async function sendWithAttachments(input: Record<string, unknown>): Promise<void> {
     const { versionId } = await seedProject(pool);
     const created = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     const id = created.body.metadata.id as string;
     await request(app).post(`/api/assistant/threads/${id}/messages`).send({ input });
-    // 路由是 204 后台派发,等 prompt 被调到为止(最多 ~2s)
+    // The route is 204 with background dispatch; wait until prompt gets called (up to ~2s)
     for (let i = 0; i < 40 && capturedPrompts.length === 0; i++) {
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -594,8 +594,8 @@ describe('快照合并压缩前缀(preCompactionMessagesOf + snapshotOf)', () =>
     const sm3 = SessionManager.inMemory();
     sm3.appendMessage(mk('全部被摘出上下文'));
     sm3.appendCompaction('摘要', null, 100);
-    // firstKeptEntryId=null → buildContextEntries 保留段为空,压缩前全部被摘出上下文,
-    // 即前缀=全部旧消息(合并显示时一条不少)
+    // firstKeptEntryId=null → buildContextEntries' kept section is empty, everything pre-compaction was evicted from context,
+    // i.e. prefix = all old messages (none lost when merged for display)
     const pre3 = preCompactionMessagesOf(sm3);
     expect(pre3).toHaveLength(1);
     expect(pre3[0]).toMatchObject({ role: 'user', content: [{ type: 'text', text: '全部被摘出上下文' }] });
@@ -637,7 +637,7 @@ describe('持久产物（skill 生成文档等）', () => {
     const { versionId } = await seedProject(pool);
     const t = await request(app).post('/api/assistant/threads').send({ metadata: { versionId } });
     const threadId = t.body.metadata.id as string;
-    // 经与 router 同源的模块注册产物（同一 module registry,拿到的就是路由用的那个实例）
+    // Artifacts registered via a module sourced identically to the router (same module registry, so we get the very instance the route uses)
     const { registerPersistentArtifact } = await import('../src/pi/space/artifacts.js');
     await registerPersistentArtifact(Buffer.from('older'), { name: '旧报告.docx' }, { threadId, versionId, projectId: crypto.randomUUID() });
     await new Promise((r) => setTimeout(r, 10));
@@ -648,13 +648,13 @@ describe('持久产物（skill 生成文档等）', () => {
     expect(list.body).toHaveLength(2);
     expect(list.body[0]).toMatchObject({ name: '新报告.docx', token, size: 5, count: 5 });
     expect(list.body[0].mime).toContain('wordprocessingml');
-    expect(list.body[1].name).toBe('旧报告.docx'); // 新→旧
+    expect(list.body[1].name).toBe('旧报告.docx'); // newest → oldest
 
-    // responseType('blob'):supertest 对未知二进制 mime 会自作主张解析,body 强制留原始 buffer
+    // responseType('blob'): supertest auto-parses unknown binary mime types on its own; force the body to stay a raw buffer
     const dl = await request(app).get(`/api/assistant/threads/${threadId}/artifacts/${token}`).responseType('blob');
     expect(dl.status).toBe(200);
-    expect(dl.headers['content-type']).toContain('wordprocessingml'); // 不再写死 application/zip
-    expect(dl.headers['content-disposition']).toContain("filename*=UTF-8''"); // RFC 5987 中文文件名
+    expect(dl.headers['content-type']).toContain('wordprocessingml'); // no longer hardcoded application/zip
+    expect(dl.headers['content-disposition']).toContain("filename*=UTF-8''"); // RFC 5987 non-ASCII filename
     expect(dl.body.toString()).toBe('newer');
   });
 
@@ -669,7 +669,7 @@ describe('持久产物（skill 生成文档等）', () => {
     const token = await registerPersistentArtifact(Buffer.from('x'), { name: 'a.docx' }, { threadId, versionId, projectId: crypto.randomUUID() });
 
     expect((await request(app).get(`/api/assistant/threads/${threadId}/artifacts/00000000-0000-4000-8000-000000000000`)).status).toBe(410);
-    // token 属于 threadId,从 otherId 的 URL 访问 → 410(不跨线程泄漏)
+    // The token belongs to threadId; accessing it from otherId's URL → 410 (no cross-thread leak)
     expect((await request(app).get(`/api/assistant/threads/${otherId}/artifacts/${token}`)).status).toBe(410);
     expect((await request(app).get(`/api/assistant/threads/${threadId}/artifacts`)).body).toHaveLength(1);
     expect((await request(app).get(`/api/assistant/threads/${otherId}/artifacts`)).body).toHaveLength(0);

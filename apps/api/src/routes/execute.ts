@@ -19,11 +19,11 @@ export const executeRoute = Router();
 const Body = z.object({ caseId: z.string().uuid() });
 
 /**
- * 单用例执行 → 后台执行 + 立即返回 reportId（执行即跳报告页）。
- * 报告行在执行开始前就落库（status='running'），前端跳到报告页时页面已可渲染，
- * 报告页在 running 期间连 MJPEG 实时画面、2s 轮询到完成。
- * 预检保持同步（case 不存在 404 / 数据集配置错误 400 仍在请求内抛出，不产生垃圾 report）；
- * 预检通过后的执行错误由报告承载（写入 failed report，不留 running 僵尸）。
+ * Single-case execution → run in background + return reportId immediately (execution jumps to the report page).
+ * The report row is persisted before execution starts (status='running'), so the page can already render when the
+ * frontend jumps to the report page; while running, the report page streams the MJPEG live view and polls every 2s until completion.
+ * Preflight stays synchronous (missing case 404 / dataset config error 400 still throw within the request, no garbage report created);
+ * execution errors after preflight are carried by the report (a failed report is written, no running zombie left behind).
  */
 executeRoute.post('/cases/:caseId/execute', async (req, res) => {
   const { caseId } = Body.parse({ caseId: req.params.caseId });
@@ -32,21 +32,21 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!caseRow) throw new HttpError(404, 'not_found', 'case not found');
 
-  // 提前插入 running 报告行拿 reportId：数据集模式每行一条，非数据集单行。
+  // Insert running report rows early to obtain reportIds: one per row in dataset mode, a single row otherwise.
   const preseed: PreseedReport[] = [];
-  // 数据集模式下冻结本次实际执行的下标集合，随 job 下发 ——
-  // worker 侧 loadDatasetForRun 再按同一集合过滤，保证 preseed 与执行行集必然一致
-  // （否则数据集在预检与执行之间被改，会抛 preseed report missing）。
+  // In dataset mode, freeze the set of indexes actually executed this run and ship it with the job —
+  // loadDatasetForRun on the worker side filters by the same set, guaranteeing preseed and the executed row set always agree
+  // (otherwise, if the dataset changed between preflight and execution, "preseed report missing" would be thrown).
   let datasetRowIndexes: number[] | undefined;
   if (caseRow.datasetId) {
     let plan;
     try {
-      plan = await loadDatasetForRun(caseRow.datasetId, { rowIndexes: caseRow.datasetRowIndexes ?? [] }); // 配置错误（无启用行/列名非法/解密失败/行越界）→ 400，不产生垃圾 report
+      plan = await loadDatasetForRun(caseRow.datasetId, { rowIndexes: caseRow.datasetRowIndexes ?? [] }); // Config errors (no enabled rows/illegal column names/decryption failure/row out of range) → 400, no garbage report created
     } catch (e) {
       if (e instanceof DatasetConfigError) throw new HttpError(400, 'dataset_config_error', e.message);
       throw e;
     }
-    // 批次 id：同一次执行的所有行共用（报告详情页行切换器的分组键）。
+    // Batch id: shared by all rows of one execution (the grouping key of the report detail page's row switcher).
     const batchId = randomUUID();
     for (const row of plan.rows) {
       preseed.push({ reportId: await insertRunningReportRow(caseRow, row, req.user!.userId, batchId), rowIndex: row.rowIndex });
@@ -56,7 +56,7 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
     preseed.push({ reportId: await insertRunningReportRow(caseRow, undefined, req.user!.userId), rowIndex: null });
   }
 
-  // 后台执行：优先入队（多副本经 redis 由任一 exec worker 消费）；无 redis 回落 inline（行为与旧一致）。
+  // Background execution: prefer enqueuing (multi-replica, consumed by any exec worker via redis); without redis fall back to inline (behavior unchanged).
   if (isExecutionQueueReady()) {
     try {
       await getExecutionQueue().add(EXEC_QUEUE_NAME, {
@@ -67,7 +67,7 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
         createdByUserId: req.user!.userId,
       });
     } catch (e) {
-      // redis 假成功(配置了但连不上):add reject → 回落 inline,避免预置 running 报告行变僵尸。
+      // redis false success (configured but unreachable): add rejects → fall back to inline, avoiding preseeded running report rows turning into zombies.
       logger.warn({ err: e, caseId }, 'exec queue add failed; running inline');
       void runCaseJob({ caseId, preseed, datasetRowIndexes, createdByUserId: req.user!.userId });
     }
@@ -78,9 +78,9 @@ executeRoute.post('/cases/:caseId/execute', async (req, res) => {
   res.json({ reportId: preseed[0]!.reportId, ...(preseed.length > 1 ? { reportIds: preseed.map((p) => p.reportId) } : {}) });
 });
 
-/** 单用例执行的实时画面（MJPEG）。鉴权与 execute 一致（用例可见性）；key 稳定，执行中才可连。
- *  ?replay=1 为本轮执行的录制回放（执行结束 30min 内，下次执行同 key 时覆盖）；&speed=N 为回放倍速；
- *  ?replay=meta 探测录制是否仍可回放（前端据此决定是否显示「回放」按钮）。 */
+/** Live view (MJPEG) of a single-case execution. Auth same as execute (case visibility); key is stable, connectable only while executing.
+ *  ?replay=1 is the recording replay of the current run (within 30min after the run ends; a run with the same key overwrites it); &speed=N is the replay speed;
+ *  ?replay=meta probes whether the recording is still replayable (the frontend uses this to decide whether to show the "replay" button). */
 executeRoute.get('/cases/:caseId/live', async (req, res) => {
   const caseId = req.params.caseId!;
   await assertCaseVisible(caseId, req.user!);

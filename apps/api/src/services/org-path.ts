@@ -1,4 +1,4 @@
-// 组织 path 纯函数：均以 / 开头、/ 结尾（如 /org-a/org-b/）；此处对无尾斜杠输入做防御性归一化。
+// Org path pure functions: all start and end with / (e.g. /org-a/org-b/); this defensively normalizes inputs missing the trailing slash.
 export function isPathInSubtree(candidatePath: string, ancestorPath: string): boolean {
   const cand = candidatePath.endsWith('/') ? candidatePath : candidatePath + '/';
   const anc = ancestorPath.endsWith('/') ? ancestorPath : ancestorPath + '/';

@@ -1,5 +1,5 @@
-// 一次性工具：从 reqDesign.ts 提取 REQ_DESIGN_METHOD / CASE_AUTHORING_FLOW_ZH/EN 模板字面量，生成 prod228 手动 UPDATE SQL。
-// 用法：node scripts/gen-guide-update-sql.mjs [/tmp/guide_update_0001_0002_0003.sql]
+// One-off tool: extract the REQ_DESIGN_METHOD / CASE_AUTHORING_FLOW_ZH/EN template literals from reqDesign.ts and generate manual UPDATE SQL for prod228.
+// Usage: node scripts/gen-guide-update-sql.mjs [/tmp/guide_update_0001_0002_0003.sql]
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const out = process.argv[2] ?? '/tmp/guide_update_0001_0002_0003.sql';

@@ -1,27 +1,27 @@
 #!/usr/bin/env node
 /**
- * 一次性种子：把 Claude 官方 skill-creator 技能落盘为全局默认 skill。
+ * One-time seed: lay Claude's official skill-creator skill on disk as the global default skill.
  *
- * 背景（2026-10-18 决策，2026-10-19 随存储翻转重写）：
- *  - 用户拍板「仅本次一次落库」——不做代码级默认技能机制，发布 prod228 时执行一次即可，
- *    后续各环境独立按需导入（走 import_skill 或本脚本）。
- *  - 来源：anthropics/skills 仓库 skills/skill-creator（Apache-2.0），完整目录树 18 文件 / 248KB。
- *  - 存储翻转后技能内容【以文件系统为真源】，DB 只留 name/description/enabled。
- *    故本脚本 = 复制整棵目录树到 $PI_DATA_DIR/skills/skill-creator + upsert 元数据行。
- *    （2026-10-19 前是「扁平化落库」：SKILL.md 剥 frontmatter 存 body 列、scripts/ 下
- *    平级 .py 存 scripts 列，并丢弃 agents/ references/ eval-viewer/ assets/。
- *    那正是官方脚本写 `from scripts.xxx import` 却 ModuleNotFoundError 的根因——
- *    扁平安装连 scripts/ 目录都不保留，谈不上是包。）
+ * Background (decision 2026-10-18, rewritten 2026-10-19 along with the storage flip):
+ *  - The user decided "seed to DB once, this time only" -- no code-level default-skill mechanism; just execute once when releasing prod228,
+ *    after which each environment imports independently on demand (via import_skill or this script).
+ *  - Source: anthropics/skills repo, skills/skill-creator (Apache-2.0), full directory tree of 18 files / 248KB.
+ *  - After the storage flip, skill content [has the filesystem as its source of truth]; the DB keeps only name/description/enabled.
+ *    So this script = copy the whole directory tree to $PI_DATA_DIR/skills/skill-creator + upsert the metadata row.
+ *    (Before 2026-10-19 it was "flattened into the DB": SKILL.md stripped of frontmatter into the body column,
+ *    flat .py files under scripts/ into the scripts column, discarding agents/ references/ eval-viewer/ assets/.
+ *    That was the root cause of the official script's `from scripts.xxx import` raising ModuleNotFoundError --
+ *    a flat install doesn't even keep the scripts/ directory, so it can hardly be called a package.)
  *
- * 幂等 + 自愈：
- *  - 磁盘目录已在且有 SKILL.md → 不动它（用户可能改过内容，每次发版覆盖会丢编辑）。
- *  - 目录缺失/空 → 重新铺目录树（修「DB 有行、盘上没目录」的空壳态）。
- *  - DB 行按 ON CONFLICT DO NOTHING 补；旧 schema(body/scripts NOT NULL)下不硬插，
- *    改为告警退出 0——发版流程里 drizzle-kit push 先于本脚本跑，正常不会命中。
+ * Idempotent + self-healing:
+ *  - If the on-disk directory exists with SKILL.md -> leave it alone (the user may have edited content; overwriting at every release loses edits).
+ *  - If the directory is missing/empty -> re-lay the directory tree (fixes the hollow state of "row in DB, no directory on disk").
+ *  - DB rows are filled via ON CONFLICT DO NOTHING; on the old schema (body/scripts NOT NULL) we don't force-insert,
+ *    instead warning and exiting 0 -- in the release flow drizzle-kit push runs before this script, so it normally doesn't trigger.
  *
- * 用法（发布时在 api 容器内）:
+ * Usage (inside the api container at release time):
  *   node /repo/apps/api/scripts/seed-skill-creator.mjs
- * 本地：
+ * Locally:
  *   DATABASE_URL=... PI_DATA_DIR=/tmp/pidata node seed-skill-creator.mjs
  */
 import { readFile, cp, rm, mkdir, readdir, access } from 'node:fs/promises';
@@ -32,7 +32,7 @@ import pg from 'pg';
 const CONTENT_DIR = join(dirname(fileURLToPath(import.meta.url)), 'skill-creator-content');
 const NAME = 'skill-creator';
 
-/** 与 skillImport.parseFrontmatter 同源的极简 frontmatter 取值（够覆盖自产 + 常见第三方）。 */
+/** Minimal frontmatter value extraction with the same semantics as skillImport.parseFrontmatter (enough to cover self-produced + common third-party skills). */
 function parseFrontmatter(raw) {
   const m = /^---\n([\s\S]*?)\n---/.exec(raw);
   if (!m) return {};
@@ -48,7 +48,7 @@ function parseFrontmatter(raw) {
   return out;
 }
 
-/** 递归数文件数（只发计数，不把 248KB 打进日志）。 */
+/** Recursively count files (emit only the count; don't dump 248KB into the log). */
 async function countFiles(dir) {
   let n = 0;
   for (const e of await readdir(dir, { withFileTypes: true })) {
@@ -59,14 +59,14 @@ async function countFiles(dir) {
 }
 
 /**
- * 递归删除 AppleDouble 残骸（`._xxx`）。
+ * Recursively remove AppleDouble leftovers (`._xxx`).
  *
- * macOS 会把扩展属性（com.apple.provenance 等）写进 tar 的 pax 头，服务器侧
- * GNU tar 虽忽略这些头，资源叉内容仍会落成 `._xxx` 文件——实测 skill-creator
- * 18 个文件在远端变成 41 个。这些文件对技能内容毫无意义，却会：
- *   1) 被 read_skill 的文件树当成真实文件列出来（模型看到 ._SKILL.md 这种噪声）；
- *   2) 让 run_skill_script 的脚本清单出现幽灵条目。
- * 故铺目录前先清干净，铺完再清一次（防旧目录已被污染）。
+ * macOS writes extended attributes (com.apple.provenance etc.) into tar's pax headers; although
+ * server-side GNU tar ignores those headers, resource-fork content still lands as `._xxx` files -- in practice
+ * skill-creator's 18 files became 41 on the remote side. These files are meaningless to skill content, yet they:
+ *   1) get listed as real files in read_skill's file tree (the model sees noise like ._SKILL.md);
+ *   2) introduce ghost entries into run_skill_script's script list.
+ * Hence clean before laying the directory, and clean once more after (in case the old directory was already polluted).
  */
 async function pruneAppleDouble(dir) {
   let removed = 0;
@@ -98,22 +98,22 @@ async function main() {
     : '/repo/apps/api/.data/skills';
   const target = join(root, NAME);
 
-  // 目录是发布物，但要尊重用户编辑：只有缺失/空才铺。
-  // 早先版本是无条件 rm+cp，导致每次发版都把用户在设置页里改过的 SKILL.md 冲掉。
+  // The directory is a release artifact, but respect user edits: only seed when missing/empty.
+  // An earlier version did unconditional rm+cp, wiping the SKILL.md the user had edited on the settings page at every release.
   let seeded = false;
   try {
     await access(join(target, 'SKILL.md'));
   } catch {
     await rm(target, { recursive: true, force: true });
     await mkdir(root, { recursive: true });
-    // 源目录也可能是被污染的（镜像由更早的 tarball 构建），铺之前先清。
+    // The source directory may also be polluted (the image was built from an earlier tarball); clean before laying.
     await pruneAppleDouble(CONTENT_DIR);
     await cp(CONTENT_DIR, target, { recursive: true });
     seeded = true;
   }
 
-  // 已有目录同样要清：AppleDouble 是历史 tarball 留下的，不属于用户编辑，
-  // 清掉不丢任何真实内容（真实文件一律不动）。
+  // Existing directories get cleaned too: AppleDouble is left by historical tarballs and is not a user edit;
+  // removing it loses no real content (real files are never touched).
   const pruned = await pruneAppleDouble(target);
   if (pruned > 0) {
     console.log(`已清理 ${pruned} 个 AppleDouble 残骸文件（${target}）`);
@@ -125,11 +125,11 @@ async function main() {
   await client.connect();
   try {
     const fileCount = await countFiles(target);
-    // 注意列集：body/scripts 已随存储翻转 drop，写进去会直接报 undefined_column。
-    // 反向也真实存在过：库还是旧 schema 时 body/scripts 是 NOT NULL，
-    // 而 NOT NULL 约束在 ON CONFLICT 冲突仲裁【之前】求值——即使这行已存在、
-    // 冲突会被 DO NOTHING 吞掉，INSERT 仍先因 body 为 NULL 而失败。
-    // 那种情况下技能目录已经落好了，DB 行也已存在，没有可补的，告警即可，不能让发版红掉。
+    // Note the column set: body/scripts were dropped along with the storage flip; writing them would immediately raise undefined_column.
+    // The reverse also really happened: while the DB was still on the old schema, body/scripts were NOT NULL,
+    // and the NOT NULL constraint is evaluated [before] ON CONFLICT arbitration -- even if this row already exists and
+    // the conflict would be swallowed by DO NOTHING, the INSERT still fails first because body is NULL.
+    // In that case the skill directory is already laid down and the DB row exists; there is nothing to backfill -- just warn, never turn the release red.
     let inserted = false;
     let r;
     try {

@@ -69,17 +69,17 @@ describe('datasets.service', () => {
     const svc = await import('../src/services/datasets.service.js');
     const created = await svc.createDataset(projectId, body);
     expect(created.id).toBeTruthy();
-    // 落库形态：敏感格是密文三元组，不是明文
+    // persisted shape: sensitive cells are ciphertext triples, not plaintext
     const raw = await pool.query(`SELECT rows FROM datasets WHERE id = $1`, [created.id]);
     const cell = raw.rows[0].rows[0].cells.password;
     expect(typeof cell).toBe('object');
     expect(cell.c).toBeTruthy();
     expect(cell.c).not.toContain('pw-1');
-    // 出参：敏感格占位、明文列原样
+    // output: sensitive cells masked, plaintext columns untouched
     const detail = await svc.getDataset(created.id);
     expect(detail!.rows[0].cells.username).toBe('alice');
     expect(detail!.rows[0].cells.password).toEqual({ __masked: true });
-    // 写路径出参也必须是掩码（路由直接 res.json 该返回值）
+    // the write path's response must be masked too (the route res.jsons this value directly)
     expect(created.rows[0].cells.password).toEqual({ __masked: true });
     expect(JSON.stringify(created)).not.toContain('pw-1');
   });
@@ -87,7 +87,7 @@ describe('datasets.service', () => {
   it('updateDataset：__masked 回传沿用旧密文（解密可还原），改字符串则重新加密', async () => {
     const svc = await import('../src/services/datasets.service.js');
     const created = await svc.createDataset(projectId, { ...body, name: '账号2' });
-    // 行 0 密码不改（占位回传），行 1 改成新明文
+    // row 0's password unchanged (placeholder sent back), row 1 changed to new plaintext
     const detail = await svc.getDataset(created.id);
     const rows = detail!.rows.map((r, i) => ({
       disabled: false,
@@ -99,7 +99,7 @@ describe('datasets.service', () => {
     await svc.updateDataset(created.id, { name: '账号2', columns: body.columns, rows });
     const run = await svc.loadDatasetForRun(created.id);
     expect(run.rows).toHaveLength(2);
-    expect(run.rows[0].vars.password).toBe('pw-1'); // 旧密文沿用 → 仍可解出原值
+    expect(run.rows[0].vars.password).toBe('pw-1'); // old ciphertext reused -> original value still decryptable
     expect(run.rows[1].vars.password).toBe('pw-new');
   });
 
@@ -110,7 +110,7 @@ describe('datasets.service', () => {
       name: '账号3',
       columns: [
         { name: 'username', sensitive: false },
-        { name: 'password', sensitive: false }, // 去敏
+        { name: 'password', sensitive: false }, // de-sensitized
       ],
       rows: body.rows.map(() => ({ disabled: false, cells: { username: 'x', password: { __masked: true } } })),
     });
@@ -126,17 +126,17 @@ describe('datasets.service', () => {
       name: '改名账号',
       columns: [
         { name: 'username', sensitive: false },
-        { name: 'secret', sensitive: true }, // password → secret
+        { name: 'secret', sensitive: true }, // password -> secret
       ],
       renames: { password: 'secret' },
       rows: detail!.rows.map((r) => ({
         disabled: false,
-        cells: { username: r.cells.username as string, secret: r.cells.password }, // __masked 原样回传
+        cells: { username: r.cells.username as string, secret: r.cells.password }, // __masked echoed back as-is
       })),
     });
-    // 出参仍是掩码（不是空串）→ 密文没有丢
+    // output is still the mask (not an empty string) -> the ciphertext wasn't dropped
     expect(updated.rows[0].cells.secret).toEqual({ __masked: true });
-    // 解密存活：改名后按新列名仍解出原明文
+    // decryption survives: after the rename the original plaintext still decrypts under the new column name
     const run = await svc.loadDatasetForRun(created.id);
     expect(run.rows[0].vars.secret).toBe('pw-1');
     expect(run.rows[1].vars.secret).toBe('pw-2');
@@ -156,7 +156,7 @@ describe('datasets.service', () => {
     expect(missing).toBeInstanceOf(HttpError);
     expect((missing as HttpError).status).toBe(400);
     expect((missing as HttpError).message).toContain('renames');
-    // renames 目标列不在本次列集 → 同样 400
+    // renames target column not in this column set -> also 400
     const badTarget = await svc.updateDataset(created.id, {
       name: '改名无声明',
       columns: [{ name: 'username', sensitive: false }, { name: 'secret', sensitive: true }],
@@ -176,7 +176,7 @@ describe('datasets.service', () => {
     );
     const e = await svc.updateDataset(created.id, {
       name: '坏密文去敏',
-      columns: [{ name: 'username', sensitive: false }, { name: 'password', sensitive: false }], // 去敏触发解密
+      columns: [{ name: 'username', sensitive: false }, { name: 'password', sensitive: false }], // de-sensitization triggers decryption
       rows: [{ disabled: false, cells: { username: 'x', password: { __masked: true } } }],
     }).catch((err: unknown) => err);
     expect(e).toBeInstanceOf(HttpError);
@@ -216,7 +216,7 @@ describe('datasets.service', () => {
 
   it('createDataset 重名报 409', async () => {
     const svc = await import('../src/services/datasets.service.js');
-    // 注意：'登录账号' 已被首个用例占用，这里用独立名字避免跨用例冲突
+    // note: '登录账号' is already taken by the first case; use a distinct name here to avoid cross-case conflicts
     const dupBody = { ...body, name: '账号-重名' };
     await svc.createDataset(projectId, dupBody);
     const conflict = await svc.createDataset(projectId, dupBody).catch((e: unknown) => e);
@@ -260,7 +260,7 @@ describe('datasets.service', () => {
     await pool.query(`INSERT INTO test_cases(group_id, version_id, title, dataset_id) VALUES ($1, $2, '绑定用例', $3)`, [groupId, versionId, created.id]);
     expect((await svc.datasetUsage(created.id)).caseCount).toBe(1);
     await svc.deleteDataset(created.id);
-    // FK SET NULL：用例自动解绑
+    // FK SET NULL: the case auto-unbinds
     const c = await pool.query(`SELECT dataset_id FROM test_cases WHERE version_id = $1`, [versionId]);
     expect(c.rows[0].dataset_id).toBeNull();
   });
@@ -276,27 +276,27 @@ describe('datasets.service', () => {
         { disabled: false, cells: { username: 'carol', password: 'pw-2' } },
       ],
     });
-    // 不传 = 全部启用行（旧行为）
+    // not passed = all enabled rows (legacy behavior)
     const all = await svc.loadDatasetForRun(created.id);
     expect(all.rows).toHaveLength(3);
     expect(all.rows.map((r) => r.rowIndex)).toEqual([0, 1, 2]);
     expect(all.rows[0].totalRows).toBe(3);
-    // 只选第 2 行（启用空间下标 1）
+    // select only row 2 (enabled-space index 1)
     const one = await svc.loadDatasetForRun(created.id, { rowIndexes: [1] });
     expect(one.rows).toHaveLength(1);
     expect(one.rows[0].rowIndex).toBe(1);
     expect(one.rows[0].vars.username).toBe('bob');
-    // totalRows = 本批次执行行数（分母口径）
+    // totalRows = number of rows executed in this batch (denominator semantics)
     expect(one.rows[0].totalRows).toBe(1);
     expect(one.rows[0].snapshot.totalRows).toBe(1);
-    // 选多行 → 按数据集行序执行
+    // multiple rows selected -> executed in dataset row order
     const many = await svc.loadDatasetForRun(created.id, { rowIndexes: [2, 0] });
     expect(many.rows.map((r) => r.rowIndex)).toEqual([0, 2]);
     expect(many.rows[0].totalRows).toBe(2);
-    // 空数组 = 所有行
+    // empty array = all rows
     const emptySel = await svc.loadDatasetForRun(created.id, { rowIndexes: [] });
     expect(emptySel.rows).toHaveLength(3);
-    // 越界 → 抛错（宁可不跑，也不跑错行）
+    // out of range -> throws (better to skip than run the wrong row)
     await expect(svc.loadDatasetForRun(created.id, { rowIndexes: [5] })).rejects.toThrow('超出该数据集的启用行范围');
   });
 
@@ -311,12 +311,12 @@ describe('datasets.service', () => {
         { disabled: false, cells: { username: 'bob', password: 'pw-2' } },
       ],
     });
-    // 启用行只有 2 行 → 下标 0/1；选 1 = 第二个启用行（原始位置 2）
+    // only 2 enabled rows -> indices 0/1; selecting 1 = the second enabled row (original position 2)
     const one = await svc.loadDatasetForRun(created.id, { rowIndexes: [1] });
     expect(one.rows).toHaveLength(1);
     expect(one.rows[0].rowIndex).toBe(1);
     expect(one.rows[0].vars.username).toBe('bob');
-    // 选 2 已越界（启用行只有 2 条）
+    // selecting 2 is out of range (only 2 enabled rows)
     await expect(svc.loadDatasetForRun(created.id, { rowIndexes: [2] })).rejects.toThrow('超出该数据集的启用行范围');
   });
 
@@ -460,7 +460,7 @@ describe('case dataset binding', () => {
     const detail = await request(app).get(`/api/cases/${caseId}`);
     expect(detail.body.datasetRowIndexes).toEqual([0, 1]);
 
-    // [] = 所有启用行（默认口径）
+    // [] = all enabled rows (default semantics)
     const empty = await request(app).patch(`/api/cases/${caseId}`).send({ datasetRowIndexes: [] });
     expect(empty.status).toBe(200);
     expect(empty.body.datasetRowIndexes).toEqual([]);
@@ -486,7 +486,7 @@ describe('case dataset binding', () => {
     const created = await svc.createDataset(projectId, { ...body, name: '一次保存数据集' });
     const caseId = await newCase('一次保存用例');
 
-    // 前端「先选数据集 → 选行 → 一次保存」：datasetId 与 datasetRowIndexes 同时到达
+    // frontend "select dataset -> select rows -> save once": datasetId and datasetRowIndexes arrive together
     const both = await request(app).patch(`/api/cases/${caseId}`).send({
       datasetId: created.id,
       datasetRowIndexes: [1],
@@ -502,12 +502,12 @@ describe('case dataset binding', () => {
     const ds1 = await svc.createDataset(projectId, { ...body, name: '数据集甲' });
     const ds2 = await svc.createDataset(projectId, { ...body, name: '数据集乙' });
 
-    // 没有数据集时选行 → 400
+    // selecting rows without a dataset -> 400
     const noDs = await newCase('无数据集选行');
     const bad = await request(app).patch(`/api/cases/${noDs}`).send({ datasetRowIndexes: [0] });
     expect(bad.status).toBe(400);
 
-    // 解绑 → 选择清空
+    // unbind -> selection cleared
     const caseId = await newCase('解绑清空');
     await request(app).patch(`/api/cases/${caseId}`).send({ datasetId: ds1.id });
     await request(app).patch(`/api/cases/${caseId}`).send({ datasetRowIndexes: [0] });
@@ -515,7 +515,7 @@ describe('case dataset binding', () => {
     expect(unbind.status).toBe(200);
     expect(unbind.body.datasetRowIndexes).toEqual([]);
 
-    // 换数据集 → 选择重置（下标空间属于旧数据集）
+    // switching dataset -> selection reset (the index space belongs to the old dataset)
     const caseId2 = await newCase('换数据集重置');
     await request(app).patch(`/api/cases/${caseId2}`).send({ datasetId: ds1.id });
     await request(app).patch(`/api/cases/${caseId2}`).send({ datasetRowIndexes: [1] });
@@ -542,11 +542,11 @@ describe('case dataset binding', () => {
       ],
     });
     expect(put.status).toBe(200);
-    // 数据集列（username）与已 extract 的 token 不误报未定义
+    // dataset columns (username) and the already-extracted token are not falsely reported as undefined
     const names: string[] = put.body.variableReport.undefined.map((u: { name: string }) => u.name);
     expect(names).not.toContain('username');
     expect(names).not.toContain('token');
-    // orderNo 既不在数据集列也没 extract，且位于 compiled[1]（第二个动作）——必须被扁平化检出，stepOrder 映射回步骤 3
+    // orderNo is neither a dataset column nor extracted, and sits in compiled[1] (the second action) -- it must be caught by flattening, with stepOrder mapped back to step 3
     expect(put.body.variableReport.undefined).toContainEqual({ stepOrder: 3, field: 'assertText.equals', name: 'orderNo' });
   });
 });

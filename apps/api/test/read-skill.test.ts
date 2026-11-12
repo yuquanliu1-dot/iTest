@@ -27,8 +27,8 @@ afterAll(async () => {
 describe('read_skill（全局 skills 库）', () => {
   it('读 SKILL.md 正文（剥 frontmatter）+ 递归文件树', () => {
     const hit = readSkillDir(root, 'echo');
-    expect(hit?.body).toBe('正文EchoBody'); // 前置 YAML 前言被剥掉，只回正文本体
-    expect(hit?.body).not.toContain('name:'); // 不漏前言噪音（catalog 已有 name/description）
+    expect(hit?.body).toBe('正文EchoBody'); // leading YAML frontmatter stripped, only the body returned
+    expect(hit?.body).not.toContain('name:'); // no frontmatter noise leaks (catalog already has name/description)
     const paths = hit?.files.map((f) => f.path) ?? [];
     expect(paths).toContain('scripts');
     expect(paths).toContain('scripts/a.js');
@@ -36,7 +36,7 @@ describe('read_skill（全局 skills 库）', () => {
     expect(paths).toContain('agents');
     expect(paths).toContain('agents/grader.md');
     expect(paths.some((p) => p.includes('.git'))).toBe(false);
-    // runtime 按扩展名标注（.py→python3 / .js→node），非可执行文件不给
+    // runtime is annotated by extension (.py→python3 / .js→node); non-executable files get none
     expect(hit?.files.find((f) => f.path === 'scripts/b.py')?.runtime).toBe('python3');
     expect(hit?.files.find((f) => f.path === 'scripts/a.js')?.runtime).toBe('node');
     expect(hit?.files.find((f) => f.path === 'agents/grader.md')?.runtime).toBeUndefined();
@@ -47,15 +47,15 @@ describe('read_skill（全局 skills 库）', () => {
     expect(readSkillDir(root, '/etc')).toBeNull();
     expect(readSkillDir(root, '../echo')).toBeNull();
     expect(readSkillDir(root, 'echo/../../etc')).toBeNull();
-    expect(readSkillDir(root, '')).toBeNull(); // 空名也拒绝（resolve 到 root 本身）
-    expect(readSkillDir(root, '.git')).toBeNull(); // 隐藏段逐段拒
+    expect(readSkillDir(root, '')).toBeNull(); // empty name rejected too (would resolve to root itself)
+    expect(readSkillDir(root, '.git')).toBeNull(); // hidden segments rejected segment by segment
   });
 
   it('readSkillFile：读单文件 + 越界/软链拒绝', () => {
     expect(readSkillFile(root, 'echo', 'agents/grader.md')).toBe('grader 正文');
     expect(readSkillFile(root, 'echo', '../../etc/passwd')).toBeNull();
     expect(readSkillFile(root, 'echo', '/etc/passwd')).toBeNull();
-    expect(readSkillFile(root, 'echo', 'scripts')).toBeNull(); // 目录不是文件
+    expect(readSkillFile(root, 'echo', 'scripts')).toBeNull(); // a directory is not a file
     expect(readSkillFile(root, 'echo', 'no-such.md')).toBeNull();
   });
 
@@ -66,7 +66,7 @@ describe('read_skill（全局 skills 库）', () => {
     expect(s).toContain('read_skill');
     expect(s).toContain('file=');
     expect(s).toContain('run_skill_script');
-    expect(s).not.toContain('正文EchoBody'); // catalog-only，正文靠 read_skill 取
+    expect(s).not.toContain('正文EchoBody'); // catalog only; the body is fetched via read_skill
   });
 
   it('buildSkillsSectionContent：name/description 中的 XML 特殊字符被转义（防提示词注入）', () => {
@@ -75,7 +75,7 @@ describe('read_skill（全局 skills 库）', () => {
     ]);
     expect(s).toContain('name="a&quot;b&lt;c&gt;&amp;d"');
     expect(s).toContain('description="say &quot;hi&quot; &amp; &lt;bye&gt;"');
-    expect(s).not.toContain('a"b<c>'); // 原始尖括号/引号不得原样出现
+    expect(s).not.toContain('a"b<c>'); // raw angle brackets/quotes must not appear as-is
   });
 });
 
@@ -102,7 +102,7 @@ describe('listSkillTree / countSkillFiles', () => {
     ]);
     expect(tree.find((n) => n.path === 'scripts/run.py')?.runtime).toBe('python3');
     expect(tree.find((n) => n.path === 'scripts/tool.sh')?.runtime).toBe('bash');
-    expect(tree.find((n) => n.path === 'references/schemas.md')?.runtime).toBeUndefined(); // 非可执行扩展名不给 runtime
+    expect(tree.find((n) => n.path === 'references/schemas.md')?.runtime).toBeUndefined(); // non-executable extensions get no runtime
 
     await fs.rm(dir, { recursive: true, force: true });
   });
@@ -117,7 +117,7 @@ describe('listSkillTree / countSkillFiles', () => {
     const paths = listSkillTree(dir).map((n) => n.path);
     expect(paths.sort()).toEqual(['SKILL.md', 'scripts', 'scripts/run.py']);
     expect(paths.some((p) => p.includes('__pycache__'))).toBe(false);
-    // 字节码不是内容，不计入文件数
+    // Bytecode is not content; it must not count toward the file total
     expect(countSkillFiles(dir).fileCount).toBe(2);
 
     await fs.rm(dir, { recursive: true, force: true });

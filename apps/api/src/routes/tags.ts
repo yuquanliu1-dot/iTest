@@ -9,7 +9,7 @@ import { visibleOrgIdsFor } from '../services/orgTree.js';
 import { cache, wrap } from '../lib/cache.js';
 import { tagsKey } from '../lib/cache-keys.js';
 
-// HEX 颜色：可带 # 前缀，最长 16 字符（库列宽）
+// HEX color: may carry a # prefix, max 16 chars (DB column width)
 const hexColor = z.string().regex(/^#?[0-9a-fA-F]{3,8}$/, 'invalid hex color').max(16);
 
 const CreateBody = z.object({
@@ -24,11 +24,11 @@ const PatchBody = z.object({
 });
 
 function normalizeColor(raw: string): string {
-  // 存库统一为无 `#` 小写；前端 chip 直接 `#{color}`
+  // Stored in the DB uniformly as lowercase without `#`; the frontend chip uses `#{color}` directly
   return raw.replace(/^#/, '').toLowerCase();
 }
 
-/** 解析 project → 所属 org id（经 product_lines）；找不到抛 404。 */
+/** Resolve project → owning org id (via product_lines); throws 404 when not found. */
 async function resolveOrgIdForProject(projectId: string): Promise<string> {
   const rows = await db
     .select({ organizationId: productLines.organizationId })
@@ -43,8 +43,8 @@ async function resolveOrgIdForProject(projectId: string): Promise<string> {
 
 export const tagsRoute = Router({ mergeParams: true });
 
-/** GET /api/projects/:projectId/tags — 列出「项目所属组织」下的全部 tag。
- *  组织级共享：同 org 下所有项目可见全员 tag。
+/** GET /api/projects/:projectId/tags — list all tags under the project's owning org.
+ *  Org-level sharing: every project in the same org sees the org-wide tags.
  */
 tagsRoute.get('/', async (req, res) => {
   const { projectId } = req.params as { projectId: string };
@@ -76,8 +76,8 @@ tagsRoute.post('/', async (req, res) => {
   }
 });
 
-/** PATCH /:tagId — 按 tagId 找 tag；要求 tag 所属组织对当前用户可见。
- *  名字唯一性仅在 tag 所在 org 内判定。
+/** PATCH /:tagId — find the tag by tagId; requires the tag's org to be visible to the current user.
+ *  Name uniqueness is judged only within the tag's org.
  */
 tagsRoute.patch('/:tagId', async (req, res) => {
   const { tagId } = req.params as { projectId: string; tagId: string };
@@ -86,7 +86,7 @@ tagsRoute.patch('/:tagId', async (req, res) => {
   const existing = await db.select().from(tags).where(eq(tags.id, tagId)).limit(1);
   const row = existing[0];
   if (!row) throw new HttpError(404, 'not_found', 'tag not found');
-  // 验证 tag 所在组织对当前用户可见
+  // Verify the tag's org is visible to the current user
   const visible = await visibleOrgIdsFor(req.user!);
   if (!visible.has(row.organizationId)) throw new HttpError(404, 'not_found', 'tag not found');
 
@@ -113,8 +113,8 @@ tagsRoute.patch('/:tagId', async (req, res) => {
   }
 });
 
-/** DELETE /:tagId — 同样按 tagId + org 可见性校验。
- *  onDelete cascade 会自动解除 caseTags。
+/** DELETE /:tagId — same tagId + org visibility checks.
+ *  onDelete cascade unbinds caseTags automatically.
  */
 tagsRoute.delete('/:tagId', async (req, res) => {
   const { tagId } = req.params as { projectId: string; tagId: string };
@@ -129,14 +129,14 @@ tagsRoute.delete('/:tagId', async (req, res) => {
   res.json({ ok: true });
 });
 
-// 仅在同模块内被引用；保持 PG 唯一冲突识别简单
+// Only referenced within this module; keeps PG unique-violation detection simple
 function isUniqueViolation(e: unknown): boolean {
   if (!e || typeof e !== 'object') return false;
   const code = (e as { code?: string }).code;
   return code === '23505';
 }
 
-// 静默引用，保留项目类型解析路径
+// Silent references, keeping the project type-resolution path
 void projects;
 void organizations;
 void inArray;

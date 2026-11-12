@@ -54,7 +54,7 @@ describe('case status', () => {
     expect(r.body.status).toBe('review');
     const again = await request(app).patch(`/api/cases/${c.id}`).send({ status: 'deprecated' });
     expect(again.body.status).toBe('deprecated');
-    // 自由回退
+    // Free rollback
     const back = await request(app).patch(`/api/cases/${c.id}`).send({ status: 'draft' });
     expect(back.body.status).toBe('draft');
   });

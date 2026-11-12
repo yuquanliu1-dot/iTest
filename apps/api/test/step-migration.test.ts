@@ -113,8 +113,8 @@ describe('sanitizeAssertion — 只做形状规范化', () => {
   });
 
   it('描述性短语不再按词表丢弃 —— 由 LLM 在真实页面上判定', () => {
-    // 硬编码词表追不完新写法，还误伤含「提示」「需」的真实文案。
-    // 这里只保证内容原样进库，判定交给 assertionJudge。
+    // A hardcoded word list can never keep up with new phrasings, and it wrongly killed real copy containing 「提示」/「需」.
+    // Here we only guarantee the content enters the DB verbatim; judging is left to assertionJudge.
     expect(sanitizeAssertion('登录表单正常展示')).toBe('登录表单正常展示');
     expect(sanitizeAssertion('账号已触发锁定且未到期')).toBe('账号已触发锁定且未到期');
     expect(sanitizeAssertion('应该显示错误提示')).toBe('应该显示错误提示');

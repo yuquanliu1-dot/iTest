@@ -1,7 +1,7 @@
 /**
- * 版本空间 AI 助手线程 supervisor(pi/space)。
- * 绑定 versionId、一线程一 session、一版本可多线程。
- * 上下文摘要经 system prompt 注入(session 创建时)。
+ * Version-space AI assistant thread supervisor (pi/space).
+ * Bound to versionId, one session per thread, one version can have many threads.
+ * The context summary is injected via the system prompt (at session creation).
  */
 import { and, eq } from 'drizzle-orm';
 import fs from 'node:fs/promises';
@@ -37,11 +37,11 @@ import {
   publishThreadCancel, publishThreadEvent, startThreadCommandWatch, threadRunRemote, THREAD_RUN_PREFIX,
 } from './threadBus.js';
 
-/** pi 会话 JSONL 落盘目录。落 .data 共享卷(prod228 三副本共享),不能走 pi 默认的
- *  ~/.pi/agent/sessions(容器内本地盘,跨副本看不见)。 */
+/** pi session JSONL persistence directory. Lives on the .data shared volume (shared by prod228's three replicas); must not use pi's default
+ *  ~/.pi/agent/sessions (local disk inside the container, invisible across replicas). */
 export const SESSIONS_ROOT = path.join(DATA_DIR, 'pi-sessions');
 
-/** 图片附件（pi-ai 的 ImageContent 形状）：base64 裸串，不带 data: 前缀。 */
+/** Image attachment (pi-ai's ImageContent shape): bare base64 string, without the data: prefix. */
 export interface SpacePromptImage {
   data: string;
   mimeType: string;
@@ -49,24 +49,24 @@ export interface SpacePromptImage {
 
 export interface SpaceSessionLike {
   subscribe(fn: (e: unknown) => void): () => void;
-  /** streamingBehavior 见 sendSpaceUserMessage:运行中不传会被 Pi 拒收。
-   *  images 见 sendSpaceUserMessage:与 pi PromptOptions.images 同形。 */
+  /** For streamingBehavior see sendSpaceUserMessage: omitting it while running gets rejected by Pi.
+   *  For images see sendSpaceUserMessage: same shape as pi PromptOptions.images. */
   prompt(text: string, options?: { streamingBehavior?: 'steer' | 'followUp'; images?: SpacePromptImage[] }): Promise<void>;
   abort(): void;
-  // pi v0.99.2 的 AgentSession.dispose 是同步 void（agent-session.d.ts:362）；不要 await。
+  // pi v0.99.2's AgentSession.dispose is synchronous void (agent-session.d.ts:362); do not await.
   dispose(): void;
-  /** 清空 Pi 服务端排队消息并返回被清内容（供 UI 还原到输入框）。 */
+  /** Clear Pi's server-side queued messages and return the cleared content (for the UI to restore into the input box). */
   clearQueue(): { steering: string[]; followUp: string[] };
   readonly isStreaming: boolean;
-  // pi AgentSession 的公开 getter（agent-session.d.ts:421/757/387），快照用它带出压缩/重试
-  // 活动标志。可选：测试桩不实现，真实 session 恒有。
+  // pi AgentSession's public getters (agent-session.d.ts:421/757/387); the snapshot uses them to carry out the
+  // compaction/retry activity flags. Optional: test stubs don't implement them, real sessions always have them.
   readonly isCompacting?: boolean;
   readonly isRetrying?: boolean;
   readonly retryAttempt?: number;
   messages: unknown[];
-  /** 压缩摘要摘掉的历史前缀（branch 上 firstKeptEntryId 之前的 entries 转消息）。
-   *  快照用它把全量历史按时间序拼进对话流——与活投影严格互补不交，整体替换语义下
-   *  前端缓存不可能重复。测试桩可不实现（快照侧 ?? [] 兜底）。 */
+  /** The history prefix dropped by the compaction summary (entries before firstKeptEntryId on the branch, converted back to messages).
+   *  The snapshot uses it to splice the full history into the conversation stream in time order — strictly complementary and disjoint with the
+   *  live projection, so under whole-replacement semantics the frontend cache can never duplicate. Test stubs may omit it (snapshot side falls back to ?? []). */
   preCompactionMessages?(): unknown[];
 }
 
@@ -74,18 +74,18 @@ export interface SpaceThreadContext {
   threadId: string;
   versionId: string;
   projectId: string;
-  /** 仓库后台检出状态(session 建立时通常未就绪;检出完成/失败后字段就位)。 */
+  /** Background repo checkout state (usually not ready when the session is built; fields populated once checkout completes/fails). */
   repo: RepoState;
-  /** 线程创建人：AI 代建对象(env/plan/...)以它为归属；历史线程为 null。 */
+  /** Thread creator: objects created by the AI on the user's behalf (env/plan/...) are attributed to them; null for historical threads. */
   createdByUserId: string | null;
-  /** 线程创建人是否为有效管理员（管理类工具注册闸门）；历史线程为 false。 */
+  /** Whether the thread creator is an effective manager (gate for registering management tools); false for historical threads. */
   manager: boolean;
-  /** 线程创建人界面语言，历史线程缺省 zh-CN。 */
+  /** Thread creator's UI language; historical threads default to zh-CN. */
   lang?: AiLang;
-  /** 已有会话的 JSONL 绝对路径(ai_threads.pi_thread_id)。为空串 → create 新建;
-   *  有值 → 一律 open:文件在则恢复历史,文件缺失 pi 内部 newSession 并复用同一路径(不抛错)。 */
+  /** Absolute path of the existing session's JSONL (ai_threads.pi_thread_id). Empty string → create new;
+   *  non-empty → always open: if the file exists, restore history; if missing, pi internally newSession's and reuses the same path (no throw). */
   piThreadId?: string;
-  /** 线程用途：'rca' 根因分析线程（save_rca_result 注册闸门）；缺省 'chat'。 */
+  /** Thread purpose: 'rca' root-cause-analysis thread (gate for registering save_rca_result); default 'chat'. */
   purpose?: string;
 }
 
@@ -97,42 +97,42 @@ interface ThreadRecord {
   session: SpaceSessionLike;
   listeners: Set<(e: unknown) => void>;
   unsub: () => void;
-  /** 已分配的最大事件 seq。 Redis 全局单调(itest:thread-seq:<id> INCR),冷构建时读当前
-   *  高水位作基线;SSE 快照信封与 snapshotOf 都用它——前端靠它区分「旧事件」与「序列重置」。 */
+  /** Maximum allocated event seq. Globally monotonic via Redis (itest:thread-seq:<id> INCR); on cold build, read the current
+   *  high watermark as the baseline; used by both the SSE snapshot envelope and snapshotOf — the frontend relies on it to distinguish "old events" from "sequence reset". */
   seq: number;
-  /** 事件串行泵:fanOut/emitThreadEvent 只入队,泵任务依次 INCR 分配 seq → 发布镜像 →
-   *  送达本地 listeners。链式 Promise 保证 FIFO;单条失败由 catch 兜住不拖垮后续。 */
+  /** Event serialization pump: fanOut/emitThreadEvent only enqueue; the pump task INCRs to allocate seq → publishes the mirror →
+   *  delivers to local listeners. Chained Promises guarantee FIFO; a single failure is caught and does not drag down the rest. */
   seqQueue: Promise<void>;
   turnIndex: number;
-  /** 仓库后台检出状态(与工厂/工具共享同一可变引用)。 */
+  /** Background repo checkout state (same mutable reference shared with the factory/tools). */
   repo: RepoState;
-  /** 线程创建人界面语言(buildSpaceRecord 解析;推荐追问生成用它选提示词语言)。 */
+  /** Thread creator's UI language (resolved in buildSpaceRecord; suggested-follow-up generation uses it to pick the prompt language). */
   lang: AiLang;
-  /** 断线重连重放缓冲:emitThreadEvent 追加的会话内自定义事件(条数有界 + TTL 双重上限)。 */
+  /** Disconnect-reconnect replay buffer: in-session custom events appended by emitThreadEvent (bounded by count + TTL). */
   customEvents: CustomEventRecord[];
-  /** 跨副本运行闸门:runs>0 期间持有 itest:thread-run 锁并 5s 心跳续期(见 acquireRunSlot)。 */
+  /** Cross-replica run gate: while runs>0, holds the itest:thread-run lock with 5s heartbeat renewal (see acquireRunSlot). */
   runs: number;
   runLock: RedisLock | null;
   runHeartbeat: NodeJS.Timeout | null;
 }
 
-/** 重放缓冲条目:事件体 + 发布时间。重放只补最近 CUSTOM_EVENT_REPLAY_TTL_MS 内的事件——
- *  隔夜/跨会话的陈旧进度卡(verify/announce)不会在重开线程或重进页面时复活。 */
+/** Replay buffer entry: event body + publish time. Replay only covers events within the last CUSTOM_EVENT_REPLAY_TTL_MS —
+ *  stale progress cards (verify/announce) from overnight/other sessions do not resurrect when reopening a thread or re-entering the page. */
 interface CustomEventRecord {
   publishedAt: number;
   ev: Record<string, unknown>;
 }
 
-/** 缓冲条数上限:超限从最旧丢起(verify_case 20 步约 43 条事件,100 足够装下两轮)。 */
+/** Buffer count cap: beyond it, drop from the oldest (a 20-step verify_case produces ~43 events; 100 holds two rounds). */
 const MAX_CUSTOM_EVENT_BUFFER = 100;
-/** 重放 TTL:只补 60min 内的事件(覆盖 verify_case 全局看门狗上限与 confirm 5min 挂起)。 */
+/** Replay TTL: only cover events within 60min (covers verify_case's global watchdog cap and confirm's 5min pending window). */
 const CUSTOM_EVENT_REPLAY_TTL_MS = 60 * 60_000;
 
 const records = new Map<string, ThreadRecord>();
 const inflight = new Map<string, Promise<ThreadRecord>>();
 
-// 跨副本 cancel:他副本发来的命令 → 本地有 record 即 abort。threadBus 经此注入处理函数
-// (避免模块环);无 Redis 时 startThreadCommandWatch 只注册不订阅。
+// Cross-replica cancel: a command from another replica → abort if a local record exists. threadBus injects the handler through this
+// (avoiding a module cycle); without Redis, startThreadCommandWatch only registers, never subscribes.
 startThreadCommandWatch((threadId) => {
   const rec = records.get(threadId);
   if (rec) rec.session.abort();
@@ -142,11 +142,11 @@ let factory: SpaceSessionFactory = createSpaceSessionFactory;
 
 export function setSpaceSessionFactory(f: SpaceSessionFactory): void { factory = f; }
 
-// ── 跨副本运行闸门(itest:thread-run 锁)───────────────────────────────────────
-// nginx 轮询下用户与 rcaWorker 的 prompt 可能落在不同副本:同一线程两副本并发 prompt 会
-// 交错写同一份 JSONL 转写。锁值=持有副本 ORIGIN_ID,TTL 300s + runs>0 期间 5s 心跳续期
-// (TTL 取大:抖动时不会中途丢锁;副本死亡的锁至多 5min 自愈)。同副本并发(steer)按 runs
-// 计数放行、复用同一把锁;他副本持有 → 抛错,由 sendSpaceUserMessage 的 catch 转 assistant_error。
+// ── Cross-replica run gate (itest:thread-run lock) ───────────────────────────────────────────────────────────────────────────────
+// Under nginx round-robin, prompts from the user and rcaWorker may land on different replicas: concurrent prompts on the same thread
+// across two replicas would interleave writes to the same JSONL transcript. Lock value = holding replica's ORIGIN_ID, TTL 300s + 5s heartbeat renewal while runs>0
+// (TTL set large: no mid-run lock loss under jitter; a dead replica's lock self-heals within at most 5min). Same-replica concurrency (steer) passes by
+// runs count and reuses the same lock; held by another replica → throw, converted to assistant_error by sendSpaceUserMessage's catch.
 
 const RUN_LOCK_TTL_MS = 300_000;
 const RUN_HEARTBEAT_MS = 5_000;
@@ -156,8 +156,8 @@ async function acquireRunSlot(rec: ThreadRecord): Promise<void> {
     rec.runs += 1;
     return;
   }
-  // 先同步占位再 await:并发首调在同帧内都会看到 runs=0,若先 await 后计数,
-  // 两个快连发的 prompt 会各拿一次锁,输的那个被误判成「他副本持有」。
+  // Reserve the slot synchronously before awaiting: concurrent first calls all see runs=0 in the same frame; if we awaited before incrementing,
+  // two fast-fired prompts would each grab the lock and the loser would be misjudged as "held by another replica".
   rec.runs = 1;
   const lock = await tryAcquireLock(`${THREAD_RUN_PREFIX}${rec.threadId}`, RUN_LOCK_TTL_MS);
   if (!lock) {
@@ -177,8 +177,8 @@ function releaseRunSlot(rec: ThreadRecord): void {
   rec.runLock = null;
 }
 
-/** record 删除/进程内重置时兜底拆闸门:dispose 不保证 prompt promise 落定,不拆则心跳带着
- *  运行锁永久续期,线程在任何副本都无法再运行。 */
+/** Fallback gate teardown on record deletion/in-process reset: dispose does not guarantee the prompt promise settles; without tearing down,
+ *  the heartbeat keeps renewing the run lock forever and the thread can never run on any replica again. */
 function teardownRunSlot(rec: ThreadRecord): void {
   if (rec.runHeartbeat) { clearInterval(rec.runHeartbeat); rec.runHeartbeat = null; }
   if (rec.runLock) { void rec.runLock.release(); rec.runLock = null; }
@@ -188,8 +188,8 @@ function teardownRunSlot(rec: ThreadRecord): void {
 export function resetSpaceSessions(): void {
   for (const r of records.values()) {
     teardownRunSlot(r);
-    // dispose 是同步 void；会话内的 MCP 子进程/thread 生命周期随本进程，reset 不杀它们
-    // （进程生命周期内线程常驻，teardown 支撑留给后续需求。见 mcp.ts child-leak deferral）。
+    // dispose is synchronous void; MCP child processes/threads inside the session live with this process, reset does not kill them
+    // (threads stay resident for the process lifetime; teardown support left for future needs. See mcp.ts child-leak deferral).
     try { r.session.dispose(); } catch { /* ignore */ }
     try { r.unsub(); } catch { /* ignore */ }
   }
@@ -197,11 +197,11 @@ export function resetSpaceSessions(): void {
   inflight.clear();
 }
 
-/** 线程被删除时释放其内存会话(dispose session + 退订 + 清 record)。无记录时静默。 */
+/** Release a thread's in-memory session on deletion (dispose session + unsubscribe + clear record). Silent when there is no record. */
 export function dropSpaceRecord(threadId: string): void {
   const r = records.get(threadId);
   if (!r) return;
-  deleteThreadSeq(threadId); // 卫生清理:不删也不影响正确性(线程 id 不复用)
+  deleteThreadSeq(threadId); // hygiene cleanup: not deleting it wouldn't affect correctness (thread ids are never reused)
   teardownRunSlot(r);
   try { r.session.dispose(); } catch { /* ignore */ }
   try { r.unsub(); } catch { /* ignore */ }
@@ -209,7 +209,7 @@ export function dropSpaceRecord(threadId: string): void {
   inflight.delete(threadId);
 }
 
-/** 幂等加载 version 级线程的 session(已缓存直接返回;并发首调共享同一构建;requirement 线程拒绝)。 */
+/** Idempotently load a version-level thread's session (cached → return directly; concurrent first calls share one build; requirement threads rejected). */
 export function ensureSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const cached = records.get(threadId);
   if (cached) return Promise.resolve(cached);
@@ -226,24 +226,24 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const v = (await db.select({ projectId: projectVersions.projectId }).from(projectVersions).where(eq(projectVersions.id, row.versionId)).limit(1))[0];
   if (!v) throw new Error('space thread version missing');
 
-  // 线程创建人界面语言解析：session 的 AI 输出语言跟随创建人偏好；历史线程（创建人 null）缺省 zh-CN。
+  // Thread creator UI language resolution: the session's AI output language follows the creator's preference; historical threads (creator null) default to zh-CN.
   let lang: AiLang = 'zh-CN';
   let manager = false;
   if (row.createdByUserId) {
     const u = (await db.select({ languagePreference: users.languagePreference }).from(users).where(eq(users.id, row.createdByUserId)).limit(1))[0];
     lang = aiLangFrom(u?.languagePreference ?? null);
-    // 管理类工具（manage_skill / manage_mcp）只对「有效管理员」线程开放；历史线程（创建人 null）一律 false。
+    // Management tools (manage_skill / manage_mcp) are only open to "effective manager" threads; historical threads (creator null) always false.
     manager = await isEffectiveManagerOf(row.createdByUserId);
   }
 
-  // repo 后台异步检出:session 立即构建(新会话秒开,不等 git fetch 的网络往返),
-  // repo 工具经共享 RepoState 每次调用动态解析 cwd;no_repo 静默(仅影响工具错误语态),
-  // 其它失败记 repo.issue 供诊断,均不阻断会话。
+  // Background async repo checkout: the session builds immediately (new sessions open in seconds, no waiting on git fetch network round trips);
+  // repo tools resolve cwd dynamically on every call via the shared RepoState; no_repo is silent (only affects tool error wording),
+  // other failures are recorded in repo.issue for diagnosis — none of them block the session.
   const repo = emptyRepoState();
   const session = await factory({ threadId, versionId: row.versionId, projectId: v.projectId, repo, createdByUserId: row.createdByUserId, lang, manager, piThreadId: row.piThreadId, purpose: row.purpose ?? 'chat' });
-  // 冷构建基线:读 Redis 当前 seq 高水位作 rec.seq 起点。必须在 records.set(发布点)之前
-  // 完成——订阅注册也在其后,任何 SSE 快照/GET 体都不会带出 0 基线,前端不会再把快照
-  // 误判成「序列重置」而二次 append 镜像事件(用户消息双气泡的根因)。
+  // Cold-build baseline: read Redis's current seq high watermark as rec.seq's starting point. Must happen before records.set (the publish point)
+  // — subscription registration also comes after it, so no SSE snapshot/GET body ever carries a 0 baseline and the frontend will no longer
+  // misjudge the snapshot as a "sequence reset" and double-append mirror events (the root cause of double user-message bubbles).
   const seqBaseline = await currentThreadSeq(threadId);
   const rec: ThreadRecord = {
     threadId,
@@ -264,8 +264,8 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
   const unsub = session.subscribe((event) => fanOut(rec, event));
   rec.unsub = unsub;
   records.set(threadId, rec);
-  // 后台检出：repo 目录位于版本工作空间的 repo/ 子目录（路径收口在 versionWorkspaceDir，
-  // 探索式测试的「代码提交范围」解析复用同一目录 → 共享同一把检出锁）。
+  // Background checkout: the repo directory sits in the version workspace's repo/ subdirectory (path unified in versionWorkspaceDir;
+  // exploratory testing's "code commit scope" resolution reuses the same directory → shares the same checkout lock).
   const repoDir = versionWorkspaceDir(row.versionId);
   void checkoutInBackground(row.versionId, repoDir, repo);
   return rec;
@@ -273,7 +273,7 @@ async function buildSpaceRecord(threadId: string): Promise<ThreadRecord> {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** 后台检出:与 session 构建解耦;锁冲突(并发建线程共享同一次 fetch)等锁后重试,至多 3 次。 */
+/** Background checkout: decoupled from session build; on lock conflict (concurrent thread builds sharing one fetch), wait for the lock and retry, at most 3 times. */
 async function checkoutInBackground(versionId: string, repoDir: string, repo: RepoState): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -290,8 +290,8 @@ async function checkoutInBackground(versionId: string, repoDir: string, repo: Re
         }
         return;
       }
-      // 非 RepoUnavailableError:通常是 spawn 二进制不存在(repo.ts:266 已翻译 git ENOENT)。
-      // 显式匹配"git binary missing"以给出指向 api.Dockerfile 的可执行提示,其它错误照原样落 issue。
+      // Not RepoUnavailableError: usually a missing spawn binary (repo.ts:266 already translates git ENOENT).
+      // Match "git binary missing" explicitly to give an actionable hint pointing at api.Dockerfile; other errors land in issue as-is.
       logger.warn({ err: e, versionId }, 'space repo checkout failed');
       const errMsg = e instanceof Error ? e.message : String(e);
       repo.issue = /git binary missing|spawn git/.test(errMsg)
@@ -302,7 +302,7 @@ async function checkoutInBackground(versionId: string, repoDir: string, repo: Re
   }
 }
 
-/** Pi AgentSession 事件 → react-pi body 的最小映射。 */
+/** Minimal mapping of Pi AgentSession events → react-pi body. */
 function mapSessionEvent(event: { type?: string } & Record<string, unknown>, ctx: { turnIndex: number }): Record<string, unknown> {
   switch (event.type) {
     case 'agent_start': return { type: 'agent_start' };
@@ -314,14 +314,14 @@ function mapSessionEvent(event: { type?: string } & Record<string, unknown>, ctx
   }
 }
 
-/** 泵任务:全局 INCR 分配 seq → 发布跨副本镜像 → 送达本地 listeners。
- *  本地送达相对 pi 的同步发射异步化(多一次 Redis 往返,亚毫秒);换来的不变量是 seq
- *  全局单调,任何副本冷构建出的快照基线都不会再「重置」前端的旧事件门。 */
+/** Pump task: global INCR allocates seq → publish cross-replica mirror → deliver to local listeners.
+ *  Local delivery is made async relative to pi's synchronous emission (one extra Redis round trip, sub-millisecond); the invariant gained is that seq
+ *  is globally monotonic, so snapshots cold-built on any replica can never "reset" the frontend's old-event gate. */
 async function deliverThreadEvent(rec: ThreadRecord, body: Record<string, unknown>): Promise<void> {
   const seq = await allocateThreadSeq(rec.threadId);
   rec.seq = seq;
   const stamped = { ...body, threadId: rec.threadId, seq };
-  publishThreadEvent(rec.threadId, stamped); // 跨副本镜像(fire-and-forget;SSE 侧按 origin 跳过回环)
+  publishThreadEvent(rec.threadId, stamped); // cross-replica mirror (fire-and-forget; the SSE side skips its own loopback by origin)
   for (const fn of rec.listeners) {
     try { fn(stamped); } catch { /* listener errors do not break the supervisor */ }
   }
@@ -336,7 +336,7 @@ function fanOut(rec: ThreadRecord, event: unknown): void {
     .catch((err) => logger.warn({ err, threadId: rec.threadId }, 'thread event delivery failed'));
 }
 
-/** 工具侧向线程 SSE 订阅者广播自定义事件(confirm_request 等);无活跃 session 时静默丢弃。 */
+/** Tool-side broadcast of custom events to thread SSE subscribers (confirm_request etc.); silently dropped when there is no active session. */
 export function emitThreadEvent(threadId: string, e: Record<string, unknown>): void {
   const rec = records.get(threadId);
   if (!rec) return;
@@ -349,13 +349,13 @@ async function deliverCustomEvent(rec: ThreadRecord, e: Record<string, unknown>)
   const seq = await allocateThreadSeq(rec.threadId);
   rec.seq = seq;
   const stamped = { ...e, threadId: rec.threadId, seq };
-  // 缓冲自定义事件供断线重放。confirm_request 除外——确认卡的挂起协议在 confirm.ts,
-  // 由 pending 表重放(只补仍挂起的卡,已处理/超时的不复活,见 subscribeThread)。
+  // Buffer custom events for disconnect replay. confirm_request excluded — the confirmation card's pending protocol lives in confirm.ts,
+  // replayed from the pending table (only still-pending cards are restored; processed/expired ones never resurrect; see subscribeThread).
   if (e.type !== 'confirm_request') {
     rec.customEvents.push({ publishedAt: Date.now(), ev: stamped });
     if (rec.customEvents.length > MAX_CUSTOM_EVENT_BUFFER) rec.customEvents.shift();
   }
-  publishThreadEvent(rec.threadId, stamped); // 跨副本镜像(fire-and-forget)
+  publishThreadEvent(rec.threadId, stamped); // cross-replica mirror (fire-and-forget)
   for (const fn of rec.listeners) {
     try { fn(stamped); } catch { /* ignore */ }
   }
@@ -366,32 +366,32 @@ export interface ThreadSnapshot {
     id: string;
     status: 'running' | 'idle';
     messageCount: number;
-    /** 压缩/重试活动标志（react-pi 快照契约的可选字段）。缺失时前端在线程仍 running 期间
-     *  会保留旧值（applySnapshot 的兼容回落）——compaction_end/auto_retry_end 事件一旦在
-     *  断连窗口丢失，「正在压缩上下文」就永久卡住，下次重连快照也无法自愈。 */
+    /** Compaction/retry activity flags (optional fields of the react-pi snapshot contract). When missing, the frontend keeps the old value
+     *  while the thread is still running (applySnapshot's compatibility fallback) — if a compaction_end/auto_retry_end event is lost in a
+     *  disconnect window, "compacting context" stays stuck forever and the next reconnect snapshot cannot self-heal it. */
     compactionActive?: boolean;
     retryActive?: boolean;
     retryAttempt?: number;
   };
-  /** 快照对应的事件 seq 高水位:react-pi 用它做「快照比已见事件旧?」的序列重置检测。
-   *  有 record 时必须带真实值——带 0 会被冷副本误判成重置 → 后续镜像事件二次 append
-   *  (用户消息双气泡根因)。缺省(无 record 的兜底响应)客户端当 0,契约允许(可选字段)。 */
+  /** The snapshot's event seq high watermark: react-pi uses it for the "is the snapshot older than seen events?" sequence-reset detection.
+   *  With a record it must carry the real value — carrying 0 gets misjudged as a reset by a cold replica → subsequent mirror events double-append
+   *  (the double user-message bubble root cause). Default (fallback response with no record) is treated as 0 by the client; the contract allows it (optional field). */
   seq?: number;
   messages: unknown[];
 }
 
 /**
- * 计算被压缩摘要「摘掉」的历史前缀：branch 路径上 [0, firstKeptEntryId) 的 entries
- * 转回消息（firstKept 不在路径上/为 null 时 = [0, compactionIdx)，对齐 buildContextEntries
- * 的保留语义——pi session-manager.js:201）。与活投影严格互补不交：prefix ∪ 活投影 = 全量
- * branch，故快照整体替换语义下前端缓存不可能重复。路径上的旧 compaction entry 转成
- * compactionSummary 消息（前端渲染为中途压缩标记行）。任何异常吞掉返回 []——快照
- * 不能因前缀计算失败而 500。
+ * Compute the history prefix "dropped" by the compaction summary: entries in [0, firstKeptEntryId) on the branch path
+ * are converted back to messages (when firstKept is not on the path / is null, that means [0, compactionIdx), aligned with buildContextEntries'
+ * retention semantics — pi session-manager.js:201). Strictly complementary and disjoint with the live projection: prefix ∪ live projection = the full
+ * branch, so under whole-replacement snapshot semantics the frontend cache can never duplicate. Old compaction entries on the path become
+ * compactionSummary messages (rendered by the frontend as a mid-conversation compaction marker row). Any exception is swallowed, returning [] — the snapshot
+ * must not 500 because of a prefix computation failure.
  */
 export function preCompactionMessagesOf(sessionManager: { getBranch(): SessionEntry[] }): unknown[] {
   try {
     const path = sessionManager.getBranch();
-    // 路径上最后一个 compaction 为准（buildContextEntries 同款遍历语义，分支回退时文件序最新≠路径上最新）
+    // The last compaction on the path wins (same iteration semantics as buildContextEntries; after a branch rollback, newest-in-file ≠ newest-on-path)
     let compactionIdx = -1;
     for (const [i, entry] of path.entries()) {
       if (entry.type === 'compaction') compactionIdx = i;
@@ -414,9 +414,9 @@ export function preCompactionMessagesOf(sessionManager: { getBranch(): SessionEn
 }
 
 export function snapshotOf(rec: ThreadRecord): ThreadSnapshot {
-  // 压缩/重试发生在 run 间隙（pi 的 isStreaming 此刻为 false），status 必须把它们算作
-  // running——否则压缩进行中的合法快照被判 settled，前端压缩提示被误清。
-  // 标志位对齐 react-pi 参考实现 ThreadSupervisor.metadataOf（client 侧校验接受这三个可选字段）。
+  // Compaction/retry happen in run gaps (pi's isStreaming is false at that moment); status must count them as
+  // running — otherwise a legitimate snapshot mid-compaction would be judged settled and the frontend's compaction notice wrongly cleared.
+  // Flags align with react-pi's reference implementation ThreadSupervisor.metadataOf (client-side validation accepts these three optional fields).
   const compacting = rec.session.isCompacting ?? false;
   const retrying = rec.session.isRetrying ?? false;
   const pre = rec.session.preCompactionMessages?.() ?? [];
@@ -430,18 +430,18 @@ export function snapshotOf(rec: ThreadRecord): ThreadSnapshot {
       retryActive: retrying,
       retryAttempt: rec.session.retryAttempt ?? 0,
     },
-    // 压缩前历史前缀拼在头部:对话流按时间序直接可见全量历史(前端 applySnapshot
-    // 整体替换,拼接只在服务端这一处发生,持久化与缓存天然一致)。
+    // The pre-compaction history prefix is spliced at the head: the conversation stream shows the full history directly in time order (frontend applySnapshot
+    // replaces wholesale; the splicing happens only here on the server, so persistence and cache are naturally consistent).
     messages: [...pre, ...rec.session.messages],
   };
 }
 
-/** 泵排空后再组装快照。pi 同步写 session.messages、seq 泵异步盖水位戳,两者之间直接
- *  snapshotOf 会产出「内容已含新消息、水位还没盖住它」的毒快照:前端按快照定基线后,
- *  迟到的 message_start(seq>水位)穿过旧事件门被无条件 append——同一条用户消息渲染
- *  两次(只输一次回显两次的根因;库里仅一条,刷新自愈)。排法:await 当前队列尾后确认
- *  它仍是尾(期间无新投递入队)再同步读取——JS 单线程保证「验尾+读」原子,水位必然 ≥
- *  内容;持续流式下最多多等几个投递周期,对快照读取方可接受。 */
+/** Assemble the snapshot only after the pump drains. pi writes session.messages synchronously while the seq pump stamps the watermark asynchronously; taking
+ *  snapshotOf directly between the two produces a poisoned snapshot where "content already includes the new message but the watermark doesn't cover it":
+ *  after the frontend sets its baseline from the snapshot, a late message_start (seq > watermark) passes the old-event gate and is appended unconditionally —
+ *  the same user message rendered twice (only-once emit echoed twice; only one row in the DB, self-heals on refresh). Fix: await the current queue tail and confirm
+ *  it is still the tail (no new deliveries enqueued in between) before reading synchronously — JS's single thread makes "verify tail + read" atomic, so the watermark
+ *  is guaranteed ≥ content; under continuous streaming this waits a few delivery cycles at most, acceptable for snapshot readers. */
 async function drainedSnapshotOf(rec: ThreadRecord): Promise<ThreadSnapshot> {
   for (;;) {
     const tail = rec.seqQueue;
@@ -467,15 +467,15 @@ export function subscribeThread(
     return () => {};
   }
   if (opts.includeSnapshot === true) {
-    // 快照必须经 drainedSnapshotOf(水位 ≥ 内容,见其注释),无法同步产出 → 监听器先同步
-    // 注册(与上方 closed 检查之间无 await 的 unsub 契约不变),快照+缓冲重放异步补发:
-    // 排队中的投递会先直达本监听器(快照随后整体替换,内容必含这些事件,水位盖住其 seq,
-    // 前端不会二次 append),随后按发布时间重放缓冲自定义事件与仍挂起的确认卡。前端 store
-    // 按 seq 去重:实时已到的事件不因重放二次生效,断线期间漏掉的自然补上(状态重建)。
+    // The snapshot must go through drainedSnapshotOf (watermark ≥ content, see its comment) and cannot be produced synchronously → register the listener
+    // synchronously first (the unsub contract of no-await between the closed check above and the assignment is unchanged), then deliver snapshot + buffered replay asynchronously:
+    // queued deliveries reach this listener first (the snapshot then replaces wholesale, its content necessarily includes these events and the watermark covers their seq,
+    // so the frontend won't double-append), followed by replaying buffered custom events and still-pending confirmation cards in publish order. The frontend store
+    // dedupes by seq: events already delivered live don't take effect twice via replay, and ones missed during disconnection are naturally filled in (state rebuild).
     void (async () => {
       try {
         const snapshot = await drainedSnapshotOf(rec);
-        if (!rec.listeners.has(fn)) return; // 退订后不再补发(SSE 已关,写入只会报错)
+        if (!rec.listeners.has(fn)) return; // after unsubscribe, no more delivery (SSE closed; writing would only error)
         fn(snapshotEventOf(rec.threadId, snapshot.seq ?? 0, snapshot));
         const now = Date.now();
         for (const r of rec.customEvents) {
@@ -495,8 +495,8 @@ export function subscribeThread(
   return () => { rec.listeners.delete(fn); };
 }
 
-/** GET/POST 线程体用的快照:必须走 drained(水位 ≥ 内容),否则毒快照会让前端把
- *  同一条消息渲染两次。无 record 返回 null(调用方兜底空快照)。 */
+/** Snapshot for the GET/POST thread body: must go through drained (watermark ≥ content), otherwise a poisoned snapshot makes the frontend
+ *  render the same message twice. Returns null when there is no record (the caller falls back to an empty snapshot). */
 export async function snapshotOfThread(threadId: string): Promise<ThreadSnapshot | null> {
   const rec = records.get(threadId);
   return rec ? drainedSnapshotOf(rec) : null;
@@ -508,21 +508,21 @@ export function threadStatus(threadId: string): 'running' | 'idle' | undefined {
   return rec.session.isStreaming ? 'running' : 'idle';
 }
 
-/** 跨副本版 threadStatus:本地 record 优先;冷 record 时探他副本的运行锁。线程列表序列化用
- *  (sync 版只看本副本,nginx 轮询下他副本运行中的线程会被误标 idle)。 */
+/** Cross-replica threadStatus: local record takes priority; when the record is cold, probe the other replica's run lock. Used by thread-list serialization
+ *  (the sync variant only looks at this replica; under nginx round-robin, threads running on another replica would be mislabeled idle). */
 export async function threadStatusAsync(threadId: string): Promise<'running' | 'idle' | undefined> {
   const local = threadStatus(threadId);
   if (local) return local;
   return (await threadRunRemote(threadId)) ? 'running' : undefined;
 }
 
-/** 线程构建后记录的仓库检出问题(非 no_repo);无 record 或检出未失败返回 null。 */
+/** Repo checkout issue recorded after the thread was built (non no_repo); returns null when there is no record or checkout didn't fail. */
 export function spaceRepoIssue(threadId: string): string | null {
   return records.get(threadId)?.repo.issue ?? null;
 }
 
-/** 旁路只读视图(推荐追问等非 session 生命周期消费者用):会话消息全文 + 创建人语言。
- *  不暴露 ThreadRecord 本体——listeners/seq/customEvents 属订阅机制,外部改动会破坏 SSE 契约。 */
+/** Side-channel read-only view (for non-session-lifecycle consumers such as suggested follow-ups): session message full text + creator language.
+ *  The ThreadRecord itself is not exposed — listeners/seq/customEvents belong to the subscription mechanism; external mutation would break the SSE contract. */
 export function getSpaceThreadView(threadId: string): { session: SpaceSessionLike; lang: AiLang } | null {
   const rec = records.get(threadId);
   return rec ? { session: rec.session, lang: rec.lang } : null;
@@ -536,56 +536,56 @@ export async function sendSpaceUserMessage(
 ): Promise<void> {
   const rec = records.get(threadId);
   if (!rec) throw new Error('thread not found');
-  // 首条消息落线程标题(取用户原文截断)
+  // First message sets the thread title (truncated from the user's original text)
   const row = (await db.select({ title: aiThreads.title }).from(aiThreads).where(eq(aiThreads.id, threadId)).limit(1))[0];
   if (row && !row.title) {
     await db.update(aiThreads).set({ title: Array.from(content.trim()).slice(0, 40).join(''), updatedAt: new Date() }).where(eq(aiThreads.id, threadId));
   }
   let slot = false;
   try {
-    // 跨副本运行闸门:他副本持有锁 → 抛错,经下方 catch 转 assistant_error(用户面;messages
-    // 路由 204 先行,HTTP 错误码冒泡不到前端)。同副本 steer 并发在 acquireRunSlot 内放行。
+    // Cross-replica run gate: another replica holds the lock → throw, converted to assistant_error by the catch below (user-facing; the messages
+    // route already returned 204 first, HTTP error codes never bubble to the frontend). Same-replica steer concurrency is admitted inside acquireRunSlot.
     await acquireRunSlot(rec);
     slot = true;
-    // streamingBehavior 必须透传:Pi 在 isStreaming 时对无参 prompt 直接抛
-    // 「Agent is already processing」(agent-session.js:1490)。前端 react-pi 的
-    // ThreadController 已按运行态派生出 steer/followUp 并随 input 发来,这里只做转发。
-    // images 同理:Pi 会逐张做 processImage(解码失败只降级为提示文本,不丢整条消息)。
+    // streamingBehavior must be passed through: Pi throws directly on a no-arg prompt while isStreaming
+    // ("Agent is already processing", agent-session.js:1490). The frontend react-pi
+    // ThreadController already derives steer/followUp from the run state and sends it with input; we only forward it here.
+    // Same for images: Pi runs processImage on each (a decode failure only degrades to hint text, never drops the whole message).
     await rec.session.prompt(content, {
       ...(streamingBehavior ? { streamingBehavior } : {}),
       ...(images && images.length > 0 ? { images } : {}),
     });
   } catch (err) {
-    // prompt 失败不能静默:用户消息已入库渲染,若无 AI 气泡也无错误提示就是"零反馈"假死。
-    // 经 emitThreadEvent 推一条 assistant_error,SSE 订阅者(含 devtools/未来 UI 钩子)可见;
-    // 然后 rethrow 让 router 层兜底日志,双层归因。
+    // prompt failure must not be silent: the user message is already persisted and rendered; no AI bubble and no error notice is a "zero feedback" hang.
+    // Emit an assistant_error via emitThreadEvent, visible to SSE subscribers (including devtools/future UI hooks);
+    // then rethrow so the router layer logs it as a fallback — two-layer attribution.
     const message = err instanceof Error ? err.message : String(err);
     logger.error({ threadId, err }, 'space prompt failed');
     try {
       emitThreadEvent(threadId, { type: 'assistant_error', message });
-    } catch { /* emit 失败不再遮蔽原始错误 */ }
+    } catch { /* an emit failure must not shadow the original error */ }
     throw err;
   } finally {
     if (slot) releaseRunSlot(rec);
   }
-  // 刷最后活跃时间:列表按 updatedAt 分桶(今天/昨天/7天内/…),不刷则分桶落到建会话那天,
-  // 刚聊过的会话会留在旧桶里。放在 prompt 的 try 之外:prompt 失败已由 catch rethrow 返回,
-  // 不会走到这里(失败的回合不刷时间);而这里是成功之后才执行的收尾,一次 UPDATE 失败
-  // (长回合后连接池已排空是最常见诱因)只影响列表分桶,不该把成功的对话标成 assistant_error——
-  // 那个事件会进 customEvents 并在重连时重放,等于给已成功的回合留一个持久化错误气泡。
+  // Refresh last-active time: the list buckets by updatedAt (today/yesterday/within 7 days/…); without refreshing, the bucket lands on the day the
+  // session was created and recently-chatted sessions stay in old buckets. Placed outside prompt's try: a prompt failure already returned via the catch's
+  // rethrow and never reaches here (failed turns don't refresh the time); this runs only after success, and an UPDATE failure
+  // (a drained connection pool after a long turn is the most common trigger) only affects list bucketing — it must not mark a successful conversation as assistant_error,
+  // because that event would enter customEvents and be replayed on reconnect, leaving a persistent error bubble on a successful turn.
   await db.update(aiThreads).set({ updatedAt: new Date() }).where(eq(aiThreads.id, threadId))
     .catch((e) => logger.warn({ threadId, err: e }, 'refresh ai_threads.updatedAt failed'));
 }
 
 export function cancelThread(threadId: string): void {
   const rec = records.get(threadId);
-  // 本地快路径:record 在本副本直接 abort。命令仍广播(值=发起副本 ORIGIN_ID,各副本过滤
-  // 自己的回环),线程常驻他副本时(rcaWorker 超时收尾/用户点停)由他副本的 watch 执行。
+  // Local fast path: record on this replica → abort directly. The command is still broadcast (value = originating replica's ORIGIN_ID; each replica filters
+  // its own loopback); when the thread lives on another replica (rcaWorker timeout cleanup / user pressing stop), that replica's watch executes it.
   if (rec) rec.session.abort();
   publishThreadCancel(threadId);
 }
 
-/** 清空 Pi 服务端排队消息,返回被清内容供前端还原到输入框。无会话/线程时返空。 */
+/** Clear Pi's server-side queued messages, returning the cleared content for the frontend to restore into the input box. Returns empty when there is no session/thread. */
 export function clearThreadQueue(threadId: string): { steering: string[]; followUp: string[] } {
   const rec = records.get(threadId);
   if (!rec) return { steering: [], followUp: [] };
@@ -593,24 +593,24 @@ export function clearThreadQueue(threadId: string): { steering: string[]; follow
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Real factory:注入空间工具(Plan 1 = repo 沙箱)并建 AgentSession
+// Real factory: inject space tools (Plan 1 = repo sandbox) and build the AgentSession
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * 空间助手 preamble：替换 pi 默认的 "expert coding assistant operating inside pi"
- * （pi-coding-agent dist/core/system-prompt.js:81）。该段是模型唯一认定的身份来源，
- * appendSystemPrompt 落在 <addendum> 段，压不住默认 preamble 的自我认知——不改这里的话
- * 用户问「你是谁」会得到「我是 pi 里的编码助手」。
+ * Space assistant preamble: replaces pi's default "expert coding assistant operating inside pi"
+ * (pi-coding-agent dist/core/system-prompt.js:81). That passage is the only identity source the model recognizes;
+ * appendSystemPrompt lands in the <addendum> section and cannot override the default preamble's self-perception — without changing it here,
+ * asking "who are you" would get "I am a coding assistant inside pi".
  *
- * **不要用 loader.systemPrompt 或直接改 systemPromptOptions.customPrompt**：两者都会让
- * system-prompt.js:76 的 `if (customPrompt)` 命中而整个跳过 else，连带丢掉 tools / rules /
- * docs 三段——rules 段承载 13 个空间工具的 promptGuidelines（STAGE_PROMPT_GUIDELINES 等），
- * 丢了等于静默废掉工具使用规范。buildRules 未导出，事后补不回来。
+ * **Do not use loader.systemPrompt or mutate systemPromptOptions.customPrompt directly**: both would make
+ * system-prompt.js:76's `if (customPrompt)` hit and skip the entire else, dropping the tools / rules /
+ * docs sections — the rules section carries the 13 space tools' promptGuidelines (STAGE_PROMPT_GUIDELINES etc.);
+ * losing them silently invalidates tool usage discipline. buildRules is not exported, so this cannot be repaired afterwards.
  *
- * 做法：before_agent_start 里拿到 pi 已渲染好的完整 system prompt，只把 preamble 那句
- * 默认文案替换掉，其余原样返回为 forceSystemPrompt。forceSystemPrompt 不进 transcript
- * （agent-session.js:1305 的 projection 只在请求头部投影），会话记录里的 sections 保持
- * 完整，diffSystemPromptSections 的前后对比也不会被这段改写污染。
+ * Approach: in before_agent_start, take pi's fully rendered system prompt, replace only the preamble sentence,
+ * and return the rest unchanged as forceSystemPrompt. forceSystemPrompt does not enter the transcript
+ * (agent-session.js:1305's projection only projects into the request header), so the sections in the session record stay
+ * intact and diffSystemPromptSections' before/after comparison is not polluted by this rewrite.
  */
 const PI_DEFAULT_PREAMBLE =
   'You are an expert coding assistant operating inside pi, a coding agent harness. '
@@ -632,17 +632,17 @@ export function buildSpacePreamble(lang?: AiLang): string {
 }
 
 /**
- * 把 pi 默认 preamble 换成产品身份；渲染结果不含默认文案时（如上游已改）返回 undefined，
- * 让 pi 走原有逻辑而非用一份可能过期的全文覆盖。
+ * Replace pi's default preamble with the product identity; when the rendered result doesn't contain the default text (e.g. upstream changed),
+ * return undefined, letting pi follow its original logic instead of overwriting with a possibly stale full text.
  */
 export function rewriteSpacePreamble(rendered: string, lang?: AiLang): string | undefined {
   if (!rendered.includes(PI_DEFAULT_PREAMBLE)) return undefined;
   return rendered.replace(PI_DEFAULT_PREAMBLE, buildSpacePreamble(lang));
 }
 
-/** 空间助手 system prompt：风格约束 + guides(需求设计方法/流程指令/知识参考) + 工作空间 + 版本上下文摘要。
- *  guides 由 loadActiveGuides 在工厂按 (lang, projectId, versionId) 查得；无摘要时省略上下文段。
- *  内容顺序与原硬编码一致（风格 → 需求设计/流程 → 工作空间 → 版本上下文），seed 后行为零变化。 */
+/** Space assistant system prompt: style constraints + guides (requirement design method / workflow directives / knowledge reference) + workspace + version context summary.
+ *  guides are looked up by loadActiveGuides in the factory by (lang, projectId, versionId); the context section is omitted when there is no summary.
+ *  Section order matches the original hardcoded layout (style → requirement design/workflow → workspace → version context), zero behavior change after seeding. */
 export function buildSpaceSystemPrompt(
   summaryText: string | null,
   lang?: AiLang,
@@ -667,16 +667,16 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   }
   const { createAgentSession, SessionManager, DefaultResourceLoader, getAgentDir, loadSkills } = await import('@earendil-works/pi-coding-agent');
   const { getBuiltinModel } = await import('@earendil-works/pi-ai/providers/all');
-  // 每个版本会话拥有独立工作空间：.data/workspaces/v-<versionId>，项目仓库检出在该空间下的 repo/ 子目录。
-  // Agent 的 cwd 指向工作空间（避免写入污染仓库），repo 工具仍操作 repo/ 子目录。
+  // Each version session owns an isolated workspace: .data/workspaces/v-<versionId>, with the project repo checked out under that space's repo/ subdirectory.
+  // The Agent's cwd points at the workspace (avoiding writes polluting the repo), while repo tools still operate on the repo/ subdirectory.
   const repoDir = versionWorkspaceDir(ctx.versionId);
   const workspaceDir = path.dirname(repoDir);
   await fs.mkdir(workspaceDir, { recursive: true });
   await fs.mkdir(repoDir, { recursive: true });
-  // Skills 物化为全局共享目录（.data/skills），由系统设置页管理；会话建立时物化 DB 快照。
-  // 不再维护逐版本 .pi/skills 挂载目录——loadSkills/read_skill 全部改走 SKILLS_ROOT。
-  // 物化失败不能拖垮会话工厂（无 skills 段，会话照常可用）。
-  // 兼容旧目录布局：若旧 .data/repos/v-<versionId> 存在而新 repo/ 尚未初始化，直接迁移避免重复克隆。
+  // Skills are materialized into a global shared directory (.data/skills), managed by the system settings page; the DB snapshot is materialized at session build.
+  // No per-version .pi/skills mount directory is maintained anymore — loadSkills/read_skill all go through SKILLS_ROOT.
+  // A materialization failure must not drag down the session factory (no skills section; the session still works).
+  // Legacy directory layout compatibility: if the old .data/repos/v-<versionId> exists and the new repo/ is not yet initialized, migrate directly to avoid re-cloning.
   const legacyRepoDir = path.join(REPOS_ROOT, `v-${ctx.versionId}`);
   const gitDir = path.join(repoDir, '.git');
   const dirExists = async (p: string) => fs.stat(p).then((s) => s.isDirectory()).catch(() => false);
@@ -694,7 +694,7 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
     promptGuidelines?: string[];
   };
   const rawTools: ToolRaw[] = buildSpaceTools({ ...ctx, workspaceDir, emit: (e) => emitThreadEvent(ctx.threadId, e) }) as ToolRaw[];
-  // R3 prompt 可编辑化：线程冷构建时快照 DB 覆盖（线程内不热更）；失败回落代码默认。
+  // R3 prompt editability: snapshot DB overrides at thread cold build (no hot updates within the thread); on failure, fall back to code defaults.
   const promptOverrides = await loadPromptModuleOverridesSafe();
   applyToolTextOverrides(rawTools, promptOverrides);
   const tools = rawTools.map((t) =>
@@ -713,7 +713,7 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
     }),
   );
 
-  // MCP servers：会话创建时读取（DB 驱动/测试桩）。无 server 时 register 为 no-op、connect 挂空配置。
+  // MCP servers: read at session creation (DB-driven/test stub). With no server, register is a no-op and connect gets an empty config.
   const mcpServers = await getMcpServersForThread({ threadId: ctx.threadId, projectId: ctx.projectId, versionId: ctx.versionId });
   const mcpExtensions = buildMcpExtensionFactory(mcpServers);
 
@@ -723,24 +723,24 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   if (envKey && !process.env[envKey]) process.env[envKey] = cfg.apiKey;
   const model = { ...base, ...(cfg.baseUrl ? { baseUrl: cfg.baseUrl } : {}) } as never;
 
-  // 上下文摘要注入 system prompt(而非包装首条用户消息):包装会让服务端回显与
-  // 前端乐观气泡文本不一致,react-pi 的 reconcile 无法去重 → 气泡重复且内部上下文泄漏到聊天区。
+  // Context summary injected into the system prompt (rather than wrapping the first user message): wrapping would make the server echo differ from
+  // the frontend's optimistic bubble text, react-pi's reconcile cannot dedupe → duplicate bubbles and internal context leaking into the chat area.
   let summaryText: string | null = null;
   try {
     summaryText = (await buildSpaceSummary(ctx.versionId)).text;
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'space summary build failed; continuing without context');
   }
-  // S1 常驻指令：按 (lang, projectId, versionId) 查启用 guides（scope 覆盖 version>project>global）。
-  // 与 buildSpaceSummary/loadSkills 同款容错：guides 装载失败不能拖垮整个会话工厂。
+  // S1 resident directives: query enabled guides by (lang, projectId, versionId) (scope precedence version>project>global).
+  // Same fault tolerance as buildSpaceSummary/loadSkills: a guides load failure must not drag down the whole session factory.
   let guides: Array<Pick<AssistantGuideRow, 'kind' | 'body'>> = [];
   try {
     guides = await loadActiveGuides({ projectId: ctx.projectId, versionId: ctx.versionId, lang: ctx.lang });
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'guides 加载失败;继续无 guides 段');
   }
-  // R1 短期记忆：产品线级记忆索引段（global + 本线 active，updated_at 降序，预算内）。
-  // 与 guides 同款容错：装载失败不拖垮会话工厂。
+  // R1 short-term memory: product-line-level memory index section (global + this line's active, updated_at descending, within budget).
+  // Same fault tolerance as guides: a load failure doesn't drag down the session factory.
   let memoriesSection = '';
   try {
     const lineId = await resolveProductLineId(ctx.projectId);
@@ -748,8 +748,8 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'memories 加载失败;继续无记忆段');
   }
-  // R2 轨迹库：产品线级成功轨迹索引段（active，updatedAt 降序，预算内）。
-  // 与 guides/memories 同款容错：装载失败不拖垮会话工厂。
+  // R2 trajectory store: product-line-level successful trajectory index section (active, updatedAt descending, within budget).
+  // Same fault tolerance as guides/memories: a load failure doesn't drag down the session factory.
   let trajectoriesSection = '';
   try {
     const lineId = await resolveProductLineId(ctx.projectId);
@@ -757,11 +757,11 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'trajectories 加载失败;继续无轨迹段');
   }
-  // S2 catalog：全局 skills 共享库。文件系统即真源——会话建立不做任何写入，只把
-  // 「DB enabled 的技能各自的目录绝对路径」交给 loader。传逐技能目录而非 SKILLS_ROOT，
-  // pi 的 loadSkills 见到 SKILL.md 即停不再下钻，故停用技能与孤儿目录天然不可见。
-  // Skill.location 取 filePath（Skill = { name, description, filePath, baseDir, sourceInfo, ... }）。
-  // 与 buildSpaceSummary 同款容错：单条 skill 目录异常（权限/ELOOP）不能拖垮整个会话工厂。
+  // S2 catalog: global skills shared library. The file system is the source of truth — session build does no writes, it only hands
+  // "the absolute directory path of each DB-enabled skill" to the loader. Per-skill directories are passed instead of SKILLS_ROOT,
+  // because pi's loadSkills stops descending as soon as it sees a SKILL.md, so disabled skills and orphan directories are naturally invisible.
+  // Skill.location takes filePath (Skill = { name, description, filePath, baseDir, sourceInfo, ... }).
+  // Same fault tolerance as buildSpaceSummary: a single skill directory anomaly (permissions/ELOOP) must not drag down the whole session factory.
   let skillsFiles: Array<{ name: string; description: string; location: string }> = [];
   let skillPaths: string[] = [];
   try {
@@ -779,9 +779,9 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   } catch (e) {
     logger.warn({ err: e, versionId: ctx.versionId }, 'skills 加载失败;继续无 skills 段');
   }
-  // loader 的 cwd 与 session 工作目录都指向版本独立工作空间（仓库在 ./repo 子目录），
-  // 让 AI 对自身所在位置有正确认知，同时避免写入污染仓库检出。
-  // R3 prompt 可编辑化：主 prompt 三段覆盖值（NULL=跟随代码默认→不覆盖）。
+  // The loader's cwd and the session's working directory both point at the version's isolated workspace (repo in the ./repo subdirectory),
+  // giving the AI a correct sense of its own location while avoiding writes polluting the repo checkout.
+  // R3 prompt editability: the main prompt's three-section override values (NULL = follow code default → no override).
   const styleOverride = textOverrideOf(promptOverrides, aiLangFrom(ctx.lang ?? null) === 'en-US' ? STYLE_EN_KEY : STYLE_ZH_KEY);
   const workspaceOverride = textOverrideOf(promptOverrides, WORKSPACE_KEY);
   const loader = new DefaultResourceLoader({
@@ -789,13 +789,13 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
     agentDir: getAgentDir(),
     additionalSkillPaths: skillPaths,
     appendSystemPromptOverride: (base) => [...base, buildSpaceSystemPrompt(summaryText, ctx.lang, guides, memoriesSection, trajectoriesSection, { style: styleOverride, workspace: workspaceOverride })],
-    // 每轮开跑前把 preamble 换成产品身份。见 buildSpacePreamble 的注释：不能走
-    // loader.systemPrompt，也不能直接改 systemPromptOptions.customPrompt，那两条路都会
-    // 丢掉 rules 段里的工具 promptGuidelines。
+    // Swap the preamble to the product identity before each run. See buildSpacePreamble's comment: cannot go through
+    // loader.systemPrompt, nor mutate systemPromptOptions.customPrompt directly — both routes would
+    // drop the tools' promptGuidelines in the rules section.
     extensionFactories: [
-      // S2 skills 段自渲染：必须在 MCP 与 identity 之前——identity 渲染 event.systemPrompt（getter，
-      // 从共享 currentOptions 重算）并返回 {systemPrompt}，会冻结后续 section 变更；而 skills 段
-      // 因 noTools:'builtin' 永远不会被 pi 自己渲染（system-prompt.js:99 门在 read/bash），只能自渲染。
+      // S2 skills section self-rendering: must run before MCP and identity — identity renders event.systemPrompt (a getter,
+      // recomputed from shared currentOptions) and returns {systemPrompt}, which freezes later section changes; and the skills section
+      // is never rendered by pi itself because of noTools:'builtin' (the system-prompt.js:99 gate sits on read/bash), so it must self-render.
       {
         name: 'itest-space-skills',
         hidden: true,
@@ -805,8 +805,8 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
           });
         },
       },
-      // MCP：注册 + hermetic 建连装载。必须在 identity 前——identity 的 before_agent_start
-      // 渲染 event.systemPrompt（含 mcp_servers 段）并返回 {systemPrompt}，会冻结后续 section 变更。
+      // MCP: register + hermetic connect and load. Must run before identity — identity's before_agent_start
+      // renders event.systemPrompt (including the mcp_servers section) and returns {systemPrompt}, freezing later section changes.
       mcpExtensions.register,
       mcpExtensions.connect,
       {
@@ -824,9 +824,9 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
   });
   await loader.reload();
 
-  // 恢复优先:piThreadId 非空 → open(文件在则回历史消息,重启后续聊;文件缺失不抛错,
-  // pi 内部 newSession 并复用同一路径)。仅 piThreadId 为空或 open 抛错(文件损坏)才 create,
-  // 后者降级只记 warn——一条坏文件不该让整个列表接口失败。
+  // Restore first: piThreadId non-empty → open (file exists → restore history and continue chatting after restart; missing file doesn't throw,
+  // pi internally newSession's and reuses the same path). Only create when piThreadId is empty or open throws (corrupt file);
+  // the latter degradation only logs warn — one bad file must not fail the whole list endpoint.
   let sessionManager: ReturnType<typeof SessionManager.create>;
   if (ctx.piThreadId) {
     try {
@@ -847,17 +847,17 @@ export async function createSpaceSessionFactory(ctx: SpaceThreadContext): Promis
     resourceLoader: loader,
   });
 
-  // bindExtensions 必需：pi 的 session_start 只在 bindExtensions 时触发（agent-session.js:2536）。
-  // createMcpExtension 在 session_start 读 pi.getMcpServers() 并后台建连——不 bind 则 MCP 工具永不注册。
-  // （Task 1 spike 的核心验证点。若实测 mode:'print' 在 headless 嵌入下行为异常，改传 {} 即可——
-  //   ExtensionBindings 全字段可选，mode 只影响 setUIContext。）
+  // bindExtensions is required: pi's session_start only fires at bindExtensions time (agent-session.js:2536).
+  // createMcpExtension reads pi.getMcpServers() at session_start and connects in the background — without bind, MCP tools are never registered.
+  // (The core verification point of the Task 1 spike. If mode:'print' misbehaves under headless embedding in practice, pass {} instead —
+  //   ExtensionBindings fields are all optional; mode only affects setUIContext.)
   await session.bindExtensions({
     mode: 'print',
     onError: (e) => { logger.warn({ err: e }, 'assistant extension error'); },
   });
 
   await db.update(aiThreads).set({ piThreadId: session.sessionFile ?? '', updatedAt: new Date() }).where(eq(aiThreads.id, ctx.threadId));
-  // Object.assign 而非 spread:AgentSession 的方法在原型上,spread 会丢。
+  // Object.assign rather than spread: AgentSession's methods live on the prototype; spread would drop them.
   return Object.assign(session as unknown as SpaceSessionLike, {
     preCompactionMessages: () => preCompactionMessagesOf(sessionManager),
   });

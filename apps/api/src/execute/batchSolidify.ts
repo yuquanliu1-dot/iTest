@@ -1,12 +1,13 @@
 /**
- * 批量固化 job：对「全部步骤未固化」的 web 用例做 后端 solidify（NL→DSL）→ 落库 → mechanical 验收。
- * 不经会话 agent：直接调用 buildSolidifyCaseTool/buildVerifyCaseTool（纯 caseId 进 / JSON 出），
- * 用合成 ctx（threadId=batch-<batchId>、emit=no-op、liveView=false 关实时画面）。
+ * Batch solidification job: for web cases whose steps are all unsolidified, runs backend solidify (NL→DSL) → persists → mechanical acceptance.
+ * No session agent involved: calls buildSolidifyCaseTool/buildVerifyCaseTool directly (pure caseId in / JSON out),
+ * with a synthetic ctx (threadId=batch-<batchId>, emit=no-op, liveView=false to turn off the live view).
  *
- * job 粒度 = 单用例（solidify+materialize+verify 同一个 job）：loginStateCache 是进程内存缓存，
- * BullMQ 跨副本分发——solidify AI 相暖的登录态只对本副本的 verify 生效，拆 job 会退化成每步重新登录。
- * 失败语义 = 保留已落库 DSL + 标记失败（materialize 在 verify 之前，verify 失败不回滚）。
- * 行状态机：queued → solidifying → solidify_failed | materialize_failed | verifying → passed | verify_failed。
+ * Job granularity = one case (solidify+materialize+verify in the same job): loginStateCache is a per-process in-memory cache,
+ * and BullMQ distributes across replicas — the login state warmed during the solidify AI phase only benefits the verify on this replica;
+ * splitting the job would degrade into re-login per step.
+ * Failure semantics = keep the already-persisted DSL + mark the failure (materialize runs before verify; verify failure doesn't roll back).
+ * Row state machine: queued → solidifying → solidify_failed | materialize_failed | verifying → passed | verify_failed.
  */
 import { and, asc, eq, inArray, like } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -18,10 +19,10 @@ import type { SpaceToolsContext } from '../pi/space/tools/context.js';
 import { invalidateCasesCacheForCase } from '../services/cases.service.js';
 import { logger } from '../logger.js';
 
-/** 进行中的行状态（重复触发防抖与批量进度派生共用）。 */
+/** In-progress row statuses (shared by re-trigger debounce and batch progress derivation). */
 export const RUNNING_BATCH_STATUSES = ['queued', 'solidifying', 'verifying'] as const;
 
-/** 批次派生汇总（读时计算，批次表本身不存 status）。 */
+/** Batch derived summary (computed at read time; the batch table itself stores no status). */
 export interface SolidifyBatchSummary {
   status: 'running' | 'passed' | 'failed' | 'partial';
   total: number;
@@ -31,8 +32,8 @@ export interface SolidifyBatchSummary {
 }
 
 /**
- * 批次状态读时派生：有 running 行 = running；否则全过 = passed、全败 = failed、混合 = partial。
- * 单批次查询与「在途批次列表」两个端点共用，避免两处计数漂移。
+ * Batch status derived at read time: any running row = running; otherwise all passed = passed, all failed = failed, mixed = partial.
+ * Shared by the single-batch query and the "in-flight batches list" endpoints, avoiding count drift between the two.
  */
 export function deriveBatchSummary(rows: Array<{ status: string }>): SolidifyBatchSummary {
   const passed = rows.filter((r) => r.status === 'passed').length;
@@ -43,8 +44,8 @@ export function deriveBatchSummary(rows: Array<{ status: string }>): SolidifyBat
 }
 
 /**
- * 批量固化资格校验：需求口径 = 「所有步骤都没有固化过」。拒绝时给出人读原因（路由聚合回 rejected）。
- * ok 时带 projectId（batch 行归属用；test_cases 无 project_id 列，经分组 join 推导）。
+ * Batch solidification eligibility check: the requirement is "no step has ever been solidified". Rejections carry a human-readable reason (routes aggregate them into rejected).
+ * ok carries projectId (for batch row ownership; test_cases has no project_id column — derived via the groups join).
  */
 export async function checkBatchEligibility(
   caseId: string,
@@ -79,9 +80,9 @@ export async function checkBatchEligibility(
 }
 
 /**
- * 固化暂存落库：把 batch threadId 草稿区里 solidify-% 暂存（update_step 携带 compiled）
- * 逐条写进 test_steps.compiled，随后删暂存（单事务原子——中途崩溃要么全落、要么全不落）。
- * 自写事务而非 applyCaseOp：后者带 ctx.versionId 严格校验，合成 ctx 语义不符。
+ * Persists solidification staging: writes the solidify-% staged rows (update_step carrying compiled) from the batch threadId
+ * draft area into test_steps.compiled one by one, then deletes the staging (single-transaction atomic — a mid-way crash either lands everything or nothing).
+ * Hand-written transaction instead of applyCaseOp: the latter enforces ctx.versionId strictly, which doesn't fit the synthetic ctx semantics.
  */
 export async function materializeStagedOps(batchThreadId: string, caseId: string): Promise<number> {
   const n = await db.transaction(async (tx) => {
@@ -105,20 +106,20 @@ export async function materializeStagedOps(batchThreadId: string, caseId: string
     await tx.delete(aiStageCaseOps).where(scope);
     return ops.length;
   });
-  // compiled 落库改变列表「固化」列,缓存必须失效
+  // Persisting compiled changes the list page's "solidified" column; the cache must be invalidated
   await invalidateCasesCacheForCase(caseId);
   return n;
 }
 
 /**
- * 批量固化单用例 job。任何路径都把行落到终态（catch 兜底），不留 running 僵尸；
- * 重入守卫：前轮 materialize 已落库（进程崩溃后重试）→ 跳过 solidify 直接验收。
+ * Batch solidification single-case job. Every path lands the row in a terminal state (catch as backstop), never leaving running zombies;
+ * re-entry guard: a previous round's materialize already persisted (retry after a process crash) → skip solidify and go straight to acceptance.
  */
 export async function runSolidifyBatchCaseJob(job: { batchId: string; caseId: string }): Promise<void> {
   const { batchId, caseId } = job;
   const rowKey = and(eq(solidifyBatchCases.batchId, batchId), eq(solidifyBatchCases.caseId, caseId));
   const batch = (await db.select().from(solidifyBatches).where(eq(solidifyBatches.id, batchId)))[0];
-  // projectId 经分组 join 推导（test_cases 无 project_id 列）
+  // projectId derived via the groups join (test_cases has no project_id column)
   const loaded = (await db
     .select({ c: testCases, projectId: groups.projectId })
     .from(testCases)
@@ -155,7 +156,7 @@ export async function runSolidifyBatchCaseJob(job: { batchId: string; caseId: st
   };
   try {
     await db.update(solidifyBatchCases).set({ status: 'solidifying', startedAt: new Date(), error: null }).where(rowKey);
-    // 重入守卫：materialize 已落库（崩溃重试）→ 直接进验收
+    // Re-entry guard: materialize already persisted (crash retry) → go straight to acceptance
     const stepsNow = await db.select().from(testSteps).where(eq(testSteps.caseId, caseId));
     const alreadyCompiled = stepsNow.length > 0 && stepsNow.every((s) => Array.isArray(s.compiled) && s.compiled.length > 0);
     if (!alreadyCompiled) {
@@ -166,7 +167,7 @@ export async function runSolidifyBatchCaseJob(job: { batchId: string; caseId: st
         failure?: { error?: string };
       }) : null;
       if (!sr.ok || sdata?.result !== 'solidified') {
-        // solidify 原子语义：执行失败/无可固化步 → 未暂存任何修改
+        // solidify atomic semantics: execution failure / no solidifiable steps → nothing was staged
         const error = !sr.ok
           ? sr.error
           : sdata?.result === 'nothing-solidified'
@@ -195,7 +196,7 @@ export async function runSolidifyBatchCaseJob(job: { batchId: string; caseId: st
       await finish('passed', { solidifyResult: solidifySteps, verifyResult: vdata });
       return;
     }
-    // verify 失败不回滚：DSL 已在库（决策「保留 DSL + 标记失败」），原因留给批量报告
+    // verify failure doesn't roll back: the DSL is already in the DB (decision: "keep DSL + mark failure"); the reason goes to the batch report
     const reason = !vr.ok
       ? vr.error
       : vdata?.failure?.humanMessage ?? vdata?.failure?.error ?? `verify 返回 ${vdata?.result ?? '未知结果'}`;

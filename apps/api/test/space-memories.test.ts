@@ -89,10 +89,10 @@ describe('R1 memories：服务层', () => {
     const { buildMemoriesSection } = await import('../src/pi/space/memories.js');
     const rows = Array.from({ length: 30 }, (_, i) => ({ title: `T${i}`, hook: 'x'.repeat(200) }));
     const out = buildMemoriesSection(rows);
-    expect(out.length).toBeLessThanOrEqual(4_000); // 预算 4000 硬顶
+    expect(out.length).toBeLessThanOrEqual(4_000); // hard cap: budget of 4000
     const inputLines = new Set(rows.map(r => `- [${r.title}] ${r.hook}`));
     out.split('\n').filter(l => l.startsWith('- [')).forEach(l => expect(inputLines.has(l)).toBe(true));
-    expect(out).not.toContain('- [T29]'); // 30×~210 字符必然超 4000，尾部被截
+    expect(out).not.toContain('- [T29]'); // 30 × ~210 chars inevitably exceeds 4000, so the tail gets truncated
   });
 
   it('upsertMemory：同 title active 行更新不新建；retired 同名行不算命中', async () => {
@@ -197,7 +197,7 @@ describe('R1 memories：管理路由', () => {
   it('GET：global + 本组织线可见，他组织线不可见；带 productLineName', async () => {
     const org1 = await seedOrg(pool);
     const line1 = await seedProductLineInOrg(pool, org1.orgId, `本线-${randomUUID().slice(0, 8)}`);
-    // 第二组织 + 该组织下的线（manager 不在其子树）
+    // Second org + a line under it (the manager is not in its subtree)
     const org2Id = randomUUID();
     await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,$2,$3)`, [org2Id, `他组织-${org2Id.slice(0, 8)}`, `/${org2Id}/`]);
     const line2 = await seedProductLineInOrg(pool, org2Id, `他线-${randomUUID().slice(0, 8)}`);
@@ -222,7 +222,7 @@ describe('R1 memories：管理路由', () => {
     const org2Id = randomUUID();
     await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,$2,$3)`, [org2Id, `他组织-${org2Id.slice(0, 8)}`, `/${org2Id}/`]);
     const line2 = await seedProductLineInOrg(pool, org2Id, `他线-${randomUUID().slice(0, 8)}`);
-    // 5 条本线记忆 + 1 条全局 + 1 条他组织线
+    // 5 own-line memories + 1 global + 1 from the other org's line
     const ids: string[] = [];
     for (let i = 0; i < 5; i++) {
       const id = randomUUID();
@@ -240,16 +240,16 @@ describe('R1 memories：管理路由', () => {
 
     const p1 = await request(managerApp).get('/api/assistant/memories?page=1&limit=2').expect(200);
     expect(p1.body.items).toHaveLength(2);
-    expect(p1.body.total).toBe(6); // 5 本线 + 1 全局；他组织线不可见，不计入
+    expect(p1.body.total).toBe(6); // 5 own-line + 1 global; the other org's line is invisible and not counted
     expect(p1.body.page).toBe(1);
     expect(p1.body.limit).toBe(2);
 
     const p3 = await request(managerApp).get('/api/assistant/memories?page=3&limit=2').expect(200);
-    expect(p3.body.items).toHaveLength(2); // 6 行 / 每页 2 → 第 3 页满页
+    expect(p3.body.items).toHaveLength(2); // 6 rows / 2 per page → page 3 is full
     const p4 = await request(managerApp).get('/api/assistant/memories?page=4&limit=2').expect(200);
     expect(p4.body.items).toHaveLength(0);
 
-    // 跨页不重不漏：把三页的 id 拼起来 = 全部可见 id
+    // No duplicates or omissions across pages: concatenating the three pages' ids = all visible ids
     const seen = new Set<string>();
     for (const p of [1, 2, 3]) {
       const r = await request(managerApp).get(`/api/assistant/memories?page=${p}&limit=2`).expect(200);
@@ -258,21 +258,21 @@ describe('R1 memories：管理路由', () => {
     expect(seen.size).toBe(6);
     expect(seen.has(ids[0]!)).toBe(true);
 
-    // scope=global 只回全局行
+    // scope=global returns global rows only
     const g = await request(managerApp).get('/api/assistant/memories?scope=global').expect(200);
     expect(g.body.total).toBe(1);
     expect(g.body.items[0].title).toBe('全局记忆');
 
-    // 筛某条可见线 → 只回该线
+    // Filter by a visible line → returns that line only
     const one = await request(managerApp).get(`/api/assistant/memories?productLineId=${line1}`).expect(200);
     expect(one.body.total).toBe(5);
 
-    // 筛不可见线 → 空（可见性在 SQL 里过滤，不是查完再 JS filter）
+    // Filter by an invisible line → empty (visibility is filtered in SQL, not a post-fetch JS filter)
     const other = await request(managerApp).get(`/api/assistant/memories?productLineId=${line2}`).expect(200);
     expect(other.body.total).toBe(0);
     expect(other.body.items).toHaveLength(0);
 
-    // 非法分页参数被钳制（不 500、不 OFFSET 负数）
+    // Invalid pagination params are clamped (no 500, no negative OFFSET)
     const bad = await request(managerApp).get('/api/assistant/memories?page=0&limit=-5').expect(200);
     expect(bad.body.page).toBe(1);
     expect(bad.body.limit).toBe(1);

@@ -34,7 +34,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** 建产品线，并把给定项目挂进去。 */
+/** Create a product line and attach the given projects to it. */
 async function seedProductLine(name: string, projectIds: string[]): Promise<string> {
   const { orgId } = await seedOrg(pool);
   const line = await pool.query(`INSERT INTO product_lines(organization_id, name) VALUES ($1, $2) RETURNING id`, [orgId, name]);
@@ -45,7 +45,7 @@ async function seedProductLine(name: string, projectIds: string[]): Promise<stri
   return lineId;
 }
 
-/** 在指定项目里造一个用例。 */
+/** Create a case in the given project. */
 async function seedCase(projectId: string, groupId: string, versionId: string, title: string): Promise<string> {
   const r = await pool.query(
     `INSERT INTO test_cases(group_id, version_id, title) VALUES ($1, $2, $3) RETURNING id`,
@@ -55,7 +55,7 @@ async function seedCase(projectId: string, groupId: string, versionId: string, t
   return r.rows[0]!.id as string;
 }
 
-/** 在指定项目里造一个计划。 */
+/** Create a plan in the given project. */
 async function seedPlan(projectId: string, versionId: string, name: string): Promise<string> {
   const r = await pool.query(
     `INSERT INTO execution_plans(project_id, version_id, name) VALUES ($1, $2, $3) RETURNING id`,
@@ -105,7 +105,7 @@ describe('计划跨项目用例（产品线）', () => {
   it('同一条线内的两个项目可互相引用用例', async () => {
     const a = await seedProject(pool);
     const b = await seedProject(pool);
-    // seedProject 默认把两个项目挂到同一条种子线（同线才允许跨项目引用），无需另建线。
+    // seedProject attaches both projects to the same seeded line by default (cross-project references are only allowed within a line), so no extra line is needed.
     const bCase = await seedCase(b.projectId, b.groupId, b.versionId, '别项目用例');
     const planId = await seedPlan(a.projectId, a.versionId, '同线计划');
 
@@ -119,7 +119,7 @@ describe('计划跨项目用例（产品线）', () => {
     const baseline = await seedProject(pool);
     const site = await seedProject(pool);
     await seedProductLine('待解绑', [baseline.projectId, site.projectId]);
-    // 换一个同组织的新线，把基线项目挪进去 —— 两者从此不同线。
+    // Switch to a new line in the same organization and move the baseline project into it — the two are no longer in the same line.
     const otherLineId = await seedProductLine('另一条线', []);
 
     const baselineCase = await seedCase(baseline.projectId, baseline.groupId, baseline.versionId, '基线用例');
@@ -128,8 +128,8 @@ describe('计划跨项目用例（产品线）', () => {
     const before = await request(app).post(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });
     expect(before.status).toBe(200);
 
-    // R2：product_line_id 必填，不存在「未归线」——脱离当前线的唯一方式是换到另一条线。
-    // 测试意图（同线才可跨项目引用）不变：换线后两者不同线，跨项目用例重新被拒。
+    // R2: product_line_id is required, there is no "unassigned line" — the only way to leave the current line is switching to another one.
+    // Test intent (cross-project references only within the same line) is unchanged: after switching, the two differ in line and cross-project cases are rejected again.
     await pool.query(`UPDATE projects SET product_line_id = $1 WHERE id = $2`, [otherLineId, baseline.projectId]);
 
     const after = await request(app).post(`/api/plans/${planId}/cases`).send({ caseIds: [baselineCase] });

@@ -1,13 +1,13 @@
 /**
- * skill 目录树路径守卫 + 原子写。全仓唯一的技能文件路径校验入口：REST 文件树接口 /
- * read_skill / run_skill_script / import_skill 落盘都走这里。
+ * Skill directory-tree path guard + atomic writes. The repo-wide single entry point for skill file path validation: the REST file tree API /
+ * read_skill / run_skill_script / import_skill persistence all go through here.
  *
- * 为什么不用现成的纯词法写法：runSkillScript 里的 normalize+startsWith 只挡 ../ 与绝对路径，
- * <skill>/scripts 若是软链则直接穿透到 /etc。本模块补 realpath 解析，且按「段」而非整串校验
- * （.git / node_modules / 隐藏文件逐段拒，而不是只查首段）。
+ * Why not the off-the-shelf purely lexical approach: normalize+startsWith in runSkillScript only blocks ../ and absolute paths;
+ * if <skill>/scripts is a symlink it tunnels straight into /etc. This module adds realpath resolution and validates by "segment" rather than the whole string
+ * (.git / node_modules / hidden files rejected per segment, not just the first segment).
  *
- * 不递归 mkdir：写入目标的所有父目录必须已存在——目录结构来自 import（可信来源），
- * 不是来自人在设置页敲的路径。
+ * No recursive mkdir: all parent directories of a write target must already exist — the directory structure comes from import (a trusted source),
+ * not from paths typed by a person in the settings page.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,7 +15,7 @@ import path from 'node:path';
 const MAX_REL_LEN = 512;
 const FORBIDDEN_SEGMENTS = new Set(['.git', 'node_modules']);
 
-/** rel 合法则返回绝对路径，非法返回 null。opts.requireParentExisting=true 用于写入路径。 */
+/** Returns the absolute path when rel is legal, null when illegal. opts.requireParentExisting=true is for write paths. */
 export function resolveInSkill(
   root: string,
   rel: string,
@@ -37,7 +37,7 @@ export function resolveInSkill(
   const abs = path.resolve(realRoot, ...segments);
   if (abs !== realRoot && !abs.startsWith(realRoot + path.sep)) return null;
 
-  // 目标尚不存在时 realpath 会抛；改用「最深已存在祖先」解析后把尾部接回去再校验。
+  // realpath throws when the target doesn't exist yet; instead resolve via the "deepest existing ancestor" and re-attach the tail before validating.
   const realAbs = realpathDeepestExisting(abs);
   if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) return null;
 
@@ -53,7 +53,7 @@ function realOrSelf(p: string): string {
   }
 }
 
-/** abs 可能尚不存在：向上找到第一个存在的祖先，realpath 它，再把尾部接回去。 */
+/** abs may not exist yet: walk up to the first existing ancestor, realpath it, then re-attach the tail. */
 function realpathDeepestExisting(abs: string): string {
   const tail: string[] = [];
   let cur = abs;
@@ -62,14 +62,14 @@ function realpathDeepestExisting(abs: string): string {
       return path.join(fs.realpathSync.native(cur), ...tail);
     } catch {
       const parent = path.dirname(cur);
-      if (parent === cur) return abs; // 一路到根都不存在，交由上层 startsWith 判负
+      if (parent === cur) return abs; // nothing exists all the way to the root; let the caller's startsWith check fail
       tail.unshift(path.basename(cur));
       cur = parent;
     }
   }
 }
 
-/** 原子写：同目录临时文件 + rename（同文件系统，rename 原子）。中途被 kill 不会留半截文件。 */
+/** Atomic write: temp file in the same directory + rename (same filesystem, rename is atomic). A mid-write kill never leaves a half-written file. */
 export function writeSkillFileAtomic(absPath: string, content: string): void {
   const dir = path.dirname(absPath);
   const tmp = path.join(dir, `.${path.basename(absPath)}.${process.pid}.${Date.now()}.tmp`);
@@ -77,12 +77,12 @@ export function writeSkillFileAtomic(absPath: string, content: string): void {
     fs.writeFileSync(tmp, content, 'utf8');
     fs.renameSync(tmp, absPath);
   } catch (e) {
-    try { fs.rmSync(tmp, { force: true }); } catch { /* 已清理 */ }
+    try { fs.rmSync(tmp, { force: true }); } catch { /* already cleaned up */ }
     throw e;
   }
 }
 
-/** 删除技能目录：目录名必须是合法 slug，且父目录必须恰为 root（防未来重构误删整个 root）。 */
+/** Delete a skill directory: the dir name must be a valid slug, and its parent must be exactly root (prevents a future refactor from wiping the whole root). */
 export function removeSkillDir(root: string, name: string): void {
   const dir = path.join(root, name);
   if (path.dirname(dir) !== path.resolve(root)) throw new Error(`拒绝删除非技能目录: ${name}`);

@@ -1,6 +1,6 @@
 /**
- * 场景领域服务:场景从属需求(scenarios.requirement_id NOT NULL)。
- * 归属解析经 requirements join;用户可见性由调用方(HTTP 边界)负责。
+ * Scenario domain service: scenarios belong to a requirement (scenarios.requirement_id NOT NULL).
+ * Ownership resolution goes through the requirements join; user visibility is the caller's (HTTP boundary) responsibility.
  */
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -24,7 +24,7 @@ export async function scenarioProjectId(scenarioId: string): Promise<string | nu
   return row?.projectId ?? null;
 }
 
-/** 项目级场景全集(id/title/description/requirementId),按创建序。 */
+/** Project-level scenario full set (id/title/description/requirementId), by creation order. */
 export async function listScenariosByProject(projectId: string) {
   return db
     .select({ id: scenarios.id, title: scenarios.title, description: scenarios.description, requirementId: scenarios.requirementId })
@@ -34,7 +34,7 @@ export async function listScenariosByProject(projectId: string) {
     .orderBy(scenarios.createdAt);
 }
 
-/** 项目级需求清单(id/title/status),按创建序。 */
+/** Project-level requirement list (id/title/status), by creation order. */
 export async function listRequirementsByProject(projectId: string) {
   return db
     .select({ id: requirements.id, title: requirements.title, status: requirements.status })
@@ -71,7 +71,7 @@ export async function updateScenario(scenarioId: string, patch: { title?: string
   return updated[0]!;
 }
 
-/** FK ON DELETE SET NULL:用例自动解绑,不需要 409。 */
+/** FK ON DELETE SET NULL: cases unbind automatically; no 409 needed. */
 export async function deleteScenario(scenarioId: string): Promise<void> {
   const deleted = await db.delete(scenarios).where(eq(scenarios.id, scenarioId)).returning({ id: scenarios.id });
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'scenario not found');

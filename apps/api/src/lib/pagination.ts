@@ -1,9 +1,9 @@
 /**
- * 分页参数统一钳制：page ≥1（上限 1e6）、limit 1..100。
+ * Unified clamping of pagination params: page ≥1 (cap 1e6), limit 1..100.
  *
- * 非法值（NaN / 负数 / 0 / 超界）一律回退到默认或夹到边界，不报错——
- * 与 organizations.ts 的 `parseInt(...) || default` 同风格，但补了下限：
- * organizations 那版 limit/page 无下限，page=0 会让 PG 报 `OFFSET must not be negative`。
+ * Invalid values (NaN / negative / 0 / out of range) always fall back to the default or clamp to the boundary, no error —
+ * same style as organizations.ts's `parseInt(...) || default`, but with the floor added:
+ * the organizations version had no lower bound for limit/page, and page=0 made PG throw `OFFSET must not be negative`.
  */
 export const DEFAULT_PAGE = 1;
 export const DEFAULT_LIMIT = 20;

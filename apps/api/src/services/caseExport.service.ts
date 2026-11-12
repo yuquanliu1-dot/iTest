@@ -1,9 +1,10 @@
 /**
- * 用例导出数据层：查库 + DSL 步骤中文摘要 + 导出树构建（纯函数，格式无关）。
- * 序列化（xmind/docx）由 export-cases skill 的 python 脚本按 buildExportPayload 产物渲染——
- * 树的层级与排序（分组 zh 排序、跨版本插层）在本文件定死，脚本只按 payload 顺序输出。
- * 层级：root(版本名) → [版本(跨版本时)] → 分组 → 用例 → 预置条件/测试步骤/预期结果。
- * 前身：services/xmindExport.service.ts（2026-10-26 XMind 导出设计）。
+ * Case-export data layer: DB queries + Chinese summaries of DSL steps + export tree building (pure functions, format-agnostic).
+ * Serialization (xmind/docx) is rendered by the export-cases skill's python scripts from the buildExportPayload output —
+ * the tree's levels and ordering (groups sorted by zh collation, version layer inserted for cross-version) are pinned in this file;
+ * scripts only emit in payload order.
+ * Hierarchy: root(version name) → [version (when cross-version)] → group → case → precondition/steps/expected outcome.
+ * Predecessor: services/xmindExport.service.ts (2026-10-26 XMind export design).
  */
 
 import { asc, inArray } from 'drizzle-orm';
@@ -13,9 +14,9 @@ import { groups, projectVersions, testCases, testSteps } from '../db/schema.js';
 export interface ExportStepRow {
   order: number;
   instruction: string | null;
-  /** 可执行 DSL 数组；null/空 = 未编译。 */
+  /** Executable DSL array; null/empty = uncompiled. */
   compiled: unknown[] | null;
-  /** 行级断言（assertText action jsonb）。 */
+  /** Row-level assertion (assertText action jsonb). */
   assertion: unknown;
 }
 
@@ -32,7 +33,7 @@ export interface ExportCaseRow {
   steps: ExportStepRow[];
 }
 
-/** 导出树节点（JSON 安全：全部字符串，dump 工具直接序列化给 skill 脚本）。 */
+/** Export tree node (JSON-safe: all strings; the dump tool serializes it straight to the skill script). */
 export interface ExportNode {
   title: string;
   children?: ExportNode[];
@@ -45,7 +46,7 @@ interface KnownAction {
   kind?: string;
   locator?: Array<{ strategy?: string; value?: string }>;
   intentLocator?: { contextText?: string };
-  /** iframe 帧链（录制器产物）：非空时目标在 iframe 里，摘要加 [iframe] 前缀。 */
+  /** iframe frame chain (recorder artifact): non-empty means the target sits inside an iframe; summaries get the [iframe] prefix. */
   frameChain?: Array<{ locator?: unknown }>;
   url?: unknown;
   value?: unknown;
@@ -90,7 +91,7 @@ function assertTextText(a: KnownAction): string {
   return `验证文本${MATCH_LABEL[str(a.match)] ?? '等于'}「${clip(str(a.equals), 30)}」`;
 }
 
-/** 单个 DSL 动作的服务端中文摘要：常用动作逐 kind 渲染；未覆盖的 kind 降级为 kind 名/JSON 截断（服务端固定中文不走 i18n）。 */
+/** Server-side Chinese summary of a single DSL action: common actions rendered per kind; uncovered kinds degrade to the kind name / truncated JSON (server-side fixed Chinese, not routed through i18n). */
 export function describeAction(a: KnownAction): string {
   const target = targetText(a);
   switch (a.kind) {
@@ -115,14 +116,14 @@ export function describeAction(a: KnownAction): string {
   }
 }
 
-/** 多动作链「a → b → c」。 */
+/** Multi-action chain "a → b → c". */
 export function describeCompiled(compiled: unknown[] | null): string {
   const actions = (compiled ?? []).filter((c): c is KnownAction => !!c && typeof c === 'object');
   if (actions.length === 0) return '';
   return actions.map((a) => describeAction(a)).join(' → ');
 }
 
-/** 行级断言（testSteps.assertion jsonb，assertText action）渲染。不可解析返回 ''。 */
+/** Renders the row-level assertion (testSteps.assertion jsonb, assertText action). Returns '' when unparseable. */
 export function describeAssertion(assertion: unknown): string {
   if (!assertion || typeof assertion !== 'object') return '';
   const a = assertion as KnownAction;
@@ -130,13 +131,13 @@ export function describeAssertion(assertion: unknown): string {
   return assertTextText(a);
 }
 
-/** 步骤文本：`N. instruction`，空则 DSL 摘要，再空则断言，全空跳过。 */
+/** Step text: `N. instruction`; falls back to the DSL summary, then the assertion; all-empty steps are skipped. */
 export function stepLine(i: number, s: ExportStepRow): string {
   const text = s.instruction?.trim() || describeCompiled(s.compiled) || describeAssertion(s.assertion);
   return `${i + 1}. ${text}`;
 }
 
-/** expectedOutcome 多行拆编号；空数组 = 没有内容。 */
+/** Splits expectedOutcome into numbered lines; an empty array = nothing to show. */
 export function outcomeLines(expectedOutcome: string | null, steps: ExportStepRow[]): string[] {
   const lines = (expectedOutcome ?? '')
     .split(/\r?\n/)
@@ -147,7 +148,7 @@ export function outcomeLines(expectedOutcome: string | null, steps: ExportStepRo
   return assertions.map((l, i) => `${i + 1}. ${l}`);
 }
 
-/** 树构建：分组按名称排序，用例按 createdAt 排序；跨版本时插版本层。 */
+/** Tree building: groups sorted by name, cases by createdAt; a version layer is inserted for cross-version exports. */
 export function buildExportTree(cases: ExportCaseRow[], rootTitle: string): ExportNode {
   const sorted = [...cases].sort(
     (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.title.localeCompare(b.title, 'zh'),
@@ -160,7 +161,7 @@ export function buildExportTree(cases: ExportCaseRow[], rootTitle: string): Expo
     }
     const stepLines = c.steps
       .map((s, i) => stepLine(i, s))
-      .filter((t) => !/^\d+\. $/.test(t)); // 全空文本的步骤跳过
+      .filter((t) => !/^\d+\. $/.test(t)); // steps whose text is entirely empty are skipped
     if (stepLines.length > 0) children.push({ title: '测试步骤', children: stepLines.map((t) => ({ title: t })) });
     const outcomes = outcomeLines(c.expectedOutcome, c.steps);
     if (outcomes.length > 0) children.push({ title: '预期结果', children: outcomes.map((t) => ({ title: t })) });
@@ -209,7 +210,7 @@ export function buildExportTree(cases: ExportCaseRow[], rootTitle: string): Expo
   };
 }
 
-/** 批量拉用例 + 步骤 + 分组名/版本名。caseIds 里查不到的静默忽略（调用方负责可见性）。 */
+/** Bulk-fetches cases + steps + group/version names. caseIds that resolve to nothing are silently ignored (visibility is the caller's job). */
 export async function loadExportCases(caseIds: string[]): Promise<ExportCaseRow[]> {
   if (caseIds.length === 0) return [];
   const rows = await db
@@ -262,15 +263,15 @@ export async function loadExportCases(caseIds: string[]): Promise<ExportCaseRow[
   }));
 }
 
-/** 导出 payload：dump_cases_payload 工具落盘、export-cases skill 脚本消费的 JSON 形状。
- *  baseName 供脚本拼文件名（`{baseName}-用例-{时间戳}.{ext}`）；tree 的叶子已是渲染好的文本行。 */
+/** Export payload: the JSON shape the dump_cases_payload tool writes to disk and the export-cases skill script consumes.
+ *  baseName feeds the script's file name (`{baseName}-用例-{时间戳}.{ext}`); the tree's leaves are already rendered text lines. */
 export interface ExportPayload {
   baseName: string;
   count: number;
   tree: ExportNode;
 }
 
-/** 组合：用例集合 → JSON 安全 payload。rootTitle 缺省用第一个用例的版本名。 */
+/** Composition: a set of cases → JSON-safe payload. rootTitle defaults to the first case's version name. */
 export function buildExportPayload(cases: ExportCaseRow[], rootTitle?: string): ExportPayload {
   const baseName = rootTitle?.trim() || cases[0]!.versionName;
   return {

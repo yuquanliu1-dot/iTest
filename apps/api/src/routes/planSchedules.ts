@@ -1,14 +1,14 @@
 /**
- * /api/plans/:id/schedules 与 /api/plan-schedules/:scheduleId 路由。
+ * /api/plans/:id/schedules and /api/plan-schedules/:scheduleId routes.
  *
- * 模型：cron 表达式 + IANA 时区，按固定时刻重复触发。
- * 与 iDO Automation 的 schedule 一致：
- * - 「立即执行」沿用现有「一键执行」按钮（planRuns.triggered_by='manual'）。
- * - 这里的「调度」专指 cron 定时（planRuns.triggered_by='schedule'）。
- * - 用户可在 UI 临时关掉（enabled=false），不影响 plan/数据；worker 不入队。
+ * Model: cron expression + IANA timezone, triggered repeatedly at fixed times.
+ * Consistent with iDO Automation's schedule:
+ * - "Run now" reuses the existing "one-click run" button (planRuns.triggered_by='manual').
+ * - "Scheduling" here specifically means cron timing (planRuns.triggered_by='schedule').
+ * - The user can temporarily turn it off in the UI (enabled=false) without affecting the plan/data; the worker won't enqueue.
  *
- * 写操作 DB commit 后立即同步 BullMQ（upsertScheduleJob / removeScheduleJob）。
- * 同步失败不回滚 DB（worker 下次 reconcile 兜底），但要在日志告警。
+ * After a write operation's DB commit, BullMQ is synced immediately (upsertScheduleJob / removeScheduleJob).
+ * Sync failure does not roll back the DB (the worker's next reconcile is the fallback), but it must be logged as a warning.
  */
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -37,14 +37,14 @@ const PatchBody = z.object({
   timezone: z.string().min(1).max(64).optional(),
 });
 
-/** GET /api/plans/:id/schedules  列表 */
+/** GET /api/plans/:id/schedules  list */
 planSchedulesRoute.get('/:id/schedules', async (req, res) => {
   const plan = await loadPlanOr404(req.params.id!);
   await assertProjectVisible(plan.projectId, req.user!);
   res.json(await listPlanSchedules(plan.id));
 });
 
-/** POST /api/plans/:id/schedules  新建 */
+/** POST /api/plans/:id/schedules  create */
 planSchedulesRoute.post('/:id/schedules', async (req, res) => {
   const plan = await loadPlanOr404(req.params.id!);
   await assertProjectVisible(plan.projectId, req.user!);
@@ -86,7 +86,7 @@ planSchedulesRoute.delete('/:scheduleId', async (req, res) => {
   res.json({ ok: true });
 });
 
-/** POST /api/plan-schedules/:scheduleId/enable 与 /disable（语义等价于 PATCH enabled=true/false） */
+/** POST /api/plan-schedules/:scheduleId/enable and /disable (semantically equivalent to PATCH enabled=true/false) */
 planSchedulesRoute.post('/:scheduleId/enable', async (req, res) => {
   await setEnabled(req, res, true);
 });

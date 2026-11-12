@@ -1,20 +1,27 @@
 /**
- * 用例级 vision 判定的过程证据（图 3 + 过程页面文本）。
+ * Process evidence (图 3 + process page texts) for case-level vision judgment.
  *
- * 背景：waitForPageSettled 等页面静默后才截终态图，而 toast 自动消失本身就是一次像素
- * 变化——判定时刻 toast 必已从 DOM 卸载。若 expectedOutcome 写了「出现 XX 提示」，
- * 终态截图里必然没有 → 必现假失败。这是时序问题不是模态问题（AI-DOM 终态检查同样救不了）。
+ * Background: waitForPageSettled waits for the page to go quiet before taking the final screenshot,
+ * and a toast disappearing by itself is itself a pixel change — by judgment time the toast has
+ * necessarily been unmounted from the DOM. If expectedOutcome says 「出现 XX 提示」, the final
+ * screenshot will inevitably lack it → guaranteed false failure. This is a timing problem, not a
+ * modal problem (an AI-DOM final-state check cannot save it either).
  *
- * 修法：把「过程证据」喂给同一次判定——末步截图（截自动作刚完成时，短时提示尚在存活
- * 窗口内）+ 每步机械捕获的页面文本快照（DOM 文字，确定性代码采集，不加新 AI 环节）。
- * 本测试锁五件事：
- *   1. 过程图 + 终态图都进 messages，图 1/2/3 标注齐全（真发了，不是只改文案）。
- *   2. 只有过程图没有整页图时也走 messages（image 字段只支持单图）。
- *   3. 过程文本快照作为文本块进消息，内容原样可达。
- *   4. prompt 写明「瞬时现象以图 3/过程文本为准；稳定终态仍以图 1/2 为准」的边界，
- *      防过程证据把真失败洗白（OR 短路的假通过风险用 prompt 规则约束）。
- *   5. 步骤执行记录（每步 warning/error）作为第三路过程证据——toast 可能出现在某步执行
- *      过程中、又在该步结束前消失（AI 降级重做耗时数十秒时尤甚），只有当时的执行者记进了备注。
+ * Fix: feed 「process evidence」 into the same judgment — a last-step screenshot (taken right after
+ * the action finished, while the transient toast is still within its survival window) + per-step
+ * mechanical page-text snapshots (DOM text, captured by deterministic code, no new AI stage).
+ * This test pins five things:
+ *   1. Process image + final images both enter messages, with 图 1/2/3 labels complete (really sent,
+ *      not just copy changed).
+ *   2. Process image only, no full-page image, still goes through messages (the image field supports
+ *      only a single image).
+ *   3. Process text snapshots enter the message as text blocks, content reachable verbatim.
+ *   4. The prompt states the boundary 「瞬时现象以图 3/过程文本为准；稳定终态仍以图 1/2 为准」,
+ *      preventing process evidence from whitewashing real failures (the OR-short-circuit false-pass
+ *      risk is constrained by prompt rules).
+ *   5. Step execution records (per-step warning/error) are the third process-evidence channel — a
+ *      toast may appear mid-step and vanish before the step ends (worst when AI-fallback redo takes
+ *      tens of seconds); only the executor at that moment could have noted it down.
  */
 import { describe, it, expect } from 'vitest';
 import type { LLMClient, LLMRequest, LLMResult } from '../src/agent/llm-client.js';

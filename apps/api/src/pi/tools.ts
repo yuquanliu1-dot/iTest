@@ -1,7 +1,7 @@
 /**
- * 空间助手工具共享类型与编译步骤归一化。
- * ToolExecutor 是"可单元测试的执行器 + TypeBox schema"形状（不依赖 pi-coding-agent），
- * 由 pi/space/tools/* 与 pi/space/session.ts 消费。
+ * Space assistant tools' shared types and compiled-step normalization.
+ * ToolExecutor is the "unit-testable executor + TypeBox schema" shape (no pi-coding-agent dependency),
+ * consumed by pi/space/tools/* and pi/space/session.ts.
  */
 import { Type } from '@earendil-works/pi-ai';
 
@@ -9,17 +9,17 @@ export interface ToolExecutor {
   name: string;
   description: string;
   parameters: ReturnType<typeof Type.Object>;
-  /** 成功时可携带回传给模型的文本（如 inspect_page 的元素清单）；缺省回 'ok'。
-   *  signal = 会话停止信号（pi agent 逐工具透传）：长任务（verify/solidify）据此中断。 */
+  /** On success may carry text back to the model (e.g. inspect_page's element listing); defaults to 'ok'.
+   *  signal = session stop signal (passed through per-tool by the pi agent): long tasks (verify/solidify) interrupt via it. */
   execute: (
     input: unknown,
     signal?: AbortSignal,
   ) => Promise<{ ok: true; data?: string } | { ok: false; error: string }>;
-  /** 透传到 defineTool 的 promptGuidelines，追加到 agent system prompt 的 Guidelines 段。 */
+  /** Passed through to defineTool's promptGuidelines, appended to the agent system prompt's Guidelines section. */
   promptGuidelines?: string[];
 }
 
-/** 停止守卫：signal 已中止或中止时立刻 reject 的 promise，供 Promise.race 抢占长任务。 */
+/** Stop guard: rejects immediately if signal is already aborted or when it aborts, for Promise.race to preempt long tasks. */
 export function abortGuard(signal: AbortSignal | undefined, message = '已停止：用户中断了本次操作'): Promise<never> {
   return new Promise<never>((_resolve, reject) => {
     if (!signal) return;
@@ -29,17 +29,17 @@ export function abortGuard(signal: AbortSignal | undefined, message = '已停止
 }
 
 /**
- * 把 LLM 输出的单个 compiled 步骤归一化为回放可识别的形状。
- * 历史实测 LLM 偶尔会产出异常形状：
- *  1) locator 写成 {item:{strategy,value}} 单对象外壳 → 还原成 [{strategy,value}]
- *  2) locator 直接写成 {strategy,value} 单对象 → 包成数组
- *  3) locator 每个候选又被多包一层数组（[[{...},{...}]]）→ 剥到只剩 [{...},{...}]
- *  4) locator 写成 {item:[{...},{...}]}（item 外壳里是候选数组）→ 摊平到 [{...},{...}]
- *  5) 数字字段被写成字符串（timeoutMs:"20000"）→ 数值化
- *  navigate / screenshot / aiTask 等无 locator 字段原样透传。
+ * Normalizes a single LLM-emitted compiled step into the shape replay recognizes.
+ * Historical measurement shows the LLM occasionally produces abnormal shapes:
+ *  1) locator written as a {item:{strategy,value}} single-object wrapper → restored to [{strategy,value}]
+ *  2) locator written directly as a {strategy,value} single object → wrapped into an array
+ *  3) each locator candidate wrapped in an extra array ([[{...},{...}]]) → peeled down to [{...},{...}]
+ *  4) locator written as {item:[{...},{...}]} (a candidate array inside an item wrapper) → flattened to [{...},{...}]
+ *  5) numeric fields written as strings (timeoutMs:"20000") → coerced to numbers
+ *  navigate / screenshot / aiTask and other locator-less fields pass through as-is.
  *
- * 归一化是「吸收模型的自然输出」层：形状异常不该变成一次工具参数校验失败
- * （prod228 会话 2026-10-21T07-36-23：模型连续 5 次 stage_case 被拒，每次重编一版步骤白烧 LLM 轮次）。
+ * Normalization is the "absorb the model's natural output" layer: shape anomalies must not become a tool-parameter validation failure
+ * (prod228 session 2026-10-21T07-36-23: the model had 5 consecutive stage_case calls rejected, re-editing a step version each time — pure wasted LLM turns).
  */
 export function normalizeCompiledStep(step: unknown): unknown {
   if (!step || typeof step !== 'object') return step;
@@ -54,8 +54,8 @@ export function normalizeCompiledStep(step: unknown): unknown {
   return s;
 }
 
-/** 摊平 locator 的各种外壳/嵌套，直到只剩候选对象数组。
- *  递归吃掉：数组（[[...]] / [{item:[...]}]）、{item:X} 外壳（X 可为对象或数组）。 */
+/** Flattens a locator's various wrappers/nestings until only the candidate-object array remains.
+ *  Recursively consumes: arrays ([[...]] / [{item:[...]}]), {item:X} wrappers (X may be an object or array). */
 function flattenLocator(value: unknown, out: unknown[]): void {
   if (Array.isArray(value)) {
     for (const v of value) flattenLocator(v, out);
@@ -63,7 +63,7 @@ function flattenLocator(value: unknown, out: unknown[]): void {
   }
   if (value && typeof value === 'object') {
     const obj = value as Record<string, unknown>;
-    // 已是候选形状（strategy/value）→ 原样收下；否则若裹着 {item:...} 就剥开。
+    // Already candidate-shaped (strategy/value) → accept as-is; otherwise if wrapped in {item:...}, peel it.
     if (obj.strategy !== undefined || obj.value !== undefined) {
       out.push(obj);
       return;
@@ -76,13 +76,13 @@ function flattenLocator(value: unknown, out: unknown[]): void {
   out.push(value);
 }
 
-/** 步骤 DSL 里常见的数值字段：模型偶尔把它们写成字符串（"20000"），逐个数值化避免整步被 zod 拒。 */
+/** Common numeric fields in the step DSL: the model occasionally writes them as strings ("20000"); coercing each avoids the whole step being rejected by zod. */
 const NUMERIC_STEP_KEYS = [
   'timeoutMs', 'delayMs', 'durationMs', 'longPressMs', 'windowMs', 'fromLine',
   'limit', 'port', 'status', 'group', 'latitude', 'longitude',
 ] as const;
 
-/** 数字字段被模型写成字符串时数值化（非纯数字串原样保留，交给 zod 报明确错误）。 */
+/** Coerces numeric fields the model wrote as strings (non-pure-digit strings are kept as-is and left for zod to report a clear error). */
 function coerceNumericString(obj: Record<string, unknown>, key: string): void {
   const v = obj[key];
   if (typeof v === 'string' && /^\d+$/.test(v.trim())) obj[key] = Number(v.trim());

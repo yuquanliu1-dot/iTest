@@ -1,17 +1,17 @@
 /**
- * 代码提交范围解析（探索式测试「代码提交范围」的核心）：
- * charter 自然语言 → LLM 意图解析 → git 历史加深 + 窗口/提交解析 + diff 改动清单 → code_scope 落库。
+ * Code commit scope resolution (the core of exploratory testing's "code commit scope"):
+ * charter natural language → LLM intent parsing → git history deepening + window/commit resolution + diff change list → code_scope persisted.
  *
- * 三步（常见情况只有一次 LLM 调用）：
- *  1. 意图解析（无 git 成本）：charter 与提交历史无关 → none，绝不碰 git；
- *  2. 取历史 + 算窗口：加深浅克隆（since 优先、depth 兜底——浅边界覆盖度必须核验，见
- *     pi/repo.ts ShallowBounds 的注明：fetch --shallow-since 在对象已在本地时可能不重写浅边界）、
- *     log 窗口过滤、基线解析（rev-list --before）、numstat/name-status 改动清单；
- *  3. 消歧（仅当线索含糊）：显式 sha/分支/标签直接 rev-parse，含糊描述（「上个版本」）才喂
- *     候选清单让 LLM 选；显式 sha 本地不存在 → 加深到 365 天重试一次，仍没有 = 编造/越界 → failed。
+ * Three steps (the common case is a single LLM call):
+ *  1. Intent parsing (zero git cost): charter unrelated to commit history → none, git never touched;
+ *  2. Fetch history + compute window: deepen the shallow clone (since first, depth as fallback — shallow-boundary coverage must be verified, see
+ *     pi/repo.ts ShallowBounds' note: fetch --shallow-since may not rewrite the shallow boundary when objects are already local),
+ *     log window filtering, baseline resolution (rev-list --before), numstat/name-status change list;
+ *  3. Disambiguation (only when the hint is vague): explicit sha/branch/tag goes straight to rev-parse; vague descriptions (「上个版本」) only then get
+ *     a candidate list fed to the LLM to pick; explicit sha missing locally → deepen to 365 days and retry once; still missing = fabricated/out of bounds → failed.
  *
- * 失败语义：任何一步抛错/超时 → failed（软失败，探索照常跑，会话不掀翻）。
- * 范围是焦点信号不是围栏——解析结果只用于定向，不改变探索的行为边界。
+ * Failure semantics: any step throws/times out → failed (soft failure; exploration runs as usual, the session isn't toppled).
+ * Scope is a focus signal, not a fence — the parsed result is only used for targeting; it doesn't change exploration's behavioral boundary.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -23,12 +23,12 @@ import { resolveLlmClient } from '../agent/llmSettings.js';
 import { gitRead, deepenVersionRepo, versionWorkspaceDir, type ShallowBounds } from '../pi/repo.js';
 import { logger } from '../logger.js';
 
-// ── 封顶常量（回灌进下一轮提示词的物料不能无限膨胀）────────────────────────────
+// ── Cap constants (material fed back into the next prompt turn cannot grow without bound) ────────────────────
 export const SCOPE_TOTAL_BUDGET_MS = 180_000;
 const INTENT_TIMEOUT_MS = 60_000;
 const DISAMBIG_TIMEOUT_MS = 60_000;
 const DEEPEN_MAX_MS = 120_000;
-/** 剩余预算低于此值不再开启新阶段（deepen/消歧都可能很慢，开了也完不成）。 */
+/** Phases no longer start below this remaining budget (deepen/disambiguation can both be slow; starting them wouldn't finish anyway). */
 const MIN_PHASE_BUDGET_MS = 30_000;
 const DEFAULT_SCOPE_DAYS = 90;
 const DAY_MS = 86_400_000;
@@ -39,9 +39,9 @@ const FILES_STORED_MAX = 200;
 const HINTURL_FILES_MAX = 20;
 const HINTURL_FILE_BYTES = 4096;
 const HINTURLS_MAX = 10;
-/** git 空树对象：窗口覆盖仓库全部历史时基线没有真提交，diff 从空树算（= 全部内容视作新增）。 */
+/** git empty tree object: when the window covers the repo's entire history the baseline has no real commit; diff is computed from the empty tree (= all content counted as added). */
 const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
-/** 显式 sha 线索的形状：6~40 位十六进制。分支/标签先走 rev-parse，失败且长得像 sha 才判「编造/越界」。 */
+/** Shape of an explicit sha hint: 6~40 hex chars. Branches/tags go through rev-parse first; only on failure and sha-like shape is it judged "fabricated/out of bounds". */
 const SHA_LIKE_RE = /^[0-9a-f]{6,40}$/i;
 
 export type CodeScopeStatus = 'resolved' | 'none' | 'failed';
@@ -51,19 +51,19 @@ export interface CodeScopeFile { path: string; status: string; additions: number
 
 export interface CodeScope {
   kind: 'time_window' | 'commit_range' | 'single_commit';
-  /** 给人看的一行标签（前端「代码范围」卡片的标题）。 */
+  /** Human-readable one-line label (title of the frontend "code scope" card). */
   label: string;
   /** YYYY-MM-DD（time_window）。 */
   since?: string;
   until?: string;
-  /** diff 基线 → 头（repo 读码通道的 diff op 用这两个）。基线不可得时缺省。 */
+  /** diff baseline → head (used by the repo read channel's diff op). Omitted when the baseline is unavailable. */
   fromSha?: string;
   toSha?: string;
   commitSha?: string;
   headSha?: string;
   commits: CodeScopeCommit[];
   files: CodeScopeFile[];
-  /** 候选起点（从改动文件源码里抽的以 / 开头的字面量路径串）——启发式，可能不准。 */
+  /** Candidate entry points (literal /-prefixed path strings extracted from changed files' source) — heuristic, may be inaccurate. */
   hintUrls: string[];
   confidence: number;
   reason: string;
@@ -71,11 +71,11 @@ export interface CodeScope {
 
 export interface ScopeIntent {
   kind: 'none' | 'time_window' | 'commit_range' | 'single_commit';
-  /** time_window 窗口边界（毫秒）。缺失按默认窗口兜底；date-only 的 until 已归一成「当日末」。 */
+  /** time_window boundaries (ms). Missing falls back to the default window; a date-only until has been normalized to "end of that day". */
   sinceMs?: number | null;
   untilMs?: number | null;
   sinceDays?: number;
-  /** commit_range / single_commit 的原始线索文本（sha / 分支 / 标签 / 含糊描述）。 */
+  /** Raw hint text of commit_range / single_commit (sha / branch / tag / vague description). */
   fromHint?: string;
   toHint?: string;
   commitHint?: string;
@@ -83,7 +83,7 @@ export interface ScopeIntent {
   reason: string;
 }
 
-// ── LLM 提示词 ────────────────────────────────────────────────────────────────
+// ── LLM prompts ──────────────────────────────────────────────────────────────
 
 const INTENT_SYSTEM_PROMPT = `你是测试平台的「代码提交范围」解析器。给你一段探索式测试的章程（charter），判断它是否要求把探索焦点对准某段代码提交历史（如「最近一个月提交的功能」「某两个提交之间的改动」「某个提交引入的问题」）。
 只输出 JSON，不要输出其他内容：
@@ -97,9 +97,9 @@ const INTENT_SYSTEM_PROMPT = `你是测试平台的「代码提交范围」解�
 const DISAMBIG_SYSTEM_PROMPT = `你是 git 提交消歧器。给你一段对提交的自然语言描述和一个编号提交清单（按时间从新到旧）。从清单里选出最符合描述的那一个提交。
 只输出 JSON：{"picks":[<序号>]}（序号 1 起，恰好一个）。清单里没有符合描述的提交 → {"picks":[]}。`;
 
-// ── 小工具 ────────────────────────────────────────────────────────────────────
+// ── Small utilities ──────────────────────────────────────────────────────────
 
-/** 等待侧超时：竞速到点即抛错（底层 promise 迟到 settle 不会变 unhandledRejection）。 */
+/** Waiting-side timeout: the race rejects as soon as the deadline hits (the underlying promise settling late never becomes unhandledRejection). */
 async function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -129,8 +129,8 @@ function pickNum(o: Record<string, unknown>, keys: string[]): number | null {
   return null;
 }
 
-/** Date → git 显式时间戳（本地时区 YYYY-MM-DDTHH:MM:SS）。裸日期与显式时间戳的边界判定不同，
- *  全链路统一走这个格式（pi/repo.ts ShallowBounds 的约定）。 */
+/** Date → git explicit timestamp (local timezone YYYY-MM-DDTHH:MM:SS). Bare dates and explicit timestamps judge boundary differently;
+ *  the whole chain standardizes on this format (the pi/repo.ts ShallowBounds convention). */
 function toGitTs(d: Date): string {
   const p = (n: number): string => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
@@ -141,7 +141,7 @@ function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-/** 解析 LLM 给的日期（YYYY-MM-DD 按本地时区零点；ISO 串交给 Date）。date-only 的 until 由调用方归一。 */
+/** Parses an LLM-provided date (YYYY-MM-DD at local-timezone midnight; ISO strings go to Date). The caller normalizes a date-only until. */
 function parseDateInput(s: string): { ms: number; text: string; dateOnly: boolean } | null {
   const t = s.trim();
   if (!t) return null;
@@ -161,11 +161,11 @@ function normalizeIntent(raw: string): ScopeIntent['kind'] {
   if (['time_window', 'time', 'window', 'date_range', '时间窗口', '时间', '时间段', '日期', '最近'].includes(s)) return 'time_window';
   if (['commit_range', 'range', 'commits', '提交区间', '提交范围', '区间'].includes(s)) return 'commit_range';
   if (['single_commit', 'single', 'commit', '单个提交', '单提交', '提交'].includes(s)) return 'single_commit';
-  // 未知值不猜：按「无提交语义」处理（保守方向 = 零 git 成本，探索照常全站跑）
+  // Unknown values are never guessed: treated as "no commit semantics" (conservative direction = zero git cost, exploration still runs the whole site)
   return 'none';
 }
 
-/** 意图 JSON → 形状化意图（字段名/判级词漂移的别名容错——模型常把字段写成别的名字）。 */
+/** Intent JSON → shaped intent (alias tolerance for field-name/grading-word drift — the model often writes fields under other names). */
 export function parseIntentValue(value: Record<string, unknown>): ScopeIntent {
   const kind = normalizeIntent(pickStr(value, ['intent', 'kind', 'type', 'mode', '意图', '类型']));
   const confidenceRaw = pickNum(value, ['confidence', '置信度', '把握']);
@@ -190,7 +190,7 @@ export function parseIntentValue(value: Record<string, unknown>): ScopeIntent {
   return out;
 }
 
-// ── git 只读辅助（全部走 gitRead，30s 超时；调用方负责保证子命令只读）──────────
+// ── git read-only helpers (all via gitRead, 30s timeout; callers guarantee the subcommands are read-only) ──
 
 async function gitLogCommits(repoDir: string, extraArgs: string[]): Promise<CodeScopeCommit[]> {
   const out = await gitRead(repoDir, ['log', `--max-count=${LOG_MAX_COUNT}`, '--date=iso', '--pretty=format:%H%x1f%ad%x1f%s', ...extraArgs]);
@@ -203,7 +203,7 @@ async function gitLogCommits(repoDir: string, extraArgs: string[]): Promise<Code
   return commits;
 }
 
-/** 窗口边界前最后一个提交（基线/toSha 的统一解法）。无命中（历史不足/仓库太新）→ null。 */
+/** Last commit before the window boundary (the unified solution for baseline/toSha). No hit (insufficient history / repo too new) → null. */
 async function revListBefore(repoDir: string, ts: string): Promise<string | null> {
   try {
     const out = (await gitRead(repoDir, ['rev-list', '-1', `--before=${ts}`, 'HEAD'])).trim();
@@ -213,7 +213,7 @@ async function revListBefore(repoDir: string, ts: string): Promise<string | null
   }
 }
 
-/** ref（sha/分支/标签/HEAD~n）→ 40 位 commit sha。不存在/形状非法 → null。 */
+/** ref (sha/branch/tag/HEAD~n) → 40-char commit sha. Missing/invalid shape → null. */
 async function resolveRef(repoDir: string, ref: string): Promise<string | null> {
   const s = ref.trim();
   if (!s || /\s/.test(s) || s.length > 200) return null;
@@ -237,7 +237,7 @@ async function commitTime(repoDir: string, sha: string): Promise<number> {
   }
 }
 
-/** 累计 diff 的改动清单：numstat（增删行数）+ name-status（A/M/D/R 状态）best-effort 拼接。 */
+/** Cumulative diff change list: numstat (added/deleted lines) + name-status (A/M/D/R states) stitched best-effort. */
 async function diffFiles(repoDir: string, from: string, to: string): Promise<CodeScopeFile[]> {
   const [numstatRaw, statusRaw] = await Promise.all([
     gitRead(repoDir, ['diff', '--numstat', from, to]),
@@ -254,7 +254,7 @@ async function diffFiles(repoDir: string, from: string, to: string): Promise<Cod
   for (const line of statusRaw.split('\n')) {
     const m = /^([A-Z])\d*\t(.+)$/.exec(line.trim());
     if (!m) continue;
-    // rename 行是 R100\told\tnew：path 取新名（numstat 的 rename 计数格式不同，查不到就 0）
+    // rename lines are R100\told\tnew: path takes the new name (numstat's rename count format differs; 0 when not found)
     const segs = m[2]!.split('\t');
     const p = segs[segs.length - 1]!;
     if (seen.has(p)) continue;
@@ -265,7 +265,7 @@ async function diffFiles(repoDir: string, from: string, to: string): Promise<Cod
   return files.slice(0, FILES_STORED_MAX);
 }
 
-/** 基线不可得时的兜底：按提交聚合 numstat（不需要父提交可达，浅边界截断也能算出局部清单）。 */
+/** Fallback when the baseline is unavailable: aggregate numstat by commit (needs no reachable parent; works even with shallow-boundary truncation). */
 async function aggregateLogFiles(repoDir: string, extraArgs: string[]): Promise<CodeScopeFile[]> {
   const out = await gitRead(repoDir, ['log', '--numstat', '--pretty=format:%x00', ...extraArgs]);
   const agg = new Map<string, CodeScopeFile>();
@@ -283,7 +283,7 @@ async function aggregateLogFiles(repoDir: string, extraArgs: string[]): Promise<
   return [...agg.values()].slice(0, FILES_STORED_MAX);
 }
 
-// ── 候选起点抽取（纯字面量，零 LLM 零臆造——启发式，可能不准，提示词里明说）────
+// ── Candidate entry-point extraction (pure literals, zero LLM, zero invention — heuristic, may be inaccurate, stated plainly in the prompt) ──
 
 const STATIC_ASSET_RE = /\.(png|jpe?g|gif|bmp|svg|ico|woff2?|ttf|otf|eot|pdf|zip|gz|tar|mp4|mp3|webm|map|lock)$/i;
 const QUOTED_PATH_RE = /['"`](\/[A-Za-z0-9_\-.\/:@[\]]{1,80})['"`]/g;
@@ -304,7 +304,7 @@ export function extractHintUrls(sources: Array<{ path: string; content: string }
   return out;
 }
 
-/** 改动文件的头 4KB 读出来喂 extractHintUrls（deleted 文件读不到就跳过）。 */
+/** Reads the first 4KB of each changed file to feed extractHintUrls (unreadable deleted files are skipped). */
 async function readSourceHeads(repoDir: string, files: CodeScopeFile[]): Promise<Array<{ path: string; content: string }>> {
   const sources: Array<{ path: string; content: string }> = [];
   for (const f of files) {
@@ -317,26 +317,26 @@ async function readSourceHeads(repoDir: string, files: CodeScopeFile[]): Promise
         const buf = Buffer.alloc(HINTURL_FILE_BYTES);
         const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
         if (bytesRead === 0) continue;
-        const head = buf.subarray(0, bytesRead); // 只看实读字节——缓冲区尾部全是 0，不切会把文本误判成二进制
-        if (head.includes(0)) continue; // 二进制
+        const head = buf.subarray(0, bytesRead); // only the actually-read bytes — the buffer tail is all zeros; not slicing would misjudge text as binary
+        if (head.includes(0)) continue; // binary
         sources.push({ path: f.path, content: head.toString('utf8') });
       } finally {
         await fh.close();
       }
     } catch {
-      // 文件读不到就跳过（deleted / 权限），不参与候选起点
+      // Skip unreadable files (deleted / permissions); they don't participate in candidate entry points
     }
   }
   return sources;
 }
 
-// ── 线索解析与消歧 ────────────────────────────────────────────────────────────
+// ── Hint resolution and disambiguation ───────────────────────────────────────
 
 type EndpointResult = { sha: string } | { needPick: true };
 
 /**
- * 区间端点解析：显式 ref 直接 rev-parse；长得像 sha 但本地没有 → 加深到 365 天重试一次，
- * 仍没有 = 编造/仓库里真没有 → null（拒绝整个范围，不把编造 sha 当真）；其余含糊描述 → 交 LLM 选。
+ * Range endpoint resolution: explicit ref goes straight to rev-parse; sha-like but missing locally → deepen to 365 days and retry once,
+ * still missing = fabricated/genuinely absent in the repo → null (the whole scope is rejected; a fabricated sha is never taken as real); other vague descriptions → the LLM picks.
  */
 async function resolveEndpoint(
   repoDir: string,
@@ -358,13 +358,13 @@ async function resolveEndpoint(
     );
     notes.push('线索指向更早历史，已加深到 365 天');
   } catch {
-    // 加深失败按原路径继续判死（fetch 已在后台跑，锁由 deepenVersionRepo 自行释放）
+    // Deepen failure keeps the original hard-fail path (fetch is already running in the background; the lock is released by deepenVersionRepo itself)
   }
   const retry = await resolveRef(repoDir, h);
   return retry ? { sha: retry } : null;
 }
 
-/** 含糊描述 → LLM 从编号清单里选一个。选不出（空 picks / 越界序号 / 超时）→ null。 */
+/** Vague description → the LLM picks one from the numbered list. No pick (empty picks / out-of-range index / timeout) → null. */
 async function pickCommitSha(client: LLMClient, listed: CodeScopeCommit[], hint: string): Promise<string | null> {
   const lines = listed.map((c, i) => `${i + 1}. ${c.sha.slice(0, 10)} ${(c.date || '').slice(0, 10)} ${c.subject}`);
   try {
@@ -386,20 +386,20 @@ async function pickCommitSha(client: LLMClient, listed: CodeScopeCommit[], hint:
   }
 }
 
-// ── 主入口 ────────────────────────────────────────────────────────────────────
+// ── Main entry ───────────────────────────────────────────────────────────────
 
 export interface ResolveCodeScopeDeps {
-  /** 版本工作树目录（缺省 versionWorkspaceDir(versionId)）；测试注入临时仓库。 */
+  /** Version workspace directory (default versionWorkspaceDir(versionId)); tests inject a temporary repo. */
   repoDir: string;
-  /** 历史加深回调（缺省 deepenVersionRepo(versionId, bounds)）；测试注入 no-op（临时仓库全量历史）。 */
+  /** History-deepen callback (default deepenVersionRepo(versionId, bounds)); tests inject a no-op (temporary repos have full history). */
   deepen: (bounds: ShallowBounds) => Promise<string>;
-  /** LLM 客户端（缺省 resolveLlmClient().client）；测试注入桩。 */
+  /** LLM client (default resolveLlmClient().client); tests inject a stub. */
   llm: LLMClient;
 }
 
 /**
- * 解析 charter 的代码提交范围并落库（code_scope + code_scope_status）。
- * 永不抛错：任何失败路径都落 failed 后返回（探索照常跑，会话不掀翻）。
+ * Resolves the charter's code commit scope and persists it (code_scope + code_scope_status).
+ * Never throws: every failure path lands failed and returns (exploration runs as usual, the session isn't toppled).
  */
 export async function resolveCodeScope(
   input: { sessionId: string; charter: string; versionId: string },
@@ -423,7 +423,7 @@ export async function resolveCodeScope(
   try {
     const client = deps?.llm ?? (await resolveLlmClient()).client;
 
-    // —— 第 1 步：意图解析（无 git 成本；none 即短路）——
+    // —— Step 1: intent parsing (zero git cost; none short-circuits) ——
     const intentRes = await withTimeout(
       completeJson(client, { systemPrompt: INTENT_SYSTEM_PROMPT, userMessage: input.charter.slice(0, 4000) }),
       INTENT_TIMEOUT_MS,
@@ -475,8 +475,8 @@ export async function resolveCodeScope(
       const untilMs = intent.untilMs ?? nowMs;
       const sinceTs = toGitTs(new Date(sinceMs));
       const untilExclTs = toGitTs(new Date(untilMs + 60_000));
-      // 基线 = 窗口起点前最后一个提交。浅边界可能截断：shallow 且基线为空 → depth 兜底加深再试
-      // （fetch --shallow-since 在对象已在本地时可能不重写浅边界，depth 恒生效——见 ShallowBounds 注明）。
+      // Baseline = the last commit before the window start. Shallow boundaries may truncate: shallow and empty baseline → deepen by depth and retry
+      // (fetch --shallow-since may not rewrite the shallow boundary when objects are already local; depth always takes effect — see the ShallowBounds note).
       let baseline = await revListBefore(repoDir, sinceTs);
       if (!baseline && (await isShallow(repoDir))) {
         await withTimeout(
@@ -503,10 +503,10 @@ export async function resolveCodeScope(
     } else if (intent.kind === 'commit_range') {
       const fromRes = await resolveEndpoint(repoDir, intent.fromHint ?? '', deepen, left, notes);
       const toRes = intent.toHint?.trim() ? await resolveEndpoint(repoDir, intent.toHint, deepen, left, notes) : { sha: headSha };
-      if (!fromRes) return await finish('failed', null); // 显式 sha 加深重试后仍不存在 = 编造/越界
+      if (!fromRes) return await finish('failed', null); // explicit sha still missing after the deepen retry = fabricated/out of bounds
       if (!toRes) return await finish('failed', null);
       if ('needPick' in fromRes || 'needPick' in toRes) {
-        // 至少一端含糊 → LLM 从本地清单选
+        // At least one endpoint vague → the LLM picks from the local list
         const listed = (await gitLogCommits(repoDir, [])).slice(0, COMMITS_TO_LLM_MAX);
         if (listed.length === 0) return await finish('failed', null);
         if ('needPick' in fromRes) {
@@ -524,7 +524,7 @@ export async function resolveCodeScope(
           toSha = toRes.sha;
         }
         if (fromSha === toSha) return await finish('failed', null);
-        // 端点次序归一：旧 → fromSha，新 → toSha（diff 方向才对）
+        // Endpoint order normalized: older → fromSha, newer → toSha (so the diff direction is right)
         if (await commitTime(repoDir, fromSha!) > await commitTime(repoDir, toSha!)) {
           [fromSha, toSha] = [toSha!, fromSha!];
         }
@@ -540,7 +540,7 @@ export async function resolveCodeScope(
       if (direct && 'sha' in direct) {
         commitSha = direct.sha;
       } else if (direct === null) {
-        return await finish('failed', null); // 显式 sha 加深重试后仍不存在 = 编造/越界
+        return await finish('failed', null); // explicit sha still missing after the deepen retry = fabricated/out of bounds
       } else {
         const listed = (await gitLogCommits(repoDir, [])).slice(0, COMMITS_TO_LLM_MAX);
         if (listed.length === 0) return await finish('failed', null);
@@ -549,13 +549,13 @@ export async function resolveCodeScope(
         commitSha = picked;
       }
       toSha = commitSha;
-      // 单提交的 diff 基线 = 父提交；父不在本地（根提交/浅边界刚好截在父上）→ 按提交聚合兜底
+      // Single-commit diff baseline = parent commit; parent not local (root commit / shallow boundary cut exactly at the parent) → aggregate-by-commit fallback
       fromSha = (await resolveRef(repoDir, `${commitSha}~1`)) ?? undefined;
       commits = await gitLogCommits(repoDir, ['-1', commitSha]);
       files = fromSha ? await diffFiles(repoDir, fromSha, toSha) : await aggregateLogFiles(repoDir, ['-1', commitSha]);
     }
 
-    // —— 候选起点（启发式）+ 落库 ——
+    // —— Candidate entry points (heuristic) + persist ——
     const hintUrls = extractHintUrls(await readSourceHeads(repoDir, files));
     let label: string;
     if (intent.kind === 'time_window') {

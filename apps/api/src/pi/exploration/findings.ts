@@ -1,12 +1,13 @@
 /**
- * finding 状态与落库（pi 链路 A1 证据帧）。
+ * Finding persistence (pi chain A1 evidence frame).
  *
- * 与 legacy onFindings 的结构性差异：legacy 的截图发生在「模型下一轮 JSON 到达、
- * 上一条动作已把页面改掉」之后——截图永远不是模型做判断那一刻的画面。
- * pi 链路的 report_finding 是模型主动调用的工具：工具内部先 settle 再截图（= 决策帧），
- * 帧元数据落 evidence_frame 列，帧图回传给模型自检（报的内容与帧内容对不上，下一轮自己纠正）。
+ * Structural difference from legacy onFindings: legacy screenshotted after "the model's next-round JSON arrived and
+ * the previous action had already mutated the page" — the screenshot was never the frame the model judged on.
+ * The pi chain's report_finding is a tool the model actively calls: the tool settles first, then screenshots (=
+ * the decision frame); frame metadata lands in the evidence_frame column and the frame image is returned to the
+ * model for self-checking (if the report and the frame disagree, it corrects itself next round).
  *
- * 去重/配额/形状容错复用 coerceFindings 同一份口径（跨轮 near-dup、近义合并、脏 severity 兜底）。
+ * Dedup/quota/shape tolerance reuse the same rules as coerceFindings (cross-round near-dups, synonym merging, dirty severity fallback).
  */
 import fs from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -25,11 +26,11 @@ import { logger } from '../../logger.js';
 
 export interface FindingReportOutcome {
   ok: boolean;
-  /** 落库序号（ok=true 时有）。 */
+  /** Persisted ordinal (present when ok=true). */
   order?: number;
-  /** 给模型的反馈文本（可行动）。 */
+  /** Feedback text for the model (actionable). */
   message: string;
-  /** 决策帧图（ok=true 且截图成功时附上，供模型自检）。 */
+  /** Decision-frame image (attached when ok=true and the screenshot succeeded, for model self-checking). */
   imageBase64?: string;
 }
 
@@ -42,12 +43,12 @@ export interface FindingStore {
 export function createFindingStore(args: {
   sessionId: string;
   page: Page;
-  /** 自上一条 finding 起的留痕片段（runner 持有，finding 落库后由 store 通知重置）。 */
+  /** Action-trail fragment since the last finding (held by the runner; the store signals a reset after a finding is persisted). */
   getTrailSince(): ExplorationStep[];
   resetTrailSince(): void;
-  /** 会话级动作序号（evidence_frame.trailIndex：帧在整场动作序列里的位置）。 */
+  /** Session-level action ordinal (evidence_frame.trailIndex: the frame's position in the whole action sequence). */
   sessionStepsLength(): number;
-  /** 留痕落库（finding 落库后立刻 flush，详情页时序一致）。 */
+  /** Trail persistence (flushed immediately after the finding lands, keeping detail-page ordering consistent). */
   onPersist(): Promise<void>;
 }): FindingStore {
   const seenTitles = new Set<string>();
@@ -76,19 +77,20 @@ export function createFindingStore(args: {
       }
       const f = accepted[0]!;
       const order = savedCount + 1;
-      // 决策帧：先等渲染稳定再截——这一帧必须是模型判断时的画面（A1 的全部意义）。
+      // Decision frame: settle first, then capture — this frame must be the picture at the moment the model judged (the whole point of A1).
       try {
         await waitForPageSettled(args.page, { timeoutMs: 2500 });
       } catch {
-        /* settle 尽力而为：失败也截图 */
+        /* settle best-effort: screenshot even on failure */
       }
       let buf: Buffer | null = null;
       let frameWritten = false;
       try {
         buf = await args.page.screenshot({ timeout: 15_000, type: 'png' });
-        // 目录必须自建：legacy 走 page.screenshot({path}) 时 Playwright 会顺带建目录，
-        // pi 链路改成 buffer + fs.writeFile 后没有这一步 → ENOENT，决策帧从未落盘
-        // （prod228 实证：库里记了路径、文件不存在，前端证据图必然 404）。
+        // The directory must be created manually: legacy went through page.screenshot({path}), where Playwright creates
+        // the directory along the way; after the pi chain switched to buffer + fs.writeFile that step was missing → ENOENT,
+        // decision frames never hit disk (proven on prod228: the DB recorded a path, the file did not exist, the frontend
+        // evidence image was a guaranteed 404).
         const diskPath = screenshotDiskPath(args.sessionId, order);
         await fs.mkdir(dirname(diskPath), { recursive: true });
         await fs.writeFile(diskPath, buf);
@@ -97,7 +99,7 @@ export function createFindingStore(args: {
         logger.warn({ err: e, sessionId: args.sessionId, order }, 'exploration pi finding screenshot failed');
       }
       const trailSince = args.getTrailSince();
-      // 只有真落盘才记路径：写失败还记路径 = 前端一张必然裂开的图。
+      // Record the path only on a real disk write: recording a path despite a failed write = a frontend image guaranteed to be broken.
       const screenshotPath = frameWritten ? `/screenshots/${args.sessionId}/finding-${order}.png` : null;
       try {
         await db.insert(explorationFindings).values({
@@ -120,7 +122,7 @@ export function createFindingStore(args: {
         });
         savedCount += 1;
         seenTitles.add(f.title);
-        // 只有落了 finding 才重置片段：被丢弃的批次不能截断「自上一条 finding 起」的语义（同 legacy）。
+        // Reset the fragment only when a finding landed: a dropped batch must not truncate the "since the last finding" semantics (same as legacy).
         args.resetTrailSince();
         await args.onPersist();
         return {

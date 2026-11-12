@@ -46,9 +46,9 @@ describe('preflight', () => {
     expect(r.tabsObserved).toEqual([0, 1]);
   });
 
-  // prod228 02c812ea 回归：preflight 对同 URL 的二次 goto = 整页重载（只等 domcontentloaded），
-  // 把慢 SPA 打回启动初期 → 第 1 步冲进空白页 LocatorAllFailed。init-goto 已落地时调用方
-  // 传 skipNavigate=true，此处不得再导航。
+  // prod228 02c812ea regression: preflight's second goto of the same URL = a full page reload (waits only for domcontentloaded),
+  // throwing a slow SPA back to its startup phase → step 1 charges into a blank page and hits LocatorAllFailed. When init-goto has
+  // already happened, the caller passes skipNavigate=true and navigation must not happen again here.
   it('skipNavigate=true: 不再 goto，urlReachable 直接 true，body 检查照常执行', async () => {
     const page = pageWith(async () => 'ok', async () => undefined);
     const r = await preflight(page, { url: 'https://x.test/app', title: 'x' }, { skipNavigate: true });

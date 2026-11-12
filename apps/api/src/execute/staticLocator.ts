@@ -1,35 +1,38 @@
 /**
- * 源码静态定位分析（L1 源码增强）：对 compiled 候选 locator 跑源码 grep，
- * 给出「该锚点在源码里命中几次 / 在不在源码里」的结构化事实，供 LLM 排行候选、
- * 换掉伪唯一锚点。锚点无关——不假设 data-testid / class / 任何框架——只统计
- * 「任意静态锚点字面量」的源码命中数，对任何项目成立。
+ * Source-level static locator analysis (L1 source enhancement): runs a source grep on compiled
+ * candidate locators, producing structured facts about "how many times this anchor hits in the
+ * source / whether it exists there at all", for the LLM to rank candidates and swap out
+ * pseudo-unique anchors. Anchor-agnostic — no assumption about data-testid / class / any
+ * framework — it only counts source hits of "any static anchor literal", valid for any project.
  *
- * 核心原则「静态排行，运行时拍板」：本模块只产出 advisory 事实，绝不判死。
- * 判 verdict 的规则（泛化关键）：
- * - 命中恰好 1 → unique（唯一锚点，排前）
- * - 命中 > 1   → multiple（预测运行时 AmbiguousLocator，排后/告警）
- * - 命中 0     → 二级「去参化」探测区分：
- *     · loosened 键（属性只保留属性名 / 字面量本身）在源码里有 → dynamic-suspect：
- *       锚点由动态绑定渲染（:id="x" / v-for / 模板绑定），运行时确认，不误杀；
- *     · loosened 也没有 → not-found：源码无字面命中。注意这≠锚点不存在——抽屉式渲染 /
- *       运行时拼接的 id（如 Element-UI tab 的 id="tab-xxx"）grep 不到是常态，
- *       摘要措辞因此保持中性，运行时命中才是判据（绝不判死）。
+ * Core principle "static ranking, runtime decides": this module only produces advisory facts,
+ * never a hard verdict. Rules for the verdict (key to generalization):
+ * - Exactly 1 hit     → unique (unique anchor, ranked first)
+ * - More than 1 hit   → multiple (predicts a runtime AmbiguousLocator, ranked later/warned)
+ * - 0 hits            → second-stage "de-parameterized" probe to disambiguate:
+ *     · a loosened key (attribute name only / the literal itself) exists in the source →
+ *       dynamic-suspect: the anchor is rendered by dynamic binding (:id="x" / v-for / template
+ *       binding), confirmed at runtime, not falsely killed;
+ *     · no loosened key either → not-found: no literal hit in source. Note this ≠ the anchor
+ *       does not exist — for drawer-style rendering / runtime-concatenated ids (e.g. the
+ *       Element-UI tab's id="tab-xxx"), a grep miss is the norm, so the summary wording stays
+ *       neutral; the runtime hit is the deciding evidence (never a hard verdict).
  *
- * count 回调注入式（execute 层纯逻辑可单测）：生产接 repo_grep（见 repo.ts 的
- * countRepoGrep），测试接假计数器。
+ * The count callback is injected (pure logic at the execute layer, unit-testable): production
+ * wires repo_grep (see countRepoGrep in repo.ts), tests wire a fake counter.
  */
 import type { Locator } from '@itest/shared';
 
 export type LocatorVerdict = 'unique' | 'multiple' | 'not-found' | 'dynamic-suspect' | 'skipped';
 
-/** 一次 grep 的结构化命中。count 为命中行数（截断时至少达上限）。 */
+/** Structured hit of one grep. count is the number of matched lines (at least the cap when truncated). */
 export interface SourceCount {
   count: number;
   truncated: boolean;
   samplePaths: string[];
 }
 
-/** 单候选静态分析报告。sourceCount=null 表示 skipped（无静态可判）。 */
+/** Static analysis report for a single candidate. sourceCount=null means skipped (nothing static to judge). */
 export interface StaticLocatorReport {
   strategy: string;
   value: string;
@@ -40,24 +43,24 @@ export interface StaticLocatorReport {
 }
 
 export type LocatorCountFn = (pattern: string) => Promise<SourceCount>;
-/** 批量计数回调：一次遍历查出全部 pattern 的命中数。返回 Map 缺失的 pattern 视为命中 0。 */
+/** Batch counting callback: one traversal finds hit counts for all patterns. Patterns missing from the returned Map count as 0 hits. */
 export type BatchLocatorCountFn = (patterns: string[]) => Promise<Map<string, SourceCount>>;
 
 const RE_SPECIAL = /[.*+?^${}()|[\]\\]/g;
 const esc = (s: string): string => s.replace(RE_SPECIAL, '\\$&');
 
-/** 属性选择器 [name="val"] / [name='val'] / [name=val]。 */
+/** Attribute selector [name="val"] / [name='val'] / [name=val]. */
 const CSS_ATTR_RE = /\[([^\]\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]+))\]/;
 const ID_RE = /#([A-Za-z_][\w-]*)/;
 const CLASS_RE = /\.([A-Za-z_][\w-]*)/;
-/** role value 形如 button[name='登录']；testId 形如 [data-testid="tab"] 或裸 token。 */
+/** role value looks like button[name='登录']; testId looks like [data-testid="tab"] or a bare token. */
 const ROLE_NAME_RE = /name=["']([^"']+)["']/;
 
 /**
- * 把候选 locator 映射为 grep 键对。
- * precise：精确锚点键（属性名+值邻接，或裸 token），首探测用它。
- * loose：precise 落空后的去参化键（属性候选退化为仅属性名，标记动态绑定），无则 null。
- * 返回 null → 该策略/形态无静态可判（xpath、移动端锚点、裸标签 css）。
+ * Maps a candidate locator to a pair of grep keys.
+ * precise: exact anchor key (attribute name+value adjacent, or a bare token); used for the first probe.
+ * loose: de-parameterized key for when precise misses (attribute candidates degrade to the attribute name only, marking dynamic binding); null if none.
+ * Returns null → this strategy/shape has nothing static to judge (xpath, mobile anchors, bare-tag css).
  */
 export function extractGrepKeys(strategy: string, value: string): { precise: string; loose: string | null } | null {
   switch (strategy) {
@@ -67,7 +70,7 @@ export function extractGrepKeys(strategy: string, value: string): { precise: str
         const name = attr[1]!;
         const val = attr[2] ?? attr[3] ?? attr[4] ?? '';
         if (val) {
-          // 源码邻接形态:title="查看" / title='查看' / :title="'查看'" / {title:'查看'}
+          // Source-adjacent shapes: title="查看" / title='查看' / :title="'查看'" / {title:'查看'}
           return { precise: `${esc(name)}\\s*[:=]\\s*['"]{1,2}${esc(val)}`, loose: `\\b${esc(name)}\\b` };
         }
       }
@@ -75,7 +78,7 @@ export function extractGrepKeys(strategy: string, value: string): { precise: str
       if (id) return { precise: esc(id[1]!), loose: null };
       const cls = CLASS_RE.exec(value);
       if (cls) return { precise: esc(cls[1]!), loose: null };
-      return null; // 裸标签 / 纯组合器:无静态可判
+      return null; // Bare tag / pure combinator: nothing static to judge
     }
     case 'text': {
       const t = value.slice(0, 40).trim();
@@ -84,7 +87,7 @@ export function extractGrepKeys(strategy: string, value: string): { precise: str
     case 'role': {
       const m = ROLE_NAME_RE.exec(value);
       if (m) return { precise: `name\\s*[:=]\\s*['"]{1,2}${esc(m[1]!)}`, loose: null };
-      return null; // 纯 role 名（button 等）无静态可判
+      return null; // Pure role name (button etc.) has nothing static to judge
     }
     case 'testId': {
       if (value.startsWith('[')) {
@@ -94,7 +97,7 @@ export function extractGrepKeys(strategy: string, value: string): { precise: str
       const t = value.trim();
       return t ? { precise: `data-testid\\s*[:=]\\s*['"]?${esc(t)}`, loose: 'data-testid' } : null;
     }
-    // xpath 历史兼容、移动端锚点(accessibilityId/label/predicate):web 回放不支持或无静态可判
+    // xpath legacy compat, mobile anchors (accessibilityId/label/predicate): not supported by web replay or nothing static to judge
     default:
       return null;
   }
@@ -108,17 +111,17 @@ const VERDICT_RANK: Record<LocatorVerdict, number> = {
   skipped: 4,
 };
 
-/** 按稳定度降序稳定重排候选（unique → dynamic-suspect → multiple → not-found → skipped）。 */
+/** Stably re-sorts candidates by stability descending (unique → dynamic-suspect → multiple → not-found → skipped). */
 export function reorderCandidates(reports: StaticLocatorReport[]): StaticLocatorReport[] {
   return [...reports].sort((a, b) => VERDICT_RANK[a.verdict] - VERDICT_RANK[b.verdict]);
 }
 
 /**
- * 对一组候选跑静态定位分析。count 调用按 pattern 去重缓存（同一条目在候选间复用）。
- * 只产出 advisory 事实，不判死。
+ * Runs static locator analysis on a set of candidates. count calls are deduplicated and cached per
+ * pattern (the same entry is reused across candidates). Only produces advisory facts, never a hard verdict.
  *
- *  逐 pattern 计数（每个 pattern 一次进程/IO）。跨候选、跨用例复用请改用
- *  analyzeLocatorCandidatesBatch —— 那是同一套判决逻辑，只是计数来自单次批量查询。
+ *  Counts per pattern (one process/IO per pattern). To reuse across candidates and cases use
+ *  analyzeLocatorCandidatesBatch — same verdict logic, just counting from a single batch query.
  */
 export async function analyzeLocatorCandidates(
   candidates: Locator[],
@@ -137,13 +140,15 @@ export async function analyzeLocatorCandidates(
 }
 
 /**
- * 批量版：先把所有候选要用的 pattern（precise + loose）一次性收集去重，交给 batchCount
- *  单次查询，再走与 analyzeLocatorCandidates 完全相同的判决。产出的 StaticLocatorReport
- *  形状逐字段一致——下游 summarizeStaticReports / SSE 事件零改动。
+ * Batch version: first collects all patterns the candidates need (precise + loose) in one deduplicated pass,
+ *  hands them to batchCount for a single query, then runs the exact same verdicts as analyzeLocatorCandidates.
+ *  The produced StaticLocatorReport shapes match field-by-field — downstream summarizeStaticReports / SSE
+ *  events need zero changes.
  *
- *  跨候选、跨用例共享一次查询，重复 pattern（如不同步骤共用 [placeholder="账号"]）天然去重；
- *  只在 precise 命中 0 的候选上追加 loose 查询的时序差异在这里被抹平：判决只关心 count 是否
- *  为 0/1/>1，precise=0 这个事实本身不依赖查询顺序。
+ *  One query is shared across candidates and cases; repeated patterns (e.g. different steps sharing
+ *  [placeholder="账号"]) deduplicate naturally; the timing difference of only appending loose queries on
+ *  candidates whose precise hit 0 is erased here: the verdict only cares whether count is 0/1/>1, and the
+ *  precise=0 fact itself does not depend on query order.
  */
 export async function analyzeLocatorCandidatesBatch(
   candidates: Locator[],
@@ -161,7 +166,7 @@ export async function analyzeLocatorCandidatesBatch(
   return judgeCandidates(candidates, async (p) => lookup(p));
 }
 
-/** unique / multiple / not-found / dynamic-suspect 的判决，两种计数注入方式共用。 */
+/** Verdicts for unique / multiple / not-found / dynamic-suspect, shared by both count injection styles. */
 async function judgeCandidates(
   candidates: Locator[],
   counted: (pattern: string) => Promise<SourceCount>,
@@ -182,7 +187,7 @@ async function judgeCandidates(
       reports.push({ strategy: c.strategy, value: c.value, verdict: 'unique', sourceCount: 1, sourceTruncated: precise.truncated, samplePaths: precise.samplePaths });
       continue;
     }
-    // precise 命中 0：去参化二级探测，区分「动态渲染」与「源码无字面痕迹」
+    // precise hit 0: de-parameterized second-stage probe, distinguishing "dynamically rendered" from "no literal trace in source"
     if (keys.loose) {
       const loose = await counted(keys.loose);
       if (loose.count > 0) {
@@ -195,17 +200,19 @@ async function judgeCandidates(
   return reports;
 }
 
-/** 把分析结果压缩成给 LLM/人类的一行摘要。 */
+/** Compresses the analysis into a one-line summary for the LLM/humans. */
 export function summarizeStaticReports(reports: StaticLocatorReport[]): string | null {
   if (reports.length === 0) return null;
   const parts: string[] = [];
   const mult = reports.filter((r) => r.verdict === 'multiple').map((r) => `${r.strategy}:${r.value}`);
   if (mult.length > 0) parts.push(`源码命中多处（回放歧义风险）: ${mult.join('、')}`);
   const nf = reports.filter((r) => r.verdict === 'not-found').map((r) => `${r.strategy}:${r.value}`);
-  // 措辞刻意中性：源码 grep 只覆盖字面量，抽屉式渲染/运行时拼接的属性名（Element-UI 给 tab 生成
-  // id="tab-xxx" 之类）grep 不到是常态。写成「疑似臆造」会被 AI 当成「这个 selector 是假的」而
-  // 丢弃运行时已证明能命中的候选——2026-10-13 prod228 实测：#tab-autodo 运行时真实存在，
-  // 却被这条提示带偏，改写步骤又验两轮才蒙混通过。静态事实只做排序参考，运行时命中才是判据。
+  // Wording deliberately neutral: the source grep only covers literals, and drawer-style rendering /
+  // runtime-concatenated attribute names (Element-UI generating id="tab-xxx" for tabs and the like) missing
+  // from a grep is the norm. Worded as "suspected fabrication", the AI would take it as "this selector is fake"
+  // and drop candidates already proven to hit at runtime — observed on prod228 on 2026-10-13: #tab-autodo truly
+  // existed at runtime, yet this hint steered the AI into rewriting the step and burning two more verification
+  // rounds before squeaking through. Static facts only inform ranking; the runtime hit is the deciding evidence.
   if (nf.length > 0) parts.push(`源码无字面命中（仅供排序参考，运行时命中与否以实测为准）: ${nf.join('、')}`);
   const dyn = reports.filter((r) => r.verdict === 'dynamic-suspect').map((r) => `${r.strategy}:${r.value}`);
   if (dyn.length > 0) parts.push(`源码未字面命中但存在动态绑定（以运行时为准）: ${dyn.join('、')}`);

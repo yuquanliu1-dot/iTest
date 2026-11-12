@@ -1,10 +1,11 @@
 /**
  * Redis read-through cache (fail-open).
  *
- * 用法:`await cache.wrap(key, ttlMs, () => loader())` — 命中返回缓存,未命中走 loader 并回填。
- * 任一缓存系统错误被吞掉,行为退化为直接调用 loader,不影响业务路径。
+ * Usage: `await cache.wrap(key, ttlMs, () => loader())` — a hit returns the cache; a miss runs the loader and backfills.
+ * Any cache system error is swallowed; behavior degrades to calling the loader directly, leaving business paths untouched.
  *
- * 启动时 `REDIS_URL` 缺失或首次连接失败 → client = null,所有调用失败到 loader;便于本地无 redis 与 vitest。
+ * If `REDIS_URL` is missing at startup or the first connection fails → client = null; all calls fall through to the
+ * loader. Makes running without redis locally and under vitest easy.
  */
 
 import Redis from 'ioredis';
@@ -13,7 +14,7 @@ import { logger } from '../logger.js';
 let client: Redis | null = null;
 let initialized = false;
 
-/** 进程内惰性初始化一次。REDIS_URL 未设置时直接关掉;设置则尝试 ping 一次,失败也关掉。 */
+/** Lazily initializes once per process. Shuts off when REDIS_URL is unset; if set, tries one ping and shuts off on failure too. */
 function getClient(): Redis | null {
   if (initialized) return client;
   initialized = true;
@@ -30,7 +31,7 @@ function getClient(): Redis | null {
   r.on('error', (err) => {
     logger.debug({ err: err.message }, 'cache redis error');
   });
-  // 一次性 ping:成功保留 client;失败关掉,后续 wrap 直接退化到 loader
+  // One-shot ping: success keeps the client; failure shuts it off, and later wrap calls degrade straight to the loader
   r.connect()
     .then(() => r.ping())
     .then(() => {
@@ -42,12 +43,12 @@ function getClient(): Redis | null {
       r.disconnect();
       client = null;
     });
-  return client; // 启动期间第一次调用拿到的是 null,等异步替换
+  return client; // the first call during startup gets null, waiting for the async replacement
 }
 
 /**
- * 读穿透 loader;loader 抛错原样向上,缓存系统错误被吞。
- * T 必须可 JSON 序列化(Date/Map/Set 等不可直接走;调用方负责预处理)。
+ * Read-through loader; loader errors propagate as-is, cache system errors are swallowed.
+ * T must be JSON-serializable (Date/Map/Set etc. cannot pass directly; the caller preprocesses).
  */
 export async function wrap<T>(key: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
   const c = getClient();
@@ -62,7 +63,7 @@ export async function wrap<T>(key: string, ttlMs: number, loader: () => Promise<
     logger.debug({ key, err: (err as Error).message }, 'cache get failed');
   }
   const value = await loader();
-  // null/undefined 不入缓存(避免命中"未找到"被长期误判)
+  // null/undefined are not cached (avoids "not found" hits being misjudged for a long time)
   if (value !== null && value !== undefined) {
     try {
       await c.set(key, JSON.stringify(value), 'PX', ttlMs);
@@ -73,7 +74,7 @@ export async function wrap<T>(key: string, ttlMs: number, loader: () => Promise<
   return value;
 }
 
-/** 显式失效单 key;吞失败。 */
+/** Explicitly invalidates a single key; swallows failures. */
 export async function del(key: string): Promise<void> {
   const c = getClient();
   if (!c) return;
@@ -85,8 +86,8 @@ export async function del(key: string): Promise<void> {
 }
 
 /**
- * 通配失效(用 SCAN,避免 KEYS 命令阻塞)。
- * pattern 例:`tags:*`、`memberships:*`。
+ * Wildcard invalidation (uses SCAN to avoid the KEYS command blocking).
+ * Example patterns: `tags:*`, `memberships:*`.
  */
 export async function delPattern(pattern: string): Promise<void> {
   const c = getClient();
@@ -103,17 +104,17 @@ export async function delPattern(pattern: string): Promise<void> {
   }
 }
 
-/** 命名空间对象,引用统一调用 `cache.del` / `cache.delPattern` / `cache.wrap`。 */
+/** Namespace object; callers uniformly use `cache.del` / `cache.delPattern` / `cache.wrap`. */
 export const cache = { del, delPattern, wrap };
 
-/** 仅供测试用:重置单例,允许 mock 替换。 */
+/** Test-only: resets the singleton, allowing mock replacement. */
 export function __resetClientForTests(): void {
   if (client) client.disconnect();
   client = null;
   initialized = false;
 }
 
-/** 仅供测试用:强制注入 client(跳过 ping 探活)。 */
+/** Test-only: force-injects the client (skipping the ping liveness check). */
 export function __setClientForTests(c: Redis | null): void {
   if (client) client.disconnect();
   client = c;

@@ -74,7 +74,7 @@ describe('shapeStructured (老报告缺字段容错)', () => {
     });
     expect(out.sql!.sql).toBe('SELECT * FROM t WHERE u = $1');
     expect(out.sql!.params).toEqual(['alice']);
-    // 老报告无这两个字段 → 不产生空串/空数组（否则前端会渲染一个空的「实际执行的 SQL」块）
+    // Old reports lack these two fields → no empty-string/empty-array emitted (otherwise the frontend would render an empty "actually executed SQL" block)
     const legacy = shapeStructured({ sql: { dbRef: 'main', rowCount: 1, durationMs: 5, rows: [] } });
     expect(legacy.sql!.sql).toBeUndefined();
     expect(legacy.sql!.params).toBeUndefined();

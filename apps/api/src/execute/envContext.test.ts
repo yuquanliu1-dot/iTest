@@ -15,7 +15,7 @@ import { encrypt } from '../lib/secret-crypto.js';
 
 const ENV_ROW = { id: 'env-1', projectId: 'proj-1', name: 'staging', isDefault: false, baseUrl: 'https://staging.example.com' };
 
-/** 按 from(表名) 路由的 mock：where() 结果既可 await 也可 .limit()。 */
+/** Mock routed by from(table name): the where() result is both awaitable and .limit()-able. */
 function mockTables(tables: Record<string, unknown[]>) {
   vi.mocked(db.select).mockImplementation((() => ({
     from: (table: unknown) => {
@@ -109,7 +109,7 @@ describe('resolveEnv', () => {
       .rejects.toBeInstanceOf(EnvProjectMismatch);
   });
 
-  // 跨产品线共享进来的用例：兜底查自己项目的默认环境要照常生效，只有归属复核被豁免。
+  // Case shared in across product lines: the fallback to the project's own default env stays in effect; only the ownership re-check is exempted.
   it('still falls back to project default env when allowCrossProjectEnv is set', async () => {
     mockTables({
       test_environments: [{ ...ENV_ROW, id: 'env-default', isDefault: true, projectId: 'proj-1' }],
@@ -274,7 +274,7 @@ describe('resolveEnv', () => {
       expect(env.pool?.dialect).toBe('gauss100');
       expect(env.db?.port).toBe(2888);
       expect(env.db?.password).toBe('gspass');
-      // 懒失败：建池不抛（test-db 在 try 外建池），首调 query 才抛具名错误
+      // Lazy failure: pool creation doesn't throw (test-db builds the pool outside try); the named error only throws on the first query call
       await expect(env.pool!.query('SELECT 1', [])).rejects.toMatchObject({ name: 'GaussBridgeMissing' });
       await env.close();
     } finally {
@@ -329,9 +329,9 @@ describe('resolveEnv', () => {
     expect(env.syslogs.map((s) => s.label)).toEqual(['主日志机', '审计机']);
     expect(env.resolveSyslog('审计机')?.host).toBe('h2');
     expect(env.resolveSyslog()?.host).toBe('h1');
-    // 显式 ref 落空绝不静默回落默认——宁可硬错误也不要连错机器读到别人的日志。
+    // An explicit ref miss never silently falls back to the default — better a hard error than connecting to the wrong machine and reading someone else's logs.
     expect(env.resolveSyslog('nope')).toBeNull();
-    // 兼容字段 syslog 仍指向默认项
+    // The legacy field syslog still points at the default entry
     expect(env.syslog?.host).toBe('h1');
     await env.close();
   });
@@ -361,18 +361,18 @@ describe('resolveEnv', () => {
     await env.close();
   });
 
-  // 回归：默认 syslog 不完整时绝不静默回落到另一条完整记录。
-  // 连错机器会读到别人的日志 → 断言误判，比直接失败难排查得多。
+  // Regression: when the default syslog is incomplete, never silently fall back to another complete entry.
+  // Connecting to the wrong machine reads someone else's logs → misjudged assertions, far harder to troubleshoot than outright failure.
   it('默认 syslog 不完整时判死（不回落其它完整记录）', async () => {
     const enc = encrypt('pw1');
     const sec = { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') };
     mockTables({
       test_environments: [ENV_ROW],
       environment_objects: [
-        // 默认但缺 filePath
+        // default but missing filePath
         { id: 's-bad-def', environmentId: 'env-1', objectType: 'syslog', label: '残缺的默认机', isDefault: true,
           payload: { host: 'h1', user: 'u1', authType: 'password', secret: sec } },
-        // 非默认且完整
+        // non-default and complete
         { id: 's-ok', environmentId: 'env-1', objectType: 'syslog', label: '好机', isDefault: false,
           payload: { host: 'h2', user: 'u2', filePath: '/var/log/b.log', authType: 'password', secret: sec } },
       ],
@@ -380,7 +380,7 @@ describe('resolveEnv', () => {
     });
     const env = await resolveEnv({ caseEnvId: 'env-1' });
     expect(env.syslogs.map((s) => s.label)).toEqual(['好机']);
-    // 默认选择判死——不静默回落到「好机」
+    // Default selection judged dead — no silent fallback to 「好机」
     expect(env.resolveSyslog()).toBeNull();
     expect(env.syslog).toBeUndefined();
     await env.close();
@@ -454,7 +454,7 @@ describe('resolveEnv', () => {
 });
 
 describe('resolveEnv 命名 db', () => {
-  /** 内嵌密文三元组（与 encrypt 输出一致）。 */
+  /** Embedded ciphertext triple (matches encrypt's output). */
   const secretOf = (pw: string) => {
     const enc = encrypt(pw);
     return { c: enc.ciphertext.toString('base64'), i: enc.iv.toString('base64'), t: enc.tag.toString('base64') };
@@ -483,7 +483,7 @@ describe('resolveEnv 命名 db', () => {
     expect(env.db).toEqual({ host: 'pg-main', port: 5432, database: 'main', user: 'u1', password: 'p1' });
     const p = env.pool;
     expect(p?.dialect).toBe('postgres');
-    expect(env.pool).toBe(p); // 缓存，不重建
+    expect(env.pool).toBe(p); // cached, not rebuilt
     await env.close();
   });
 
@@ -520,10 +520,10 @@ describe('resolveEnv 命名 db', () => {
     await env.close();
   });
 
-  // 回归：默认 db 配置不完整时，绝不静默回落到另一条完整库。
-  // 旧语义（pick('db') 先选后校验）会判死报「未配置数据库对象」；
-  // 4f9a591 把完整性过滤挪到选择之前后，残缺的默认库被跳过 → 静默连到别的库。
-  // 静默连错库比报错难排查得多：查询结果看着正常，实际查的是另一套数据。
+  // Regression: when the default db is incompletely configured, never silently fall back to another complete db.
+  // The old semantics (pick('db') selecting before validating) would judge dead and report 「未配置数据库对象」;
+  // after 4f9a591 moved the completeness filter before selection, an incomplete default db got skipped → silently connected elsewhere.
+  // Silently connecting to the wrong db is far harder to troubleshoot than an error: results look normal, but a different dataset is being queried.
   it('默认 db 不完整时判死（不回落其它完整库）', async () => {
     const secretOf = (pw: string) => {
       const enc = encrypt(pw);
@@ -532,19 +532,19 @@ describe('resolveEnv 命名 db', () => {
     mockTables({
       test_environments: [ENV_ROW],
       environment_objects: [
-        // 默认但缺 dbName
+        // default but missing dbName
         { id: 'd-bad-def', environmentId: 'env-1', objectType: 'db', label: '残缺的默认库', isDefault: true,
           payload: { host: 'pg-main', user: 'u1', secret: secretOf('p1') } },
-        // 非默认且完整
+        // non-default and complete
         { id: 'd-ok', environmentId: 'env-1', objectType: 'db', label: '好库', isDefault: false,
           payload: { host: 'h2', dbName: 'd', user: 'u2', secret: secretOf('p2') } },
       ],
       project_versions: [],
     });
     const env = await resolveEnv({ caseEnvId: 'env-1' });
-    // 完整库仍在列表里（可被显式 ref 引用）
+    // The complete db is still in the list (referable by explicit ref)
     expect(env.dbs.map((d) => d.label)).toEqual(['好库']);
-    // 但默认选择判死——不静默回落到「好库」
+    // But default selection is judged dead — no silent fallback to 「好库」
     expect(env.resolveDb()).toBeNull();
     expect(env.db).toBeUndefined();
     expect(env.pool).toBeUndefined();
@@ -610,7 +610,7 @@ describe('webServices / resolveWebOrigin', () => {
 });
 
 describe('resolveEnv 多 web 凭据', () => {
-  /** 内嵌凭据的 secret 三元组（与 encrypt 输出一致）。 */
+  /** secret triple of the embedded credentials (matches encrypt's output). */
   const credOf = (user: string, pw: string) => {
     const enc = encrypt(pw);
     return {
@@ -638,7 +638,7 @@ describe('resolveEnv 多 web 凭据', () => {
     const env = await resolveEnv({ caseEnvId: 'env-1' });
     expect(env.resolveLogin()?.user).toBe('guest');       // isDefault=frontend
     expect(env.resolveLogin('nope')).toBeNull();
-    // 旧字段 login 仍是默认 web 的（既有消费点零改动）
+    // The legacy field login still holds the default web's (zero changes to existing consumers)
     expect(env.login?.user).toBe('guest');
   });
 
@@ -655,7 +655,7 @@ describe('resolveEnv 多 web 凭据', () => {
     expect(env.hasCredentials('backend')).toBe(true);
     expect(env.hasCredentials('staging')).toBe(false);
     expect(env.hasCredentials('nope')).toBe(false);
-    // 无 payload.name 的对象不进入 logins（不可被引用，与既有语义一致）
+    // Objects without payload.name don't enter logins (not referable, consistent with the established semantics)
     expect(env.logins.has('')).toBe(false);
     expect([...env.logins.values()].some((l) => l.user === 'u')).toBe(false);
   });

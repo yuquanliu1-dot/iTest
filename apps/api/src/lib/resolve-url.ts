@@ -3,10 +3,10 @@ import { db } from '../db/client.js';
 import { environmentObjects, groups, testEnvironments } from '../db/schema.js';
 import { WebServiceMissing, type WebServiceEntry } from '../execute/envContext.js';
 
-/** URL 解析链（2026-10 相对化改造）：
- *  case.url 绝对 → 直通；相对（/开头）→ 环境 web 服务 origin + path；空 → 默认服务 origin。
- *  执行链传 envCtx（已解析环境）；录制/展示链 defaultEnvFallback=true，用 case.defaultEnv → 项目默认环境。
- *  分组 defaultUrl 与环境 baseUrl 已删（迁移 0040）。 */
+/** URL resolution chain (2026-10 relativization rework):
+ *  absolute case.url → pass through; relative (starting with /) → environment web service origin + path; empty → default service origin.
+ *  The execution chain passes envCtx (already-resolved environment); the recording/display chain uses defaultEnvFallback=true with case.defaultEnv → project default environment.
+ *  Group defaultUrl and environment baseUrl are gone (migration 0040). */
 
 export interface ResolveUrlEnv {
   envName: string;
@@ -47,7 +47,7 @@ function resolverOf(entries: WebServiceEntry[], envName: string) {
   };
 }
 
-/** 展示/录制链：case.defaultEnv → 项目默认环境，构建 ResolveUrlEnv。 */
+/** Display/recording chain: case.defaultEnv → project default environment, building a ResolveUrlEnv. */
 export async function displayWebEnv(caseRow: { defaultEnvId?: string | null; groupId: string }): Promise<ResolveUrlEnv | null> {
   const g = (await db.select().from(groups).where(eq(groups.id, caseRow.groupId)))[0];
   if (!g) return null;
@@ -64,8 +64,8 @@ export async function displayWebEnv(caseRow: { defaultEnvId?: string | null; gro
   return { envName: env.name, webServices: entries, resolveWebOrigin: resolverOf(entries, env.name) };
 }
 
-/** 项目全部 web 服务 origin → ref 名映射（录制回填相对化用）。
- *  value=服务 name；未命名默认服务为 null（相对 URL 不填 ref 即命中默认）；未命名非默认不可被引用，跳过。 */
+/** All project web service origins → ref-name mapping (used by the recorder to backfill relativized urls).
+ *  value=service name; the unnamed default service maps to null (a relative URL with no ref hits the default); unnamed non-default services cannot be referenced and are skipped. */
 export async function projectWebOrigins(projectId: string): Promise<Map<string, string | null>> {
   const envs = await db.select({ id: testEnvironments.id }).from(testEnvironments).where(eq(testEnvironments.projectId, projectId));
   const map = new Map<string, string | null>();
@@ -82,8 +82,8 @@ export async function projectWebOrigins(projectId: string): Promise<Map<string, 
   return map;
 }
 
-/** 绝对 URL → { path, ref } 命中项目任一 web origin；未命中返回 null（保留绝对）。ref 为 null 表示
- *  命中未命名默认服务，相对化后不填 web_service_ref。 */
+/** Absolute URL → { path, ref } when it hits any project web origin; returns null on a miss (keeps absolute). A null ref means
+ *  it hit the unnamed default service, so no web_service_ref is filled after relativization. */
 export function relativizeUrl(absolute: string, origins: Map<string, string | null>): { path: string; ref: string | null } | null {
   if (!/^https?:\/\//.test(absolute)) return null;
   try {
@@ -106,11 +106,11 @@ export async function resolveCaseUrl(
   const origin = env.resolveWebOrigin(caseRow.webServiceRef ?? null);
   if (!origin) {
     if (caseRow.url) throw new WebServiceMissing(`环境「${env.envName}」未配置 web 服务,请到项目环境页添加`);
-    return null; // 空 url + 无服务：维持 about:blank 开始的现状
+    return null; // empty url + no service: keep the status quo of starting at about:blank
   }
   if (!caseRow.url) return origin;
-  // 只对 / 开头的相对 url 拼 origin；非绝对、非空、非 / 开头的 url 一律拒绝（避免拼出
-  // http://origin/about:blank 之类，统一为绝对 http(s) 或 / 开头两种合法形态）。
+  // Only join the origin onto relative urls starting with /; urls that are neither absolute, nor empty, nor /-prefixed are always
+  // rejected (avoids concatenating things like http://origin/about:blank; the two legal shapes are absolute http(s) or /-prefixed).
   if (!caseRow.url.startsWith('/')) {
     throw new WebServiceMissing(`环境「${env.envName}」:用例 url 需为绝对 http(s) 地址或以 / 开头`);
   }

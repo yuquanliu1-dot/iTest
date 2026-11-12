@@ -34,7 +34,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** 造一个计划 + 一次运行 + N 个成员用例（每个成员带一份报告）。 */
+/** Create a plan + one run + N member cases (each member with a report). */
 async function seedRun(opts: { status?: string; reportCount?: number } = {}) {
   const { projectId, groupId } = await seedProject(pool);
   const plan = await pool.query(`INSERT INTO execution_plans(project_id, name) VALUES ($1, 'p') RETURNING id`, [projectId]);
@@ -71,13 +71,13 @@ describe('plan-runs delete', () => {
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
 
-    // 运行没了
+    // Run is gone
     const runs = await pool.query(`SELECT id FROM plan_runs WHERE id = $1`, [runId]);
     expect(runs.rowCount).toBe(0);
-    // 成员报告也没了（否则会作为独立用例报告重新出现在执行历史里）
+    // Member reports are gone too (otherwise they would reappear in execution history as standalone case reports)
     const reps = await pool.query(`SELECT id FROM reports WHERE id = ANY($1::uuid[])`, [reportIds]);
     expect(reps.rowCount).toBe(0);
-    // 成员行随 plan_runs 级联删除
+    // Member rows cascade-deleted with plan_runs
     const members = await pool.query(`SELECT id FROM plan_run_cases WHERE plan_run_id = $1`, [runId]);
     expect(members.rowCount).toBe(0);
   });
@@ -94,7 +94,7 @@ describe('plan-runs delete', () => {
     expect(r.status).toBe(409);
     expect(r.body.error).toBe('plan_run_running');
 
-    // 运行与报告都还在
+    // Run and reports are both still there
     const runs = await pool.query(`SELECT id FROM plan_runs WHERE id = $1`, [runId]);
     expect(runs.rowCount).toBe(1);
     const reps = await pool.query(`SELECT id FROM reports WHERE id = ANY($1::uuid[])`, [reportIds]);
@@ -120,7 +120,7 @@ describe('plan-runs delete', () => {
     const r = await request(app).post('/api/plan-runs/batch-delete').send({ planRunIds: [ok.runId, running.runId] });
     expect(r.status).toBe(409);
 
-    // 两条都还在：校验在删除之前，不存在「删一半」
+    // Both rows still there: validation happens before deletion, no "half-deleted" state
     const runs = await pool.query(`SELECT id FROM plan_runs WHERE id = ANY($1::uuid[])`, [[ok.runId, running.runId]]);
     expect(runs.rowCount).toBe(2);
   });

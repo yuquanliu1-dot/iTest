@@ -8,13 +8,14 @@ import { resolveUsersByIds, type ResolvedUser } from '../lib/creator.js';
 export const executionsRoute = Router();
 
 /**
- * 计划运行的成员用例执行历史不在此列表展示（点击计划运行行可看其成员用例）：
- * 排除挂在 plan_run_cases.report_id 上的报告、数据集迭代挂在 report_ids 数组中的报告，
- * 以及「正在作为 plan 成员执行」的用例（runCase 一开跑就插 report，report_id 要等用例跑完才
- * 回填——这段瞬态窗口内的 report 无任何 plan 链接，但 plan_run_cases 行以 status=running 先行存在，
- * 据此精确识别。登录用例排在最前跑，正是该窗口最容易让用户在日常监控里看到的那条）。
+ * Plan-run member-case execution history is not shown in this list (clicking a plan run row reveals its member cases):
+ * exclude reports attached to plan_run_cases.report_id, reports attached to the report_ids array of dataset
+ * iterations, and cases "currently executing as a plan member" (runCase inserts the report as soon as it starts,
+ * but report_id is only backfilled after the case finishes — reports in this transient window have no plan link,
+ * yet a plan_run_cases row with status=running already exists, which identifies them precisely. Login cases run
+ * first, and are exactly the ones users most easily see in this window in day-to-day monitoring).
  *
- * 命中查询与「补齐同批成员」查询共用同一份排除语义（两处漂移会让批成员数对不上）。
+ * The hit query and the "fill in same-batch members" query share one exclusion semantic (a drift between the two would make batch member counts disagree).
  */
 const planMemberExclusion = sql`not exists (
   select 1 from ${planRunCases} prc
@@ -40,26 +41,26 @@ interface CaseEntry {
   status: string;
   durationMs: number | null;
   summary: string | null;
-  /** 最后断言信息：取 step_results 末位元素 —— vision 判定 reason（通过/失败）或失败步 error；无断言为 null。 */
+  /** Last assertion info: takes the last element of step_results — the vision verdict reason (pass/fail) or the failed step's error; null when there is no assertion. */
   lastAssertion: string | null;
-  /** 自愈通过标记：passed 且 aiTask 缓存分叉后 AI 自愈成功；failed 恒 false。 */
+  /** Self-heal passed marker: passed and AI self-heal succeeded after the aiTask cache forked; failed is always false. */
   healed: boolean;
   createdAt: Date | string;
-  /** 执行人（即报告创建人 = 触发执行者）；列表统一返回 createdBy。 */
+  /** Executor (i.e. the report creator = the user who triggered execution); lists uniformly return createdBy. */
   createdById: string | null;
   createdBy: ResolvedUser | null;
-  /** 数据集批次 id（同一次数据集执行的全部行共用）；非数据集执行为 null。 */
+  /** Dataset batch id (shared by all rows of one dataset execution); null for non-dataset executions. */
   datasetBatchId: string | null;
-  /** 本条记录代表的批内成员数（非数据集执行 = 1）。 */
+  /** Number of batch members this record represents (non-dataset execution = 1). */
   batchSize: number;
-  /** 批内通过 / 失败成员数（按全批真实值算，不受筛选影响）。 */
+  /** Passed / failed member counts within the batch (computed from the whole batch's true values, unaffected by filters). */
   batchPassed: number;
   batchFailed: number;
-  /** 批内全部成员报告 id（批量删除时展开成 N 条 report 删除）。 */
+  /** All member report ids within the batch (expanded into N report deletions on batch delete). */
   memberReportIds: string[];
 }
 
-/** 第一遍查询行：命中筛选的 report（含批次键）。 */
+/** First-pass query row: the report matching the filters (includes the batch key). */
 interface HitRow {
   id: string;
   caseId: string;
@@ -75,7 +76,7 @@ interface HitRow {
   datasetRowIndex: number | null;
 }
 
-/** 第二遍查询行：同批全部成员（不含筛选条件），用于按整批算统计。 */
+/** Second-pass query row: all members of the same batch (no filter conditions), for computing stats over the whole batch. */
 interface MemberRow {
   id: string;
   caseId: string;
@@ -102,29 +103,29 @@ interface PlanEntry {
   skippedCases: number | null;
   durationMs: number | null;
   createdAt: Date | string;
-  /** 执行人 = 计划运行触发者；列表统一返回 createdBy。 */
+  /** Executor = the plan-run trigger; lists uniformly return createdBy. */
   createdById: string | null;
   createdBy: ResolvedUser | null;
-  /** 所属计划名（来自 innerJoin executionPlans；理论非空，保 null 兜底） */
+  /** Owning plan name (from innerJoin executionPlans; non-null in theory, kept nullable as fallback) */
   planName: string | null;
 }
 type Entry = CaseEntry | PlanEntry;
 
 executionsRoute.get('/', async (req, res) => {
   const { projectId, productLineId, kind = 'all' } = req.query as { projectId?: string; productLineId?: string; kind?: 'case' | 'plan' | 'all' };
-  // 状态 / 版本 / 关键词 facet：statuses / versionIds 走 csv；q 模糊匹配 caseTitle（仅 case 行生效）
+  // Status / version / keyword facets: statuses / versionIds come as csv; q fuzzy-matches caseTitle (only effective on case rows)
   const statusArr = typeof req.query.statuses === 'string' ? req.query.statuses.split(',').filter(Boolean) : [];
   const versionArr = typeof req.query.versionIds === 'string' ? req.query.versionIds.split(',').filter(Boolean) : [];
   const qTrim = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-  // 用例 / 计划深链：前端从用例列表或计划列表点「查看报告」时附带，自动过滤
+  // Case / plan deep link: attached when the frontend clicks "view report" from the case list or plan list; auto-filters
   const caseIdFilter = typeof req.query.caseId === 'string' && req.query.caseId ? req.query.caseId : '';
   const planIdFilter = typeof req.query.planId === 'string' && req.query.planId ? req.query.planId : '';
 
   if (projectId) await assertProjectVisible(projectId, req.user!);
-  // 无 projectId 时按可见项目过滤
+  // Without projectId, filter by visible projects
   const visiblePids = projectId ? null : await visibleProjectIds(req.user!);
-  // 产品线范围（执行历史「产品线执行库」）：线内全部项目的用例报告 + 计划运行。
-  // 与 projectId 二选一（前端 scope 切换决定传哪个）；可见性经产品线→组织继承（同 cases 列表分支）。
+  // Product-line scope (execution history's "product-line execution library"): case reports + plan runs of all projects in the line.
+  // Mutually exclusive with projectId (the frontend scope switch decides which one is passed); visibility inherits product line → org (same as the cases list branch).
   let linePids: string[] | null = null;
   if (productLineId) {
     await assertProductLineVisible(productLineId, req.user!);
@@ -145,7 +146,7 @@ executionsRoute.get('/', async (req, res) => {
       gids = gs.map((g) => g.id);
     }
     const cs = gids.length ? await db.select({ id: testCases.id, versionId: testCases.versionId }).from(testCases).where(inArray(testCases.groupId, gids)) : [];
-    // facet 拼装：版本在 case 侧基于 testCases.versionId，关键词基于 case 标题
+    // Facet assembly: version is based on testCases.versionId on the case side, keyword on the case title
     const caseFilters = [
       inArray(reports.caseId, cs.map((c) => c.id)),
       planMemberExclusion,
@@ -163,8 +164,9 @@ executionsRoute.get('/', async (req, res) => {
           status: reports.status,
           durationMs: reports.durationMs,
           summary: reports.summary,
-          // 最后断言：step_results 数组末位元素 —— vision 通过时 reason 挂在最后一步、vision 失败步追加在末位
-          // （order=-1）、普通步骤失败即中断也在末位。coalesce 取 vision reason，否则失败步 error。
+          // Last assertion: the last element of the step_results array — when vision passes, reason sits on the last step;
+          // a vision-failed step is appended last (order=-1), and an ordinary step failure that interrupts also lands last.
+          // coalesce takes the vision reason, otherwise the failed step's error.
           lastAssertion: sql<string | null>`
             case
               when jsonb_typeof(${reports.stepResults}) = 'array' and jsonb_array_length(${reports.stepResults}) > 0 then
@@ -189,9 +191,10 @@ executionsRoute.get('/', async (req, res) => {
         .orderBy(desc(reports.createdAt))
       : [];
 
-    // 数据集批次卷起：一次数据集执行 = N 条 report（同 dataset_batch_id），列表里应像计划运行一样
-    // 只占一行。第一遍只拿到「命中筛选」的成员；这里再查一次同批的全部成员（不含筛选条件），
-    // 让统计口径（批内通过/失败数、耗时、状态）按整批真实值算，而不是按命中的那几行算。
+    // Dataset batch roll-up: one dataset execution = N reports (same dataset_batch_id) and should occupy a single
+    // list row just like a plan run. The first pass only fetches members "matching the filters"; here we query all
+    // members of the same batch again (no filter conditions), so stats (batch passed/failed counts, duration, status)
+    // are computed from the whole batch's true values rather than from the few rows that matched.
     const hitBatchIds = Array.from(new Set(hitRows.map((r) => r.datasetBatchId).filter((v): v is string => !!v)));
     const membersByBatch = new Map<string, MemberRow[]>();
     if (hitBatchIds.length && cs.length) {
@@ -235,22 +238,22 @@ executionsRoute.get('/', async (req, res) => {
           batchPassed: h.status === 'passed' ? 1 : 0,
           batchFailed: h.status === 'failed' ? 1 : 0,
           memberReportIds: [h.id],
-          // 执行人在 merge 阶段批量解析后回填
+          // Executor is backfilled after batch resolution in the merge stage
           createdBy: null,
         });
         continue;
       }
-      if (emittedBatches.has(h.datasetBatchId)) continue; // 同一批只出一行
+      if (emittedBatches.has(h.datasetBatchId)) continue; // One row per batch
       emittedBatches.add(h.datasetBatchId);
       const members = membersByBatch.get(h.datasetBatchId) ?? [h];
-      // 成员按行号升序（并列按落库时间）——锚点取第一个，memberReportIds 也按这个序展开
+      // Members ordered by row index ascending (ties by persistence time) — the anchor is the first, and memberReportIds expands in the same order
       const ordered = [...members].sort((a, b) => {
         const ia = a.datasetRowIndex ?? Number.MAX_SAFE_INTEGER;
         const ib = b.datasetRowIndex ?? Number.MAX_SAFE_INTEGER;
         if (ia !== ib) return ia - ib;
         return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       });
-      // 锚点 = 行号最小者（并列取最早落库）：点进详情页即落在批次第一行，行切换器随之就绪
+      // Anchor = smallest row index (ties take the earliest persisted): clicking into the detail page lands on the batch's first row, with the row switcher ready accordingly
       const anchor = ordered[0]!;
       const anyRunning = members.some((m) => m.status === 'running');
       const allPassed = members.every((m) => m.status === 'passed');
@@ -262,7 +265,7 @@ executionsRoute.get('/', async (req, res) => {
         status: rolledStatus,
         durationMs: members.reduce((sum, m) => sum + (m.durationMs ?? 0), 0),
         summary: anchor.summary,
-        // 单行批次保留断言文案；多行批次单行断言对整批无意义，改由通过/失败计数表达
+        // Single-row batches keep the assertion text; a single assertion is meaningless for a multi-row batch, expressed via passed/failed counts instead
         lastAssertion: multi ? null : h.lastAssertion,
         healed: rolledStatus === 'passed' && members.some((m) => m.healed),
         createdAt: members.reduce((mx, m) => (new Date(m.createdAt).getTime() > new Date(mx).getTime() ? m.createdAt : mx), anchor.createdAt),
@@ -272,7 +275,7 @@ executionsRoute.get('/', async (req, res) => {
         batchPassed: members.filter((m) => m.status === 'passed').length,
         batchFailed: members.filter((m) => m.status === 'failed').length,
         memberReportIds: ordered.map((m) => m.id),
-        // 执行人在 merge 阶段批量解析后回填
+        // Executor is backfilled after batch resolution in the merge stage
         createdBy: null,
       });
     }
@@ -286,15 +289,16 @@ executionsRoute.get('/', async (req, res) => {
   }
 
   if (kind === 'plan' || kind === 'all') {
-    // scopePids 空（用户无可见项目/线内无项目）→ 空集,与 case 分支语义一致
+    // scopePids empty (no visible projects / no projects in the line) → empty set, same semantics as the case branch
     const conds = scopePids && scopePids.length > 0 ? [inArray(planRuns.projectId, scopePids)] : [];
     if (statusArr.length) conds.push(inArray(planRuns.status, statusArr));
-    // plan 行的 versionId 来自 executionPlans.versionId
+    // The plan row's versionId comes from executionPlans.versionId
     if (versionArr.length) conds.push(inArray(executionPlans.versionId, versionArr));
     if (planIdFilter) conds.push(eq(planRuns.planId, planIdFilter));
-    // caseId 深链在 plan tab 上继续生效（否则 URL 里的 caseId 静默失效、切 tab 后退化成全项目计划列表）：
-    // 取「把该用例作为成员跑过」的计划运行。这样切到 plan tab 恰好能定位到 case 分支里被
-    // not exists 排除掉的那批报告——用例详情页深链最常见的落点就是它们。
+    // The caseId deep link keeps working on the plan tab (otherwise the URL's caseId silently stops applying and switching
+    // tabs degrades to a project-wide plan list): take plan runs that "ran this case as a member". That way switching to the
+    // plan tab lands exactly on the batch of reports excluded by not exists in the case branch — the most common deep-link
+    // destination from the case detail page.
     if (caseIdFilter) {
       conds.push(
         inArray(
@@ -328,7 +332,7 @@ executionsRoute.get('/', async (req, res) => {
       durationMs: r.durationMs,
       createdAt: r.startedAt,
       createdById: r.createdById ?? null,
-      // 执行人统一在 merge 阶段批量解析后回填
+      // Executors are uniformly backfilled after batch resolution in the merge stage
       createdBy: null,
     }));
     const pVids = Array.from(new Set(planRows.map((r) => r.versionId).filter((v): v is string => !!v)));

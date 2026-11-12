@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { hashSync } from 'bcryptjs';
 import { SCHEMA_SQL, SEED_USER_PASSWORD } from './helpers/db.js';
 
-// helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后在 beforeAll 动态加载
+// helpers/auth depends on the src service chain (which loads the db client along the way), so it must be dynamically imported in beforeAll after DATABASE_URL points at the test container
 let authCookie: typeof import('./helpers/auth.js').authCookie;
 let memberUserOf: typeof import('./helpers/auth.js').memberUserOf;
 
@@ -16,8 +16,8 @@ let app: import('express').Express;
 let orgId: string;
 let orgPath: string;
 let adminId: string;
-let plainId: string; // 组织普通成员（非管理员）
-let outsiderId: string; // 无任何组织关系
+let plainId: string; // regular organization member (non-admin)
+let outsiderId: string; // no organization relation whatsoever
 const PLAIN_PASSWORD = 'Plain1234!';
 
 async function createUser(username: string, password: string) {
@@ -61,7 +61,7 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/auth', authRoute);
-  // 毯子守卫：与 src/index.ts 同序（auth 在前，其余 /api 全在守卫之后）
+  // Blanket guard: same order as src/index.ts (auth first, all other /api routes behind the guard)
   app.use('/api', requireAuth);
   app.use('/api/organizations', organizationsRoute);
   app.use('/api/product-lines', productLinesRoute);
@@ -106,7 +106,7 @@ describe('POST /api/organizations 创建子组织', () => {
     expect(r.body.parentId).toBe(orgId);
     expect(r.body.path).toBe(`${orgPath}${r.body.id}/`);
 
-    // 管理子树扩展：管理员可见新子组织
+    // Managed subtree expansion: the admin can see the new sub-organization
     const list = await request(app).get('/api/organizations').set('Cookie', cookie);
     expect(list.body.some((o: { id: string }) => o.id === r.body.id)).toBe(true);
   });
@@ -166,7 +166,7 @@ describe('组织成员管理', () => {
 
   it('组织外的普通成员读成员列表 → 404（不泄露存在性）', async () => {
     const plainCookie = authCookie(memberUserOf(plainId, 'plain-member', orgId, orgPath));
-    // plain 是父组织成员但不是子组织成员，且非管理员 → 404
+    // plain is a member of the parent org but not the sub-org, and not an admin → 404
     const r = await request(app).get(`/api/organizations/${subOrgId}/members`).set('Cookie', plainCookie);
     expect(r.status).toBe(404);
   });
@@ -184,14 +184,14 @@ describe('组织成员管理', () => {
   });
 
   it('不能移除最后一个成员资格 → 409', async () => {
-    // outsider 只有 subOrg 一个成员资格
+    // outsider has only one membership, in subOrg
     const r = await request(app).delete(`/api/organizations/${subOrgId}/members/${outsiderId}`).set('Cookie', adminCookie);
     expect(r.status).toBe(409);
     expect(r.body.error).toBe('last_membership');
   });
 
   it('移除成员（多组织用户）→ 200', async () => {
-    // plain-member 有两个组织（父 + 子）→ 移除子组织成员资格应成功
+    // plain-member belongs to two organizations (parent + sub) → removing the sub-org membership should succeed
     const add = await request(app).post(`/api/organizations/${subOrgId}/members`).set('Cookie', adminCookie).send({ username: 'plain-member' });
     expect(add.status).toBe(201);
     const r = await request(app).delete(`/api/organizations/${subOrgId}/members/${plainId}`).set('Cookie', adminCookie);
@@ -218,7 +218,7 @@ describe('GET /api/organizations/:orgId/product-lines 组织下的产品线', ()
     subOrgId = sub.body.id;
     const line = await request(app).post('/api/product-lines').set('Cookie', adminCookie).send({ name: '组织下测试线', organizationId: subOrgId });
     lineId = line.body.id;
-    // 线内放一个项目 → projectCount 应为 1
+    // Put one project under the line → projectCount should be 1
     const proj = await pool.query(`INSERT INTO projects(product_line_id, name) VALUES ($1, '线内项目') RETURNING id`, [lineId]);
     await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, 'g')`, [proj.rows[0]!.id]);
   });

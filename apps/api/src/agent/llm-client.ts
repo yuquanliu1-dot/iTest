@@ -6,13 +6,13 @@ export interface LLMConfig {
   provider: LLMProvider;
   apiKey: string;
   model: string;
-  /** 自定义网关地址（如内网代理）；留空用各 SDK 官方默认。 */
+  /** Custom gateway address (e.g. internal proxy); leave empty to use each SDK's official default. */
   baseUrl?: string;
-  /** 单次回复最大输出 token（settings 键 llm_max_tokens）；缺省各 client 用自己的默认。 */
+  /** Max output tokens per reply (settings key llm_max_tokens); when omitted, each client uses its own default. */
   maxTokens?: number;
 }
 
-/** 一条对话消息（多轮累积形态）。content 里的 image 是截图 block。 */
+/** A conversation message (multi-turn accumulated form). The image in content is a screenshot block. */
 export interface LLMMessage {
   role: 'user' | 'assistant';
   content: Array<{ type: 'text'; text: string } | { type: 'image'; base64: string; mime: 'image/png' | 'image/jpeg' }>;
@@ -21,12 +21,12 @@ export interface LLMMessage {
 export interface LLMRequest {
   systemPrompt: string;
   userMessage: string;
-  /** 多模态输入：当前只支持单图；后续可扩 image[] */
+  /** Multimodal input: currently only a single image; may extend to image[] later */
   image?: { base64: string; mime: 'image/png' | 'image/jpeg' };
-  /** 多轮累积历史（可选）。给了就用它替代单轮 userMessage/image。
-   *  缺省时退化为原来的单轮形态，行为不变。 */
+  /** Multi-turn accumulated history (optional). When given, replaces the single-turn userMessage/image.
+   *  When omitted, degrades to the original single-turn form with unchanged behavior. */
   messages?: LLMMessage[];
-  /** 界面语言。存在时 systemPrompt 末尾自动追加语言指令块;缺省不追加(兼容旧调用)。 */
+  /** UI language. When present, the language directive block is auto-appended to the end of systemPrompt; not appended when omitted (compatible with old callers). */
   lang?: AiLang;
 }
 
@@ -37,9 +37,9 @@ export type LLMCompleteResult =
 export interface LLMUsage {
   promptTokens: number;
   completionTokens: number;
-  /** 本次命中缓存的 prompt token 数（不含在 promptTokens 内）。 */
+  /** Prompt tokens that hit the cache this call (not included in promptTokens). */
   cacheReadTokens?: number;
-  /** 本次为建立缓存新写入的 token 数。 */
+  /** Tokens newly written this call to establish the cache. */
   cacheCreationTokens?: number;
 }
 
@@ -56,7 +56,7 @@ export function listProviders(): LLMProvider[] {
   return ['openai', 'anthropic', 'google'];
 }
 
-/** 解析模型输出为 JSON：优先直接 parse，去掉 ```json 围栏、回退提取首段 {...}。 */
+/** Parse model output as JSON: direct parse first, then strip the ```json fence, falling back to extracting the first {...} segment. */
 export function tryParseJson(raw: string): Record<string, unknown> | null {
   const trimmed = raw.trim();
   try { return JSON.parse(trimmed) as Record<string, unknown>; } catch { /* fall through */ }
@@ -84,7 +84,7 @@ export function getLlmClient(config: LLMConfig): LLMClient {
   }
 }
 
-/** 聚合 usage → LLMUsage。缓存 token 恒透出（无命中即 0），调用方据此算命中率。 */
+/** Aggregate usage → LLMUsage. Cache tokens are always exposed (0 when no hit); callers compute hit rate from this. */
 function usageOf(agg: { promptTokens: number; completionTokens: number; cacheReadTokens: number; cacheCreationTokens: number }): LLMUsage {
   return {
     promptTokens: agg.promptTokens,
@@ -94,13 +94,13 @@ function usageOf(agg: { promptTokens: number; completionTokens: number; cacheRea
   };
 }
 
-/** complete 的 JSON 版：解析失败把错误回喂模型重试 1 次（语义重试），仍失败抛错。
- *  返回聚合 usage/durationMs（两次调用累加）与 retries。 */
+/** JSON version of complete: on parse failure, feed the error back to the model and retry once (semantic retry); throw if it still fails.
+ *  Returns aggregated usage/durationMs (accumulated across both calls) and retries. */
 export async function completeJson(
   client: LLMClient,
   req: LLMRequest,
 ): Promise<{ value: Record<string, unknown>; retries: number; usage?: LLMUsage; durationMs?: number; model?: string }> {
-  // 缓存 token 也要聚合：语义重试的两次调用都可能命中缓存，丢掉就无法在报告里看到命中率。
+  // Cache tokens must also be aggregated: both calls in a semantic retry may hit the cache; dropping them makes the hit rate invisible in the report.
   const agg = { promptTokens: 0, completionTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, hasUsage: false };
   let durationMs = 0;
   let retries = 0;
@@ -111,12 +111,12 @@ export async function completeJson(
   if (first.kind === 'json') {
     return { value: first.value, retries: 0, ...(agg.hasUsage ? { usage: usageOf(agg) } : {}), ...(durationMs > 0 ? { durationMs } : {}), ...(first.model ? { model: first.model } : {}) };
   }
-  // 语义重试：把上次的非法输出与错误回喂
+  // Semantic retry: feed the previous invalid output and error back
   retries = 1;
   const t1 = Date.now();
   const hint = `\n\n上次响应不是合法 JSON（响应开头：「${first.value.slice(0, 120)}」）。请重新输出，只输出 JSON，不要任何其他文字。`;
-  // 多轮形态下不能只改 userMessage——clients 优先读 messages，改了也不会生效。
-  // 追加一条新的 user 消息承载重试提示（历史保持不变，前缀仍可缓存）。
+  // In multi-turn form, changing userMessage alone won't work — clients read messages first, so the change takes no effect.
+  // Append a new user message carrying the retry hint (history stays unchanged, prefix stays cacheable).
   const retryReq: LLMRequest = req.messages
     ? { ...req, messages: [...req.messages, { role: 'user', content: [{ type: 'text', text: hint.trim() }] }] }
     : { ...req, userMessage: `${req.userMessage}${hint}` };

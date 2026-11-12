@@ -46,10 +46,10 @@ describe('environments.service', () => {
     const u2 = await svc.updateEnvironment(e2.id, { isDefault: true });
     expect(u2.isDefault).toBe(true);
     const again = await svc.getEnvironment(e1.id);
-    expect(again!.isDefault).toBe(false); // 被互斥降级
+    expect(again!.isDefault).toBe(false); // demoted by the mutual-exclusion rule
 
     const obj = await svc.insertEnvironmentObject(e1.id, { objectType: 'db', payload: { host: 'h' } });
-    // upsert 同 (type,label):合并 payload;不带明文 → 旧密文保留
+    // upsert on the same (type,label): merge payload; no plaintext supplied -> old ciphertext kept
     await svc.setEnvironmentObjectSecret(obj.id, 'OLD-SECRET');
     const up = await svc.upsertEnvironmentObject(e1.id, { objectType: 'db', payload: { host: 'h2' } });
     const raw1 = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as Record<string, unknown>;
@@ -59,11 +59,11 @@ describe('environments.service', () => {
     expect(up.payload.secret).toBe('••••••••');
     expect(JSON.stringify(up)).not.toContain('OLD-SECRET');
 
-    // set_secret 换新密文
+    // set_secret rotates to new ciphertext
     await svc.setEnvironmentObjectSecret(obj.id, 'NEW-SECRET');
     const raw2 = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as { secret: { c: string } };
     expect(raw2.secret.c).toBeTruthy();
-    expect(Buffer.from(raw2.secret.c, 'base64').toString()).not.toContain('NEW-SECRET'); // 密文不是明文
+    expect(Buffer.from(raw2.secret.c, 'base64').toString()).not.toContain('NEW-SECRET'); // ciphertext is not the plaintext
   }, 30_000);
 
   it('deleteEnvironmentObject 晋升同类型兄弟为默认;environmentUsage 统计;deleteEnvironment 级联', async () => {
@@ -94,7 +94,7 @@ describe('environments.service', () => {
       payload: { name: 'frontend', scheme: 'https', host: 'x.example.com', user: 'tom', loginUrl: '/login', password: 'LOGIN-PASS' },
       isDefault: true,
     });
-    // 出参脱敏,明文字段保留
+    // output masked, plaintext fields kept
     expect((obj.payload as { user: string }).user).toBe('tom');
     expect((obj.payload as { loginUrl: string }).loginUrl).toBe('/login');
     expect((obj.payload as { secret: string }).secret).toBe('••••••••');
@@ -103,7 +103,7 @@ describe('environments.service', () => {
     expect(JSON.stringify(raw)).not.toContain('LOGIN-PASS');
     expect(raw.secret?.c).toBeTruthy();
 
-    // 更新不带密码 → 旧密文沿用;入参 secret 一律丢弃(update 为整体替换语义,须带全量 web 字段)
+    // update without password -> old ciphertext kept; an incoming secret is always discarded (update is whole-replacement semantics, must carry the full web fields)
     const before = raw.secret!.c;
     const up = await svc.updateEnvironmentObject(obj.id, {
       payload: { name: 'frontend', scheme: 'https', host: 'x.example.com', user: 'jerry', loginUrl: '/login', secret: 'evil-plain' } as Record<string, unknown>,
@@ -112,7 +112,7 @@ describe('environments.service', () => {
     const raw2 = (await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.id])).rows[0]!.payload as { secret?: { c?: string } };
     expect(raw2.secret?.c).toBeTruthy();
     expect(raw2.secret!.c).not.toContain('evil-plain');
-    // 密钥未变 → 密文不变（沿用而非重新加密）
+    // key unchanged -> ciphertext unchanged (reused, not re-encrypted)
     expect(raw2.secret!.c).toBe(before);
   }, 30_000);
 

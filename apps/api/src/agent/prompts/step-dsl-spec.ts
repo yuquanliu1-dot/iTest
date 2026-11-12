@@ -1,10 +1,10 @@
-/** StepAction DSL 规格：内联给 LLM（它读不到 packages/shared 的类型定义）。
- *  case-to-script 等 prompt 都拼接此片段。
+/** StepAction DSL spec: inlined for the LLM (it cannot read the type definitions in packages/shared).
+ *  Prompts such as case-to-script concatenate this fragment.
  *
- *  维护要点（2026-10-28 复盘）：本规格必须【逐字覆盖 packages/shared/src/step-dsl.ts
- *  的每个 kind 与其必填字段】。此前缺 sql / observeLog / assertJson /
- *  switchTab，LLM 只能靠 zod 报错反推字段形状——实测烧掉 17 轮探针用例才摸清 sql。
- *  新增 kind 时同步改这里，否则 LLM 会重新走「试探错误信息」的老路。 */
+ *  Maintenance note (2026-10-28 retrospective): this spec must [cover verbatim every kind and its required fields
+ *  in packages/shared/src/step-dsl.ts]. sql / observeLog / assertJson /
+ *  switchTab were previously missing, and the LLM could only reverse-engineer field shapes from zod errors — it took 17 rounds of probe cases to figure out sql.
+ *  When adding a new kind, update here in sync, otherwise the LLM will fall back into the old "probe error messages" path. */
 export const STEP_DSL_SPEC = `StepAction 按 kind 区分（discriminated union），只允许以下形状：
 - {"kind":"navigate","url":"https://..."}（url 必须是完整合法 URL，或以 / 开头的相对路径，或以 {{变量}} 打头）
 - {"kind":"click","locator":[Locator,...],"clickCount":2（可选，2=双击 3=三连击，缺省单击）}

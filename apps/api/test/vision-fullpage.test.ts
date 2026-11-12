@@ -1,14 +1,19 @@
 /**
- * 用例级视觉判定覆盖「需要滚动才能看到」的区域。
+ * Case-level vision judgment covers regions 「需要滚动才能看到」 (requiring scrolling to be seen).
  *
- * 背景：page.screenshot() 默认就是视口截图，视口以下的内容根本进不了判定的图。
- * 而 CASE_OUTCOME_VISION_PROMPT 写着「空白页/加载中 → failed」，于是「关键区域在
- * 视口以下」与「页面真的坏了」在证据上不可区分，用例假失败（长表单/长列表的 SOC 页面高发）。
+ * Background: page.screenshot() is a viewport screenshot by default — content below the viewport never
+ * enters the judgment image. And CASE_OUTCOME_VISION_PROMPT says 「空白页/加载中 → failed」, so 「关键区域
+ * 在视口以下」 (key region below the fold) and 「页面真的坏了」 (page genuinely broken) are
+ * indistinguishable from the evidence → false case failures (frequent on SOC pages with long
+ * forms/long lists).
  *
- * 修法：文档确实溢出时补一张整页图，与视口图一起喂判定，并在 prompt 里说明以整页图为准。
- * 本测试锁两件事：
- *   1. 溢出 → 双图进 messages，且两个 image block 都在（图 2 真发了，不是只改文案）。
- *   2. 不溢出 → 单图，仍走 image 字段（短页面判定成本与改动前一致，零行为变化）。
+ * Fix: when the document truly overflows, attach a full-page image alongside the viewport image for
+ * judgment, and state in the prompt that the full-page image takes precedence.
+ * This test pins two things:
+ *   1. Overflow → both images enter messages, with both image blocks present (图 2 is really sent,
+ *      not just copy changed).
+ *   2. No overflow → single image, still via the image field (short-page judgment cost unchanged,
+ *      zero behavior change).
  */
 import { describe, it, expect } from 'vitest';
 import type { LLMClient, LLMRequest, LLMResult } from '../src/agent/llm-client.js';
@@ -43,7 +48,7 @@ describe('judgeCaseOutcome · 滚动区域的判定依据', () => {
       llmClient: llm,
     });
     expect(countImages(reqs[0]!)).toBe(2);
-    // 走 messages 而非 image 字段：后者只支持单图
+    // Goes through messages rather than the image field: the latter supports only a single image
     expect(reqs[0]!.image).toBeUndefined();
   });
 

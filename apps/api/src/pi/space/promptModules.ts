@@ -1,16 +1,16 @@
 /**
- * R3 prompt 可编辑化：模块注册表 + DB 值存储解析 + 渲染覆盖。
+ * R3 prompt editability: module registry + DB value-store resolution + render overrides.
  *
- * 存储模型：代码是模块注册表（有哪些模块、默认值是什么），DB 是值存储
- * （assistant_prompt_module_versions append-only 版本链）。无行=代码默认；
- * value=NULL=跟随代码默认；当前值=每 module_key 取 seq 最大行；回滚=复制历史行。
+ * Storage model: code is the module registry (which modules exist, what the defaults are), DB is the value store
+ * (assistant_prompt_module_versions append-only version chain). No row = code default;
+ * value=NULL = follow the code default; current value = per module_key the max-seq row; rollback = copy a historical row.
  *
- * 渲染红线：DB 零版本数据时 system prompt 与工具文案与现状逐字节一致
- * （test/prompt-override.test.ts 硬拷贝锚点）。
+ * Rendering red line: with zero DB version data, the system prompt and tool copy are byte-for-byte identical with the status quo
+ * (test/prompt-override.test.ts hard-copy anchor).
  *
- * 循环依赖：session.ts 静态 import 本模块的默认值常量；本模块枚举工具文案需要
- * buildSpaceTools（tools/index.js 的导出，session.ts 并未再导出）→ 动态 import
- * 引用（调用时模块已就绪，不形成静态环；tools/index 也不回引本模块）。
+ * Import cycle: session.ts statically imports this module's default-value constants; this module's tool-copy enumeration needs
+ * buildSpaceTools (exported from tools/index.js, not re-exported by session.ts) → dynamic import
+ * (by call time the module is ready, so no static cycle; tools/index does not import this module back either).
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -22,8 +22,8 @@ import { assistantPromptModuleVersions, assistantSkills } from '../../db/schema.
 import { skillDirOf } from './skillsStore.js';
 import { emptyRepoState, type SpaceToolsContext } from './tools/context.js';
 
-// ── 主 prompt 三段默认值（自 session.ts :650-652 原样迁来；迁移零行为变化，由
-// prompt-override.test.ts 的独立硬拷贝锚定）──
+// ── Main prompt three-section defaults (migrated verbatim from session.ts :650-652; zero behavior change in the move, anchored by
+// prompt-override.test.ts's independent hard copy) ──
 
 export const STYLE_ZH_DEFAULT = '## 输出风格\n- 用户使用简体中文提问,全部回复一律用简体中文(代码、命令、英文术语可保留原文)。这条约束覆盖**每一条**用户可见文本,包括最终答复、调用工具前的过程说明、以及思考/推理独白——不要出现「Let me check」「I found that」「I should」这类英文句子,想查什么直接调工具即可。\n- 不要使用 emoji;强调用 markdown 加粗,列举用列表/表格。\n- 以资深测试专家的标准要求自己:简洁专业、结论先行。默认每条回复不超过 5 行(汇报步骤结果时用短列表);不复述工具动作过程、不复述页面结构、不把元素清单原文贴给用户、不输出超过 4 行的大表格——用一句话概括。\n- 杜绝胡编乱造:对被测系统的任何断言(页面上有哪些控件/筛选项/按钮、系统行为如何)必须有证据——verify_case 返回的实测元素清单(page/failure.page)、执行结果、代码/配置/数据库查证(repo_*/manage_environments/manage_datasets 等取证结果)、或用户告知;清单里没有的控件一律当作不存在,不得提议、不得写进步骤。不确定就自己查证,渠道穷尽仍定不了再问用户。';
 export const STYLE_EN_DEFAULT = '## Output style\n- The user writes in English. All replies MUST be in English (code, commands, and English terms may stay). This constraint covers every piece of user-visible text, including final replies, process explanations before tool calls, and reasoning monologues — do not write Chinese sentences like 「让我检查一下」, if you need to check something just call a tool.\n- Do not use emoji; emphasize with markdown bold, and enumerate with lists/tables.\n- Be a senior test expert: concise and professional. Lead with the conclusion; default to ≤5 lines per reply (a short list is fine when reporting step results). Do not narrate tool actions, do not restate page structure or paste element inventories back to the user, and do not dump tables longer than 4 rows — summarize instead.\n- Never fabricate. Claims about the system under test (which controls/filters/buttons a page has, how it behaves) must come from verify_case evidence (page / failure.page element lists), execution results, code/config/database lookups (repo_* / manage_environments / manage_datasets probes), or the user — never from assumption. If you are not sure, verify it yourself first; ask the user only when the channels are exhausted.';
@@ -39,12 +39,12 @@ export interface PromptModuleDef {
   key: string;
   group: PromptModuleGroup;
   label: string;
-  /** skill 组只读：设置页只展示+回滚，不提供直接编辑（修订走固化管线/skill-creator）。 */
+  /** skill group read-only: the settings page only shows + rolls back, no direct editing (revisions go through the solidify pipeline/skill-creator). */
   readonly: boolean;
   defaultValue(): Promise<string>;
 }
 
-/** SKILL.md 正文去 frontmatter；无/坏 frontmatter 原样返回。 */
+/** SKILL.md body minus frontmatter; missing/bad frontmatter returns as-is. */
 export function stripSkillFrontmatter(md: string): string {
   if (!md.startsWith('---')) return md;
   const end = md.indexOf('\n---', 3);
@@ -52,14 +52,14 @@ export function stripSkillFrontmatter(md: string): string {
   return md.slice(end + 4).replace(/^\n+/, '');
 }
 
-/** 读 skill 磁盘正文（去 frontmatter）。文件缺失抛错，由调用方决定语义。 */
+/** Reads a skill's disk body (frontmatter stripped). Missing file throws; the caller decides the semantics. */
 export async function readSkillBody(slug: string): Promise<string> {
   const md = await readFile(join(skillDirOf(slug), 'SKILL.md'), 'utf8');
   return stripSkillFrontmatter(md);
 }
 
-/** 工具文案枚举的 stub 上下文——与 test/space-tools-basic.test.ts 的 makeCtx 同款
- *  （buildSpaceTools 是同步纯注册，随机 uuid + 空 repo 即可；字段以该测试为准）。 */
+/** Stub context for the tool-copy enumeration — same shape as test/space-tools-basic.test.ts's makeCtx
+ *  (buildSpaceTools is synchronous pure registration; a random uuid + empty repo suffices; fields follow that test). */
 function stubToolsCtx(): SpaceToolsContext {
   return {
     threadId: randomUUID(),
@@ -74,10 +74,10 @@ function stubToolsCtx(): SpaceToolsContext {
 
 type ToolTextRaw = { name: string; description: string; promptGuidelines?: string[] };
 
-/** 工具文案枚举：chat + rca 两种 purpose 的并集（防 purpose 过滤漏工具）。 */
+/** Tool-copy enumeration: the union of the chat and rca purposes (guarding against the purpose filter dropping tools). */
 export async function listRawToolsMerged(): Promise<ToolTextRaw[]> {
-  // buildSpaceTools 实际导出于 ./tools/index.js（session.ts 只 import 未再导出），
-  // 保持动态 import：不形成静态环，与 session.ts 注入的是同一注册表。
+  // buildSpaceTools is actually exported from ./tools/index.js (session.ts only imports it, without re-exporting);
+  // keep the dynamic import: no static cycle, and it is the same registry session.ts injects.
   const { buildSpaceTools } = await import('./tools/index.js');
   const base = stubToolsCtx();
   const merged = new Map<string, ToolTextRaw>();
@@ -98,7 +98,7 @@ async function listSkillDefs(): Promise<Array<{ slug: string; body: string }>> {
   return out;
 }
 
-/** 注册表全量：主 prompt 三段（静态）+ 工具文案（运行时枚举）+ skill 正文（磁盘只读组）。 */
+/** Registry in full: the main prompt's three sections (static) + tool copy (runtime enumeration) + skill bodies (disk, read-only group). */
 export async function listPromptModuleDefs(): Promise<PromptModuleDef[]> {
   const defs: PromptModuleDef[] = [
     { key: STYLE_ZH_KEY, group: 'main', label: '主提示词 · 输出风格（中文）', readonly: false, defaultValue: async () => STYLE_ZH_DEFAULT },
@@ -115,7 +115,7 @@ export async function listPromptModuleDefs(): Promise<PromptModuleDef[]> {
   return defs;
 }
 
-// ── 值解析 ──
+// ── Value resolution ──
 
 export interface PromptModuleVersionRow {
   seq: number;
@@ -125,11 +125,11 @@ export interface PromptModuleVersionRow {
   sourceRef: string | null;
   createdByUserId: string | null;
   createdAt: Date;
-  /** 写入该行时的代码默认基线指纹；null = 旧版本写入，无指纹（drift 检测判 unknown）。 */
+  /** Code-default baseline fingerprint at the time the row was written; null = written by an older version, no fingerprint (drift detection judges unknown). */
   baseHash: string | null;
 }
 
-/** 当前值索引：全表 seq 降序，首见即当前（表只被人工低频写，量级小）。 */
+/** Current-value index: whole table seq descending, first seen is current (the table is only written by humans at low frequency — small volume). */
 export async function loadPromptModuleOverrides(): Promise<Map<string, PromptModuleVersionRow>> {
   const rows = await db.select().from(assistantPromptModuleVersions)
     .orderBy(desc(assistantPromptModuleVersions.seq));
@@ -138,7 +138,7 @@ export async function loadPromptModuleOverrides(): Promise<Map<string, PromptMod
   return map;
 }
 
-/** 容错版：查询失败回落空表（渲染用代码默认）——prompt 可用性不能拖垮会话（guides 同款）。 */
+/** Fault-tolerant version: on query failure falls back to an empty map (rendering uses code defaults) — prompt availability must not drag down the session (same as guides). */
 export async function loadPromptModuleOverridesSafe(): Promise<Map<string, PromptModuleVersionRow>> {
   try {
     return await loadPromptModuleOverrides();
@@ -148,14 +148,14 @@ export async function loadPromptModuleOverridesSafe(): Promise<Map<string, Promp
   }
 }
 
-/** 覆盖值语义：NULL=跟随代码默认 → 视为无覆盖。 */
+/** Override-value semantics: NULL = follow the code default → treated as no override. */
 export function textOverrideOf(overrides: Map<string, PromptModuleVersionRow>, key: string): string | undefined {
   const v = overrides.get(key)?.value;
   return v != null && v !== '' ? v : undefined;
 }
 
-/** 工具文案覆盖：原地改 rawTools（工厂局部数组，改动即生效于 defineTool 注册）。
- *  guidelines 覆盖值按行拆（默认值是 string[] 按 \n join 的形态反解析）。 */
+/** Tool-copy overrides: mutates rawTools in place (the factory's local array — changes take effect right in the defineTool registration).
+ *  guidelines override values are split by line (reverse-parsed from the default's string[]-joined-with-\n shape). */
 export function applyToolTextOverrides(
   tools: Array<{ name: string; description: string; promptGuidelines?: string[] }>,
   overrides: Map<string, PromptModuleVersionRow>,
@@ -171,15 +171,15 @@ export function applyToolTextOverrides(
   }
 }
 
-/** 代码默认基线指纹（sha256 hex）：版本行写入时记录，drift 检测据此判断「覆盖值基于旧基线」。 */
+/** Code-default baseline fingerprint (sha256 hex): recorded when a version row is written; drift detection uses it to judge "the override value is based on an old baseline". */
 export function hashBaseline(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-/** 追加版本行。sourceRef 命中 partial unique（重放）→ 不落行，返回 null。
- *  baseHash（写入时的代码基线指纹）：undefined = 未指定 → 自动取当前代码默认指纹
- *  （manual_edit / solidify_apply / baseline 快照都是「对当前基线重申」语义）；
- *  显式传 null = 无指纹（如回滚继承的无指纹历史行），不自动补。 */
+/** Appends a version row. A sourceRef hitting the partial unique (replay) → no row written, returns null.
+ *  baseHash (code baseline fingerprint at write time): undefined = unspecified → automatically takes the current code default's fingerprint
+ *  (manual_edit / solidify_apply / baseline snapshots all carry "reassertion against the current baseline" semantics);
+ *  explicitly passing null = no fingerprint (e.g. a fingerprint-less historical row inherited by a rollback), not auto-filled. */
 export async function insertPromptModuleVersion(row: {
   moduleKey: string;
   value: string | null;
@@ -208,7 +208,7 @@ export async function insertPromptModuleVersion(row: {
   return r[0]?.seq ?? null;
 }
 
-/** 单模块解析：注册表定义 + 当前版本行 + 生效文本（无行/NULL 行 → 代码默认）。 */
+/** Single-module resolution: registry def + current version row + effective text (no row / NULL row → code default). */
 export async function resolvePromptModule(key: string): Promise<{
   def: PromptModuleDef;
   hasRow: boolean;
@@ -224,7 +224,7 @@ export async function resolvePromptModule(key: string): Promise<{
   return { def, hasRow: ov != null, seq: ov?.seq ?? null, source: ov?.source ?? null, value: ov?.value ?? null, text };
 }
 
-/** skill 元数据（写盘时 frontmatter 从 DB 重拼，防文件/DB 漂移）。 */
+/** Skill metadata (when writing to disk the frontmatter is reassembled from DB, preventing file/DB drift). */
 export async function readSkillMeta(slug: string): Promise<{ name: string; description: string } | null> {
   const r = (await db.select({ name: assistantSkills.name, description: assistantSkills.description })
     .from(assistantSkills)
@@ -233,15 +233,15 @@ export async function readSkillMeta(slug: string): Promise<{ name: string; descr
   return r ?? null;
 }
 
-/** 用 DB 元数据 + 正文重建 SKILL.md（frontmatter 重拼；body 为完整正文不含 frontmatter）。 */
+/** Rebuilds SKILL.md from DB metadata + body (frontmatter reassembled; body is the full body without frontmatter). */
 export async function writeSkillBodyFromDb(name: string, description: string, body: string): Promise<void> {
   const { writeSkillMd } = await import('./skillsService.js');
   writeSkillMd(skillDirOf(name), name, description, body);
 }
 
-// ── 基线漂移（drift）检测 ──
-// 动机：覆盖行 shadow 代码默认值——代码基线演进后，旧行仍在生效且无人知道
-// （改了代码默认值「发版不生效」的暗坑）。判据 = 行写入时记录的 base_hash ≠ 当前代码默认指纹。
+// ── Baseline drift detection ──
+// Motivation: an override row shadows the code default — after the code baseline evolves, the old row keeps taking effect and nobody knows
+// (the hidden gotcha of "changed the code default but the release doesn't take effect"). Criterion = the row's recorded base_hash at write time ≠ the current code default fingerprint.
 
 export type PromptDriftStatus = 'drift' | 'unknown';
 
@@ -249,20 +249,20 @@ export interface PromptDrift {
   key: string;
   label: string;
   group: PromptModuleGroup;
-  /** 覆盖行 seq 与写入来源/时间（溯源用）。 */
+  /** Override row's seq with write source/time (for tracing). */
   seq: number;
   source: string;
   writtenAt: string;
   status: PromptDriftStatus;
-  /** 行写入时的基线指纹；unknown 状态下为 null。 */
+  /** Baseline fingerprint at row-write time; null in the unknown status. */
   baseHash: string | null;
   currentHash: string;
 }
 
-/** 基线漂移检测：覆盖行（value 非 NULL）的 base_hash ≠ 当前代码默认指纹 → drift；
- *  无指纹（旧版写入的行）→ unknown（不可判漂移，但不隐藏）。仅 main/tool 组参与——
- *  skill 行值与磁盘正文由固化管线同步维护，不存在「旧行 shadow 新默认」的语义。
- *  运营面板消费（设置页告警），不在会话热路径上调用。 */
+/** Baseline drift detection: an override row (value non-NULL) whose base_hash ≠ the current code default fingerprint → drift;
+ *  no fingerprint (row written by an older version) → unknown (drift cannot be judged, but not hidden). Only the main/tool groups participate —
+ *  skill row values and disk bodies are kept in sync by the solidify pipeline, so there is no "old row shadows new default" semantics.
+ *  Consumed by the ops panel (settings-page alerting), never called on the session hot path. */
 export async function computePromptDrifts(defs?: PromptModuleDef[]): Promise<PromptDrift[]> {
   const list = defs ?? await listPromptModuleDefs();
   const overrides = await loadPromptModuleOverrides();

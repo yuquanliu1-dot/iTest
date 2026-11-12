@@ -34,7 +34,7 @@ afterAll(async () => {
 describe('migrations', () => {
   it('0001-0003 backfill legacy rows into default project/group', async () => {
     await applyMigration('0000');
-    // 存量数据：迁移前 schema 里没有 project/group 概念
+    // Legacy data: the pre-migration schema has no project/group concept
     await pool.query(`INSERT INTO requirements(title, content) VALUES ('legacy req', 'content')`);
     await pool.query(`INSERT INTO test_cases(title) VALUES ('legacy case')`);
 

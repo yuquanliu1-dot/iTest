@@ -1,14 +1,15 @@
 /**
- * 读助手附件的提取文本（一般问答用；深解析走对应 skill 的 python 解析器直接读
- * 原件——docx 的表格/标题层级、xlsx 的 sheet 结构只有原件里有）。
- * 路径双重校验（confinedPath + DB 行归属当前版本）防跨版本读。
+ * Reads the extracted text of an assistant attachment (for general Q&A; deep parsing goes through the
+ * corresponding skill's python parser on the original file — docx table/heading hierarchy and xlsx sheet
+ * structure exist only in the original).
+ * Double path validation (confinedPath + the DB row belonging to the current version) guards against cross-version reads.
  */
 import { Type } from '@earendil-works/pi-ai';
 import type { ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 import { readAssistantAttachmentText } from '../threadAttachments.js';
 
-/** mime → 对应 skill 的深解析指引（工具文案与报错指路共用）。 */
+/** mime → deep-parse pointer for the corresponding skill (shared by tool copy and error guidance). */
 function deepParseHint(mime: string | null): string {
   return /spreadsheetml/.test(mime ?? '')
     ? 'file-to-cases 技能的 parse_xlsx.py'

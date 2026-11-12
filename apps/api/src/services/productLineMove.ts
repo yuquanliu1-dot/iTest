@@ -1,16 +1,16 @@
 /**
- * 「移动产品线到另一个组织」：改 product_lines.organization_id 一行，
- * 线内全部项目跟着换组织——这是结构不变式，不是应用层同步。
+ * "Move a product line to another org": updates the single product_lines.organization_id row,
+ * and every project in the line changes org with it — this is a structural invariant, not app-layer sync.
  *
- * 但「搬家的尾巴」还有两串，都必须同事务：
- *   1. 标签：tags 是组织级资源，case_tags 直接指向 tag 行。不迁就表现为
- *      「标签全没了且用例改不动」（assertTagsBelongToOrg 以 tag_org_mismatch 400）。
- *   2. 分配快照：project_assignments.organization_id 是「分配发生时」的组织。
- *      R2 起可见性已改走 product_lines.organization_id，不再拿快照当闸门，
- *      但它仍是给审计看的快照，跟随改写可免得留下「分配在 A、项目已在 B」的误导性记录。
+ * But "the tail of moving house" has two more strings, both in the same transaction:
+ *   1. Tags: tags are org-level resources and case_tags point directly at tag rows. Not migrating them shows up as
+ *      "all tags gone and cases uneditable" (assertTagsBelongToOrg 400s with tag_org_mismatch).
+ *   2. Assignment snapshots: project_assignments.organization_id is the org "at assignment time".
+ *      Since R2 visibility reads product_lines.organization_id and no longer uses the snapshot as a gate,
+ *      but it's still an audit snapshot; rewriting it along avoids misleading "assigned in A, project already in B" records.
  *
- * 全部写在一个事务里：标签迁了一半、归属改了一半的中间态一旦被读到，用户会看到
- * 「标签全没了且用例改不动」。
+ * Everything writes in one transaction: once the half-migrated intermediate state (tags half-moved, ownership half-changed) gets read,
+ * users see "all tags gone and cases uneditable".
  */
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -20,8 +20,8 @@ import { tagsKey } from '../lib/cache-keys.js';
 import { migrateCaseTagsToOrg } from './projectRehome.js';
 
 /**
- * 把产品线搬到 targetOrgId，并连带改写线内项目的标签与分配快照。
- * 同名线冲突由调用方预检（productLines.ts 的 move 路由），这里只做写。
+ * Moves the product line to targetOrgId and rewrites the line's projects' tags and assignment snapshots along with it.
+ * Same-name line conflicts are pre-checked by the caller (the move route in productLines.ts); this only writes.
  */
 export async function moveProductLineToOrg(
   productLineId: string,
@@ -33,7 +33,7 @@ export async function moveProductLineToOrg(
   ).map((p) => p.id);
 
   await db.transaction(async (tx) => {
-    // 线本身先落定；线下项目无需改写——它们的组织就是这一列。
+    // Settle the line itself first; projects under the line need no rewrite — their org is this very column.
     await tx
       .update(productLines)
       .set({ organizationId: targetOrgId, updatedAt: new Date() })
@@ -49,7 +49,7 @@ export async function moveProductLineToOrg(
     }
   });
 
-  // 源组织侧也失效：迁走的是线内项目在源组织里可见的一批 tag，源组织的 tag 列表读的是同一张表。
+  // Invalidate the source-org side too: what moved away is the set of tags the line's projects had visible in the source org, and the source org's tag list reads the same table.
   await cache.del(tagsKey(sourceOrgId));
   await cache.del(tagsKey(targetOrgId));
   return projectIds.length;

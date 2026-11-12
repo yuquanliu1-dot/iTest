@@ -5,7 +5,7 @@ import { judgeCaseOutcome } from '../src/agent/judgeCaseOutcome.js';
 
 describe('materializeExpectedOutcome（行级预期物化）', () => {
   it('替换数据集列变量', () => {
-    // 数据集列名受 validateVariableName 约束（ASCII 标识符），此处用合法列名
+    // dataset column names are constrained by validateVariableName (ASCII identifiers), so a legal column name is used here
     expect(materializeExpectedOutcome('提交后页面应：{{expected_result}}', { expected_result: '登录框出现红色提示' }))
       .toBe('提交后页面应：登录框出现红色提示');
   });
@@ -23,7 +23,7 @@ describe('materializeExpectedOutcome（行级预期物化）', () => {
   });
 });
 
-/** 捕获 completeJson 实际发出请求的 lang 字段（provider 层的指令块追加无法在单测里 mock）。 */
+/** Captures the lang field of the request actually issued by completeJson (the provider-level instruction-block append can't be mocked in a unit test). */
 describe('judgeCaseOutcome lang 接线（执行路径无用户上下文 → zh-CN 回落）', () => {
   function makeCaptureLlm() {
     const reqs: Array<{ lang?: string }> = [];

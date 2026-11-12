@@ -33,10 +33,10 @@ describe('extractPageElements', () => {
     expect(snap.title).toBe('元素管理');
     expect(snap.bodyLen).toBe(320);
     expect(snap.candidateCount).toBe(3);
-    expect(snap.truncated).toBe(false); // 去重折叠不算截断
+    expect(snap.truncated).toBe(false); // dedupe folding doesn't count as truncation
     expect(snap.elements[0]).toContain('button#add');
     expect(snap.elements[0]).toContain('"添加元素"');
-    // 同选择器复选框折叠成一条 ×2
+    // Same-selector checkboxes fold into one line ×2
     expect(snap.elements.filter((l) => l.includes('checkbox'))).toHaveLength(1);
     expect(snap.elements.find((l) => l.includes('checkbox'))).toContain('×2');
   });
@@ -50,7 +50,7 @@ describe('extractPageElements', () => {
 });
 
 describe('rankPageElements（树表格页降噪）', () => {
-  /** 事件管理页形态：工具栏按钮+搜索框 + 200 个 role=treeitem 行 + 30 个无名复选框 */
+  /** Incident-management page shape: toolbar buttons + search box + 200 role=treeitem rows + 30 nameless checkboxes */
   function incidentMgrRaw(): RawElementCandidate[] {
     const raw: RawElementCandidate[] = [
       cand({ tag: 'button', id: 'create', text: '新建', selector: '#create' }),
@@ -79,7 +79,7 @@ describe('rankPageElements（树表格页降噪）', () => {
     const checkboxLines = elements.filter((l) => l.includes('checkbox'));
     expect(checkboxLines).toHaveLength(1);
     expect(checkboxLines[0]).toContain('×30');
-    expect(suppressed).toBeGreaterThanOrEqual(188); // 200 treeitem 截留 188（按 score 可能再留更少）
+    expect(suppressed).toBeGreaterThanOrEqual(188); // 188 of the 200 treeitems suppressed (score may keep even fewer)
     expect(suppressedSummary).toContain('role=treeitem ×');
   });
 

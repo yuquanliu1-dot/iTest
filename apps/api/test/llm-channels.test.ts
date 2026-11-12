@@ -14,7 +14,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // 本文件经 llmSettings.js 间接持有 db/client.js 的单例池，先关掉再停容器（与 pi-model-bridge.test.ts 同款处理）。
+  // This file indirectly holds db/client.js's singleton pool via llmSettings.js — close it before stopping the container (same handling as pi-model-bridge.test.ts).
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
@@ -24,7 +24,7 @@ beforeEach(async () => {
   await pool.query(`TRUNCATE settings`);
 });
 
-// ── VisionRoutingClient 纯单测（fake 双 client，不触 db/网络）──
+// ── VisionRoutingClient pure unit tests (fake dual clients, no db/network) ──
 
 function fakeClient(provider: 'openai' | 'anthropic' | 'google', tag: string): LLMClient & { calls: LLMRequest[] } {
   const calls: LLMRequest[] = [];
@@ -85,7 +85,7 @@ describe('VisionRoutingClient', () => {
   });
 });
 
-// ── resolveLlmClient 渠道解析（读 settings 表）──
+// ── resolveLlmClient channel resolution (reads the settings table) ──
 
 async function insertSettings(rows: Array<[string, unknown]>) {
   for (const [key, value] of rows) {

@@ -18,7 +18,7 @@ const ProviderEnum = z.enum(['github', 'gitee', 'gitlab']);
 
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
-  /** 必填：项目归属产品线，项目的组织由产品线推导。 */
+  /** Required: the project belongs to a product line; the project's org is derived from it. */
   productLineId: z.string().uuid(),
   description: z.string().optional(),
   repoUrl: z.string().url().optional().or(z.literal('').transform(() => undefined)),
@@ -28,10 +28,10 @@ const CreateBody = z.object({
   patOverride: z.string().optional(),
 });
 
-/** PATCH 不含 productLineId：改线是独立动作（走 POST /product-lines/:id/projects，挂载即搬家）。 */
+/** PATCH doesn't include productLineId: changing lines is a separate action (POST /product-lines/:id/projects, attaching equals moving house). */
 const PatchBody = CreateBody.omit({ productLineId: true }).partial();
 
-/** mask PAT：所有返回路径必须走此函数，避免泄露。 */
+/** Mask PAT: every return path must go through this function to avoid leakage. */
 function maskProject<T extends { patOverride?: string | null; provider?: string | null }>(p: T): Omit<T, 'patOverride'> & { hasPat: boolean } {
   const hasPat = !!p.patOverride;
   const { patOverride, ...rest } = p as T & { patOverride?: string | null };
@@ -41,21 +41,21 @@ function maskProject<T extends { patOverride?: string | null; provider?: string 
 
 async function caseCountsByGroup(versionIds?: string[]): Promise<Map<string, number>> {
   const base = db.select({ groupId: testCases.groupId, count: sql<number>`count(*)` }).from(testCases);
-  // 版本收窄：分组计数必须跟用例列表同一口径，否则左侧数字与右侧表格对不上
+  // Version narrowing: group counts must use the same criterion as the case list, otherwise the left numbers and the right table disagree
   const rows = versionIds && versionIds.length > 0
     ? await base.where(inArray(testCases.versionId, versionIds)).groupBy(testCases.groupId)
     : await base.groupBy(testCases.groupId);
   return new Map(rows.map((r) => [r.groupId, Number(r.count)]));
 }
 
-/** 项目 → 产品线名映射：projectLineId 已是 projects 自带列，这里只补名字供前端展示归属。 */
+/** Project → product-line name mapping: projectLineId is already a projects column; this only adds the name so the frontend can show ownership. */
 async function productLineNames(): Promise<Map<string, string>> {
   const rows = await db.select({ id: productLines.id, name: productLines.name }).from(productLines);
   return new Map(rows.map((r) => [r.id, r.name]));
 }
 
 projectsRoute.get('/', async (req, res) => {
-  // 只列出用户可见组织下的项目（项目组织 = 其产品线的组织）
+  // Only list projects under orgs visible to the user (a project's org = its product line's org)
   const visibleOrgs = await visibleOrgIdsFor(req.user!);
   const ps = visibleOrgs.size
     ? await db
@@ -86,7 +86,7 @@ projectsRoute.get('/', async (req, res) => {
     await attachCreators(
       ps.map(({ project: p, organizationId }) => ({
         ...maskProject(p),
-        // 组织由产品线推导；响应仍带 organizationId，前端类型零改动。
+        // Org derived from the product line; the response still carries organizationId, zero changes to frontend types.
         organizationId,
         caseCount: byProject.get(p.id) ?? 0,
         versionCount: vByProject.get(p.id) ?? 0,
@@ -99,8 +99,8 @@ projectsRoute.get('/', async (req, res) => {
 
 projectsRoute.post('/', requireManager, async (req, res) => {
   const body = CreateBody.parse(req.body);
-  // 项目的组织由产品线推导：产品线须可见，且调用者须是该产品线所属组织的管理员。
-  // projects 已无 organization_id 列，归属只由 product_line_id 决定。
+  // A project's org is derived from its product line: the line must be visible, and the caller must be a manager of the line's owning org.
+  // projects no longer has an organization_id column; ownership is decided solely by product_line_id.
   const line = await assertProductLineVisible(body.productLineId, req.user!);
   const lineOrgPath = await getOrgPath(line.organizationId);
   if (!lineOrgPath) throw new HttpError(404, 'not_found', 'product line organization not found');
@@ -164,8 +164,8 @@ projectsRoute.delete('/:id', requireManager, async (req, res) => {
 projectsRoute.get('/:id/groups', async (req, res) => {
   const projectId = String(req.params.id);
   await assertProjectVisible(projectId, req.user!);
-  // versionIds 逗号分隔或重复参数均可，与 GET /cases 同一解析口径。
-  // 前端切「产品线用例库」范围时传线内选中版本，不传则计全线。
+  // versionIds as comma-separated or repeated params both work, same parsing criterion as GET /cases.
+  // The frontend passes selected in-line versions when switching the "product-line case library" scope; without it, the whole line counts.
   const rawVersionIds = (req.query as Record<string, string | string[] | undefined>).versionIds;
   const versionIds = (Array.isArray(rawVersionIds) ? rawVersionIds : rawVersionIds != null ? [rawVersionIds] : [])
     .flatMap((v) => v.split(','))
@@ -178,20 +178,21 @@ projectsRoute.get('/:id/groups', async (req, res) => {
 projectsRoute.post('/:id/groups', async (req, res) => {
   const projectId = String(req.params.id);
   await assertProjectVisible(projectId, req.user!);
-  // 只取 name：分组创建不涉及项目创建的那些字段（CreateBody 现含必填 productLineId）。
+  // Take only name: group creation doesn't involve those project-creation fields (CreateBody now has a required productLineId).
   const body = z.object({ name: z.string().min(1).max(200) }).parse(req.body);
   res.json(await createGroup(projectId, { name: body.name }));
 });
 
-/** POST /verify-repo — 仓库元数据可达性 + 分支存在性。仅 manager。 */
+/** POST /verify-repo — repo metadata reachability + branch existence. Managers only. */
 projectsRoute.post('/verify-repo', requireManager, async (req, res) => {
   const repoUrl = z.string().url().parse(req.body.repoUrl);
   const branch = req.body.branch as string | undefined;
   const provider = (req.body.provider as 'github' | 'gitee' | 'gitlab' | undefined) ?? 'github';
   const pat = req.body.patOverride as string | undefined;
-  // 表单 PAT 为空且带 projectId（编辑已有项目的场景）→ 回落库中已存 PAT。
-  // GET 从不回传 PAT（maskProject），不回落则存量项目点「测试连接」必以无凭据探测私库，
-  // 假报「认证失败」（2026-10-24 prod228 base-all；9f99a39 起 GitLab 走真实 ls-remote 才暴露）。
+  // Empty form PAT with a projectId (editing an existing project) → fall back to the stored PAT in the DB.
+  // GET never returns the PAT (maskProject); without the fallback, existing projects clicking "test connection"
+  // would always probe a private repo without credentials and falsely report "authentication failed"
+  // (2026-10-24 prod228 base-all; exposed only once GitLab went through real ls-remote since 9f99a39).
   let effectivePat = pat;
   if (!effectivePat && req.body.projectId) {
     const projectId = z.string().uuid().parse(req.body.projectId);

@@ -11,8 +11,8 @@ import { SCHEMA_SQL, seedOrg } from './helpers/db.js';
 let pool: Pool;
 let managerApp: import('express').Express;
 let memberApp: import('express').Express;
-/** 隔离的 .data 根：必须在任何静态/动态 import skillsStore 之前设好，否则模块级 SKILLS_ROOT
- *  会解析到开发者真实的 PI_DATA_DIR，测试会真的建删目录。 */
+/** Isolated .data root: must be set before any static/dynamic import of skillsStore, otherwise the module-level SKILLS_ROOT
+ *  would resolve to the developer's real PI_DATA_DIR and the tests would actually create/delete directories. */
 let tmpDataDir: string;
 
 const skillsRoot = (): string => path.join(tmpDataDir, 'skills');
@@ -33,7 +33,7 @@ beforeAll(async () => {
   const { managerUserOf, memberUserOf } = await import('./helpers/auth.js');
   const mount = (user: ReturnType<typeof managerUserOf>) => {
     const a = exp();
-    // 与 src/index.ts 一致的 body 上限；默认 100kb 会让「单文件 1MB」用例在解析层就失败。
+    // Same body limit as src/index.ts; the 100kb default would fail the "single file 1MB" case at the parse layer.
     a.use(exp.json({ limit: '2mb' }));
     a.use((req, _res, next) => { req.user = user; next(); });
     a.use('/api/assistant', spaceRoute);
@@ -65,7 +65,7 @@ describe('skills 元数据 CRUD（文件系统为真源）', () => {
     const md = path.join(skillDir('smoke-check'), 'SKILL.md');
     expect(fs.existsSync(md)).toBe(true);
     expect(fs.readFileSync(md, 'utf8')).toContain('name: "smoke-check"');
-    expect(ok.body.fileCount).toBe(1); // 只有 SKILL.md
+    expect(ok.body.fileCount).toBe(1); // SKILL.md only
   });
 
   it('POST 带 files[] 一次落完整内容：SKILL.md 自动补 frontmatter，子目录建齐', async () => {
@@ -96,7 +96,7 @@ describe('skills 元数据 CRUD（文件系统为真源）', () => {
       expect(r.status).toBe(400);
       expect(fs.existsSync(skillDir(body.name))).toBe(false);
     }
-    // 穿越路径必须在校验阶段就拒——不能在 skillsRoot 外留下 mkdir 的残骸。
+    // Traversal paths must be rejected at the validation stage — no mkdir residue may be left outside skillsRoot.
     expect(fs.existsSync(path.join(skillsRoot(), 'escape'))).toBe(false);
   });
 
@@ -190,10 +190,10 @@ describe('skills 元数据 CRUD（文件系统为真源）', () => {
     const r = await request(managerApp).delete('/api/assistant/skills/orphan/orphan-del');
     expect(r.status).toBe(204);
     expect(fs.existsSync(skillDir('orphan-del'))).toBe(false);
-    // 目录已不在 → 404
+    // Directory already gone → 404
     expect((await request(managerApp).delete('/api/assistant/skills/orphan/orphan-del')).status).toBe(404);
 
-    // 已登记的技能不允许走 orphan 路由（否则 DB 行会变成指向空目录的死行）
+    // Registered skills must not go through the orphan route (otherwise the DB row would become a dead row pointing at an empty directory)
     await request(managerApp).post('/api/assistant/skills').send({ name: 'registered', description: 'd' });
     const clash = await request(managerApp).delete('/api/assistant/skills/orphan/registered');
     expect(clash.status).toBe(409);
@@ -270,10 +270,10 @@ describe('skill 文件树接口', () => {
     expect(r.status).toBe(200);
     expect(r.body.written.sort()).toEqual(['agents/analyzer.md', 'agents/grader.md']);
     expect(fs.existsSync(path.join(skillDir('bulk-skill'), 'agents', 'grader.md'))).toBe(true);
-    // 子目录不存在 → 400（不代建目录）
+    // Subdirectory doesn't exist → 400 (directories are not created implicitly)
     expect((await request(managerApp).post(`/api/assistant/skills/${id}/files`)
       .send({ dir: 'nope', files: [{ path: 'x.md', content: 'x' }] })).status).toBe(400);
-    // files 空数组 → 400
+    // Empty files array → 400
     expect((await request(managerApp).post(`/api/assistant/skills/${id}/files`)
       .send({ dir: 'agents', files: [] })).status).toBe(400);
   });

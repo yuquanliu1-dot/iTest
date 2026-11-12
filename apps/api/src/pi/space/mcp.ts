@@ -1,14 +1,14 @@
 /**
- * 空间助手 MCP 支持：DB 配置 + pi.registerMcpServer 通用通道（spec 2026-10-18）。
+ * Space-assistant MCP support: DB config + pi.registerMcpServer generic channel (spec 2026-10-18).
  *
- * pi 集成 = createMcpExtension（ExtensionFactory，session_start 建连）+ ExtensionAPI.registerMcpServer。
- * 本模块提供：
- *  - loader seam：setMcpServersLoader / getMcpServersForThread。Task 1 默认空集；
- *    Task 3 把默认翻成 DB 查询 loadEnabledMcpServers。测试用 setMcpServersLoader 注入桩。
- *  - buildMcpExtensionFactory：把 server 列表装配成「注册 + 建连装载」两个 extension factory。
+ * pi integration = createMcpExtension (ExtensionFactory, connects on session_start) + ExtensionAPI.registerMcpServer.
+ * This module provides:
+ *  - loader seam: setMcpServersLoader / getMcpServersForThread. Task 1 defaults to an empty set;
+ *    Task 3 flips the default to the DB query loadEnabledMcpServers. Tests inject stubs via setMcpServersLoader.
+ *  - buildMcpExtensionFactory: assembles the server list into the two extension factories, "register + connect".
  *
- * 顺序约束（见计划头部关键事实 §1）：session.ts 里 skills → mcp → identity。
- * bindExtensions 必需：pi 的 session_start 只在 bindExtensions 里 emit，MCP 建连在 session_start 做。
+ * Order constraint (see the plan header's key facts §1): in session.ts, skills → mcp → identity.
+ * bindExtensions is required: pi emits session_start only inside bindExtensions, and MCP connects on session_start.
  */
 import { createMcpExtension } from '@earendil-works/pi-coding-agent';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -27,16 +27,16 @@ export interface AssistantMcpServer {
 
 type AssistantMcpServerRow = typeof assistantMcpServers.$inferSelect;
 
-/** 合法的 MCP exposure 集合（不含 oauth——服务端无 loopback 回调能力）。CRUD 路由与装载共用，
- *  避免两个 allow-list 各自漂移（对齐 spec §MCP）。 */
+/** Legal MCP exposure set (no oauth — the server has no loopback-callback capability). Shared by the CRUD route and loading,
+ *  so the two allow-lists cannot drift apart (aligned with spec §MCP). */
 export const MCP_EXPOSURES = new Set(['codemode', 'deferred', 'direct', 'hidden']);
 
-/** env 值解引用：`env:KEY` 语法从 process.env 取（容器 secrets 统一走宿主机注入，明文不落 DB）。
- *  未定义 key 直接丢弃（不注入空占位）。 */
+/** env-value dereference: the `env:KEY` syntax pulls from process.env (container secrets all arrive via host injection, plaintext never lands in the DB).
+ *  Undefined keys are dropped outright (no empty placeholder injected). */
 export function resolveMcpEnv(env?: Record<string, string> | null): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env ?? {})) {
-    if (typeof v !== 'string') continue; // DB 脏值防御：非字符串直接丢弃
+    if (typeof v !== 'string') continue; // dirty-DB-value defense: non-strings dropped outright
     if (v.startsWith('env:')) {
       const real = process.env[v.slice(4)];
       if (real !== undefined) out[k] = real;
@@ -47,7 +47,7 @@ export function resolveMcpEnv(env?: Record<string, string> | null): Record<strin
   return out;
 }
 
-/** stdio command 可执行性探测：含路径分隔符 → 按绝对/相对路径 X_OK；否则按 PATH 逐个 scan X_OK。 */
+/** stdio command executability probe: contains a path separator → X_OK as an absolute/relative path; otherwise scan each PATH dir for X_OK. */
 export function findExecutable(cmd: string): boolean {
   if (cmd.includes('/')) {
     try { accessSync(cmd, constants.X_OK); return true; } catch { return false; }
@@ -59,9 +59,9 @@ export function findExecutable(cmd: string): boolean {
   return false;
 }
 
-/** 行 → 可挂载 server；每条坏配置 skip+warn（warn-not-fail：一个坏 server 不拖垮整个助手）。
- *  守卫（spec §MCP）：exposure=oauth/非法 → 拒；kind 未知 → 拒；stdio 缺 command/二进制不可执行 → 拒；
- *  http url 非 http(s) → 拒。返回 null 表示跳过。 */
+/** Row → mountable server; each bad config is skip+warn (warn-not-fail: one bad server must not drag down the whole assistant).
+ *  Guards (spec §MCP): exposure=oauth/illegal → reject; unknown kind → reject; stdio missing command/binary not executable → reject;
+ *  http url not http(s) → reject. Returning null means skip. */
 export function mcpServerToEntry(row: AssistantMcpServerRow): AssistantMcpServer | null {
   if (!MCP_EXPOSURES.has(row.exposure)) {
     logger.warn({ name: row.name, exposure: row.exposure }, 'mcp server exposure 非法（oauth 等均不支持），跳过');
@@ -73,7 +73,7 @@ export function mcpServerToEntry(row: AssistantMcpServerRow): AssistantMcpServer
       logger.warn({ name: row.name, command: row.command }, 'mcp stdio server 二进制不可执行，跳过（warn-not-fail）');
       return null;
     }
-    // 上方 MCP_EXPOSURES 已守卫，drizzle varchar 的 exposure 是 string，这里收窄成 McpExposure
+    // MCP_EXPOSURES above already guards this; drizzle varchar's exposure is string — narrow it to McpExposure here
     return { name: row.name, config: { type: 'stdio', command: row.command, args: row.args ?? [], env: resolveMcpEnv(row.env), exposure: row.exposure as McpExposure } };
   }
   if (row.kind === 'http') {
@@ -87,9 +87,9 @@ export function mcpServerToEntry(row: AssistantMcpServerRow): AssistantMcpServer
   return null;
 }
 
-/** 从 assistant_mcp_servers 表加载启用 server（坏配置跳过）。scope 过滤跟随线程归属：
- *  global 全量；project/version 只加载与线程 projectId/versionId 匹配的行（跨组织不泄漏）。
- *  ctx 缺省时只加载 global（测试/无归属场景安全默认，绝不全量抓 scoped 行）。 */
+/** Loads enabled servers from the assistant_mcp_servers table (bad configs skipped). Scope filtering follows thread ownership:
+ *  global in full; project/version only rows matching the thread's projectId/versionId (no cross-org leak).
+ *  ctx absent → load global only (safe default for tests/unowned scenarios; never grab all scoped rows). */
 export async function loadEnabledMcpServers(ctx?: { projectId?: string | null; versionId?: string | null }): Promise<AssistantMcpServer[]> {
   const rows = await db.select().from(assistantMcpServers).where(eq(assistantMcpServers.enabled, true));
   const out: AssistantMcpServer[] = [];
@@ -112,12 +112,12 @@ type McpServersLoader = (ctx: McpThreadCtx) => Promise<AssistantMcpServer[]>;
 
 let serversLoader: McpServersLoader | null = null;
 
-/** 注入 MCP server loader（测试桩 / Task 3 默认翻 DB）。传 null 恢复默认。 */
+/** Injects the MCP server loader (test stub / Task 3 flips the default to DB). Pass null to restore the default. */
 export function setMcpServersLoader(fn: McpServersLoader | null): void {
   serversLoader = fn;
 }
 
-/** 线程创建时取 MCP servers。默认 = DB 加载（带 scope 过滤）；测试用 setMcpServersLoader 注入桩。 */
+/** Fetches MCP servers at thread creation. Default = DB load (with scope filtering); tests inject stubs via setMcpServersLoader. */
 export async function getMcpServersForThread(ctx: McpThreadCtx): Promise<AssistantMcpServer[]> {
   const loader: McpServersLoader =
     serversLoader ?? (async (c) => loadEnabledMcpServers({ projectId: c.projectId, versionId: c.versionId }));
@@ -129,8 +129,8 @@ export async function getMcpServersForThread(ctx: McpThreadCtx): Promise<Assista
   }
 }
 
-/** 装配 MCP 扩展：先 registerMcpServer 前置注册，再 createMcpExtension hermetic 建连。
- *  两个 factory 都进 session.ts 的 extensionFactories，且必须排在 identity 前。 */
+/** Assembles MCP extensions: registerMcpServer pre-registration first, then createMcpExtension hermetic connect.
+ *  Both factories go into session.ts's extensionFactories and must be ordered before identity. */
 export function buildMcpExtensionFactory(servers: AssistantMcpServer[]): {
   register: { name: string; hidden: boolean; factory: (pi: ExtensionAPI) => void };
   connect: { name: string; hidden: boolean; factory: ReturnType<typeof createMcpExtension> };
@@ -146,7 +146,7 @@ export function buildMcpExtensionFactory(servers: AssistantMcpServer[]): {
     connect: {
       name: 'itest-space-mcp',
       hidden: true,
-      // hermetic：不读 mcp.json，pi.registerMcpServer 是唯一来源
+      // hermetic: does not read mcp.json — pi.registerMcpServer is the sole source
       factory: createMcpExtension({
         loadConfig: () => ({ servers: [], errors: [], autoEnableCodemode: true }),
       }),

@@ -1,4 +1,4 @@
-/** 服务端最小 t:按语言返回 tool summary 等模板文案。key 与产物文案同文件,便于对照。 */
+/** Minimal server-side t: returns template strings such as tool summaries per language. Keys live in the same file as their output strings for easy comparison. */
 export type StLang = 'zh-CN' | 'en-US';
 
 const dict = {

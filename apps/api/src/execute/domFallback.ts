@@ -3,7 +3,7 @@ import type { Locator } from '@itest/shared';
 
 export type DomFallbackResult = { ok: true } | { ok: false; error: string };
 
-// 帧链步骤的 DOM 降级在 Frame 上下文派发（Frame.evaluate 与 Page 同签名）。
+// DOM fallback for frame-chain steps dispatches in the Frame context (Frame.evaluate shares the Page signature).
 type DomRoot = Page | Frame;
 
 function locatorToCss(page: DomRoot, locators: Locator[]): string | null {
@@ -29,7 +29,7 @@ async function runDomAction(
   const sel = locatorToCss(page, locators);
   if (!sel) return { ok: false, error: 'no-css-locator' };
   const res = await page.evaluate((_a) => {
-    // 这里的 fn 由调用方注入；这里只是 placeholder，真实脚本在每个 wrapper 里
+    // The fn here is injected by the caller; this is only a placeholder — the real script lives in each wrapper
     return { ok: true };
   }, arg);
   return (res as DomFallbackResult) ?? { ok: false, error: 'no-result' };
@@ -93,7 +93,7 @@ export async function domSelect(page: DomRoot, locators: Locator[], value: strin
 }
 
 export async function domUpload(_page: DomRoot, _locators: Locator[], _storedPath: string): Promise<DomFallbackResult> {
-  // upload 仍走真实 setInputFiles；DOM 路径无需额外实现
+  // upload still goes through real setInputFiles; the DOM path needs no extra implementation
   return { ok: false, error: 'upload-not-supported-in-dom-fallback' };
 }
 

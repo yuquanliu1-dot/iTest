@@ -8,7 +8,7 @@ import path from 'node:path';
 const exec = promisify(execFile);
 const SCRIPT = path.resolve(process.cwd(), 'scripts/export-cases-content/scripts/export_cases.py');
 const CONTENT = path.resolve(process.cwd(), 'scripts/export-cases-content');
-// 用真实 TS 构建器生成 payload——测试同时锁住「TS payload 契约 ↔ python 渲染」两侧。
+// Generate the payload with the real TS builder — the test locks both sides of the "TS payload contract ↔ python rendering".
 import { buildExportPayload, type ExportCaseRow } from '../../services/caseExport.service.js';
 
 async function buildPayloadFile(): Promise<string> {
@@ -34,7 +34,7 @@ async function buildPayloadFile(): Promise<string> {
   return file;
 }
 
-/** python 一行读 zip 条目（测试侧不引 zip 解压依赖）。 */
+/** One-line python to read a zip entry (no zip-extraction dependency on the test side). */
 async function zipEntry(zipPath: string, name: string): Promise<string> {
   const { stdout } = await exec('python3', ['-c', 'import zipfile,sys;sys.stdout.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]).decode("utf-8"))', zipPath, name]);
   return stdout;
@@ -65,12 +65,12 @@ describe('export_cases.py', () => {
     expect(marker.path).toBe(`.out/${marker.name}`);
     const file = path.join(cwd, marker.path);
     const buf = await readFile(file);
-    expect(buf.subarray(0, 2).toString()).toBe('PK'); // 合法 zip
+    expect(buf.subarray(0, 2).toString()).toBe('PK'); // a valid zip
     const doc = await zipEntry(file, 'word/document.xml');
     for (const label of ['用例名称', '所属分组', '预置条件', '测试步骤', '预期结果']) {
       expect(doc).toContain(label);
     }
-    // 两个分组、两条用例、两行步骤都在正文里
+    // Both groups, both cases, and both step rows are in the document body
     expect(doc).toContain('登录模块');
     expect(doc).toContain('告警管理');
     expect(doc).toContain('验证登录成功');

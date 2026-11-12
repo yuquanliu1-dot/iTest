@@ -1,12 +1,12 @@
 /**
- * 计划调度（plan_schedules）领域服务。
+ * Plan scheduling (plan_schedules) domain service.
  *
- * 与 REST 路由（routes/planSchedules.ts）与 AI 助手工具（pi/space/tools/plans.ts 的 manage_plans）
- * 共用：cron 校验、归属校验、DB 写、BullMQ 同步全部收敛到这里。
+ * Shared by the REST route (routes/planSchedules.ts) and the AI assistant tool (manage_plans in pi/space/tools/plans.ts):
+ * cron validation, ownership checks, DB writes, and BullMQ sync all converge here.
  *
- * 同步策略：DB commit 后立即 upsertScheduleJob / removeScheduleJob；
- * 同步失败不回滚 DB（worker 下次 reconcile 兜底），但要在 logger.warn 留痕。
- * Redis 不可用时 upsert/remove 自身就是空操作。
+ * Sync strategy: upsertScheduleJob / removeScheduleJob immediately after the DB commit;
+ * a sync failure doesn't roll back the DB (the worker's next reconcile covers it), but must leave a logger.warn trail.
+ * When Redis is unavailable, upsert/remove themselves are no-ops.
  */
 import { asc, eq } from 'drizzle-orm';
 import cronParser from 'cron-parser';
@@ -18,7 +18,7 @@ import { upsertScheduleJob, removeScheduleJob } from '../scheduler/sync.js';
 
 export type PlanScheduleRow = typeof planSchedulesTable.$inferSelect;
 
-/** 把外部输入的 cron 跑一次 next() 验证合法性 + 顺手算出 next_run_at。失败抛 400。 */
+/** Runs next() once on the externally supplied cron to validate it + computes next_run_at along the way. Throws 400 on failure. */
 export function validateCron(expr: string, tz: string): Date {
   try {
     const it = cronParser.parseExpression(expr, { currentDate: new Date(), tz });
@@ -28,7 +28,7 @@ export function validateCron(expr: string, tz: string): Date {
   }
 }
 
-/** 计划行查 + 缺失 404。供所有需要 plan_id 上下文的入口（路由 / 工具）复用。 */
+/** Loads the plan row + 404 when missing. Reused by every entry point (route / tool) needing plan_id context. */
 export async function loadPlanOr404(planId: string): Promise<{ id: string; projectId: string }> {
   const row = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
   if (!row) throw new HttpError(404, 'not_found', 'plan not found');
@@ -48,11 +48,11 @@ export interface CreatePlanScheduleInput {
   cronExpr: string;
   timezone?: string;
   enabled?: boolean;
-  /** 创建人；可空——tool 上下文无 userId 时给 null。 */
+  /** Creator; nullable — null when the tool context has no userId. */
   createdByUserId?: string | null;
 }
 
-/** 新建调度：写 DB → 触发 BullMQ 同步。已存在计划以外的场景由调用方做归属校验。 */
+/** Creates a schedule: write DB → trigger BullMQ sync. Scenarios beyond the existing plan are ownership-checked by the caller. */
 export async function createPlanSchedule(planId: string, input: CreatePlanScheduleInput): Promise<PlanScheduleRow> {
   const tz = input.timezone ?? 'Asia/Shanghai';
   const nextRunAt = validateCron(input.cronExpr, tz);
@@ -80,7 +80,7 @@ export interface UpdatePlanSchedulePatch {
   timezone?: string;
 }
 
-/** 改 enabled / cronExpr / timezone。cron 改则重算 next_run_at；触发 BullMQ 同步。 */
+/** Updates enabled / cronExpr / timezone. A cron change recomputes next_run_at; triggers BullMQ sync. */
 export async function updatePlanSchedule(scheduleId: string, patch: UpdatePlanSchedulePatch): Promise<PlanScheduleRow> {
   const existing = (await db.select().from(planSchedules).where(eq(planSchedules.id, scheduleId)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'schedule not found');
@@ -103,7 +103,7 @@ export async function updatePlanSchedule(scheduleId: string, patch: UpdatePlanSc
   return row;
 }
 
-/** 删调度 + 触发 BullMQ 同步；不存在返回 deleted=false。 */
+/** Deletes the schedule + triggers BullMQ sync; returns deleted=false when missing. */
 export async function deletePlanSchedule(scheduleId: string): Promise<{ deleted: boolean }> {
   const existing = (await db.select().from(planSchedules).where(eq(planSchedules.id, scheduleId)).limit(1))[0];
   if (!existing) return { deleted: false };

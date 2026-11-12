@@ -30,7 +30,7 @@ afterAll(async () => {
   await fs.rm(piDataDir, { recursive: true, force: true });
 });
 
-/** 3 个提交，日期钉死在 2026-01-01/02/03（浅克隆边界按日期算必须可控）。 */
+/** 3 commits with dates pinned to 2026-01-01/02/03 (shallow-clone boundaries are computed by date, so they must be controlled). */
 async function makeDatedRepo(): Promise<string> {
   const bareParent = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-deepen-remote-'));
   const seed = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-deepen-seed-'));
@@ -77,7 +77,7 @@ describe('deepenVersionRepo', () => {
     const ws = versionWorkspaceDir(versionId);
     expect(ws).toBe(path.join(piDataDir, 'workspaces', `v-${versionId}`, 'repo'));
     expect(GIT('git rev-parse HEAD', ws)).toBe(headSha);
-    // 窗口含全部 3 个提交（边界 2026-01-01T00:00 严格早于 c1 的 10:00）
+    // The window covers all 3 commits (boundary 2026-01-01T00:00 is strictly earlier than c1's 10:00)
     expect(commitSubjects(ws)).toEqual(['c1', 'c2', 'c3']);
   }, 30_000);
 
@@ -98,7 +98,7 @@ describe('deepenVersionRepo', () => {
     const ws = versionWorkspaceDir(versionId);
 
     await deepenVersionRepo(versionId, { since: '2026-01-01T00:00:00' });
-    // 助手路径（默认 depth 1）截回 1 个提交——共享同一目录与同一把锁
+    // The assistant path (default depth 1) truncates back to 1 commit — the same directory and the same lock are shared
     await checkoutRepoForVersion(versionId, ws);
     expect(commitSubjects(ws)).toEqual(['c3']);
 

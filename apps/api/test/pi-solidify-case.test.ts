@@ -4,9 +4,9 @@ import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-// 固化编排测试：runAiTask 打桩并借 opts.onAction 模拟 AI 动作收集（模块级 mock 下收集钩子
-// 由测试手动驱动），writeStepScreenshot / extractPageElements 打桩，聚焦 solidify_case 编排契约。
-// aiActionMap（映射函数）经 aiTask.js 取占位符常量,一并打桩隔绝真实依赖
+// Solidification orchestration test: runAiTask is stubbed, with opts.onAction used to simulate AI action collection (under module-level mocks the collection hook
+// is driven manually by the test); writeStepScreenshot / extractPageElements are stubbed, focusing on the solidify_case orchestration contract.
+// aiActionMap (mapping function) takes placeholder constants via aiTask.js, also stubbed to isolate real dependencies
 vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/execute/aiTask.js')>();
   return {
@@ -17,14 +17,14 @@ vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
     SECRET_PH: '__ITEST_STEP_SECRET__',
   };
 });
-// liveView 包一层 spy：既有真实行为不变（登记进内存表），供 ctx.liveView=false 用例断言零调用
+// Wrap liveView with a spy: existing real behavior unchanged (registers into the in-memory table), so ctx.liveView=false cases can assert zero calls
 vi.mock('../src/execute/liveView.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/execute/liveView.js')>();
   return { ...actual, registerLiveView: vi.fn(actual.registerLiveView) };
 });
 vi.mock('../src/execute/cdp.js', () => ({
   writeStepScreenshot: vi.fn(async () => '/screenshots/solidify-x/step-1.png'),
-  // verifyCase.js（solidifyCase 复用其 buildStepInstruction/占位符）与 visionAssert 的传递依赖
+  // Transitive dependencies of verifyCase.js (solidifyCase reuses its buildStepInstruction/placeholders) and visionAssert
   executeCaseInBrowser: vi.fn(),
   materializeExpectedOutcome: (t: string) => t,
   maskSensitiveValues: (t: string) => t,
@@ -45,7 +45,7 @@ vi.mock('../src/agent/llmSettings.js', () => ({
     client: { provider: 'anthropic' as const, complete: async () => ({ kind: 'text' as const, value: '', provider: 'anthropic' as const, vision: false }) },
   })),
 }));
-// judgeCaseOutcome 仅经 verifyCase→visionAssert 传递加载，固化链路不调用；打桩隔绝其真实依赖
+// judgeCaseOutcome is only transitively loaded via verifyCase→visionAssert and never called in the solidification chain; stubbed to isolate real dependencies
 vi.mock('../src/agent/judgeCaseOutcome.js', () => ({
   judgeCaseOutcome: vi.fn(async () => ({ passed: true, reason: 'ok' })),
 }));
@@ -66,7 +66,7 @@ vi.mock('playwright-core', () => {
               close: async () => {},
               screenshot: async () => Buffer.from('fake-png'),
               locator: (sel: string) => makeLoc(sel),
-              // 固化链路会挂 console/pageerror 采集（createConsoleCapture）——mock 缺 on 会整链报错
+              // The solidification chain attaches console/pageerror collection (createConsoleCapture) — a mock missing `on` would break the whole chain
               on: vi.fn(),
             }),
             storageState: async () => ({ cookies: [{ name: 'sid', value: 'cached' }], origins: [] }),
@@ -80,15 +80,15 @@ vi.mock('playwright-core', () => {
   };
 });
 
-/** 每步 runAiTask 行为脚本：按调用序消费（步骤 fail-stop 语义下队列剩余项即"未执行"）。 */
+/** Per-step runAiTask behavior script: consumed in call order (under step fail-stop semantics, remaining queue items are "not executed"). */
 interface StepSpec {
-  /** (动作, 是否成功) 序列——成功动作进收集 */
+  /** (action, success) sequence — successful actions are collected */
   actions?: Array<[Record<string, unknown>, boolean]>;
   summary?: string;
   reject?: Error;
 }
 let stepQueue: StepSpec[] = [];
-/** 每次调用时刻 valueSub(SECRET_PH) 的快照（循环结束后 stepSecret 已被重置，只能当场采样）。 */
+/** Snapshot of valueSub(SECRET_PH) at each call time (after the loop ends stepSecret has been reset, so sampling must happen in place). */
 let secretProbes: string[] = [];
 
 let pool: Pool;
@@ -102,7 +102,7 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // SCHEMA_SQL 尚未收录暂存表,本文件自建(与 src/db/schema.ts 对齐)
+  // SCHEMA_SQL does not yet include the staging tables, so this file creates them (aligned with src/db/schema.ts)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ai_stage_cases (
       thread_id text NOT NULL,
@@ -153,8 +153,8 @@ beforeEach(async () => {
       onAction?: (a: Record<string, unknown>, ok: boolean) => void;
       valueSub?: (v: string) => string;
     };
-    // 探针只在敏感步骤有值时才有意义：共享 valueSub 对无密文的步骤会抛 SecretMissing
-    // （凭据缺失判死，绝不静默填空串）——探针吃掉这个异常，采样 '' 表示「本步无密文」。
+    // The probe is only meaningful when a sensitive step has a value: the shared valueSub throws SecretMissing for steps without ciphertext
+    // (missing credentials are fatal, never silently filled with empty string) — the probe swallows this exception, sampling '' to mean "no ciphertext in this step".
     try {
       secretProbes.push(opts?.valueSub?.('__ITEST_STEP_SECRET__') ?? '');
     } catch {
@@ -219,7 +219,7 @@ async function seedCase(opts: {
 }
 
 async function stageOps(): Promise<Array<{ local_id: string; op: string; payload: unknown; case_id: string }>> {
-  // ORDER BY staged_at：无排序时 PG 返回顺序不定（TRUNCATE 后偶发倒序），步骤序断言会闪断
+  // ORDER BY staged_at: without sorting, PG's return order is nondeterministic (occasionally reversed after TRUNCATE), which would make step-order assertions flaky
   const r = await pool.query(`SELECT local_id, op, payload, case_id FROM ai_stage_case_ops WHERE thread_id = 't1' ORDER BY staged_at, local_id`);
   return r.rows as Array<{ local_id: string; op: string; payload: unknown; case_id: string }>;
 }
@@ -283,7 +283,7 @@ describe('mapAiActionsToCompiled 纯函数', () => {
     if (!onlyWait.ok) expect(onlyWait.reason).toContain('无可映射动作');
     const waitAndShot = mapAiActionsToCompiled([{ type: 'wait', ms: 1000 }, { type: 'screenshot', selector: 'body' }]);
     expect(waitAndShot.ok).toBe(false);
-    // 对照：wait 夹在真实交互之间仍照常映射（click+wait 混合是既有修复 #1，不得回归）
+    // Control: wait interleaved between real interactions still maps normally (click+wait mixing is existing fix #1, must not regress)
     const mixed = mapAiActionsToCompiled([{ type: 'click', selector: '#a' }, { type: 'wait', ms: 1500 }]);
     expect(mixed.ok).toBe(true);
   });
@@ -376,7 +376,7 @@ describe('solidify_case 编排', () => {
       expect(data.steps[0].warning).toContain('跳过 1 个观察性截图动作');
       expect(data.note).toContain('verify_case');
     }
-    // 暂存 update_step：确定性 localId（solidify-<stepId>）+ 映射后的 compiled 载荷
+    // Staged update_step: deterministic localId (solidify-<stepId>) + mapped compiled payload
     const ops = await stageOps();
     expect(ops).toHaveLength(2);
     expect(ops[0]).toMatchObject({ op: 'update_step', case_id: caseId, local_id: `solidify-${stepId1}` });
@@ -391,16 +391,16 @@ describe('solidify_case 编排', () => {
         { kind: 'click', locator: [{ strategy: 'css', value: 'button[type="submit"]' }] },
       ],
     });
-    // emitStage 广播 kind=case_op（前端暂存预览）
+    // emitStage broadcasts kind=case_op (frontend staging preview)
     const stageEvents = emitLog.filter((e) => (e as { type?: string }).type === 'stage');
     expect(stageEvents).toHaveLength(2);
     expect(stageEvents[0]).toMatchObject({ kind: 'case_op', id: `solidify-${stepId1}`, action: 'stage' });
-    // solidify_progress SSE 序列：start → end（用户选定的最小相位指示）
+    // solidify_progress SSE sequence: start → end (the minimal phase indicator chosen by the user)
     const sse = emitLog.filter((e) => (e as { type?: string }).type === 'solidify_progress');
     expect(sse.map((e) => (e as { phase: string }).phase)).toEqual(['start', 'end']);
     expect(sse[0]).toMatchObject({ caseId, total: 2, solidifiable: 2, targetUrl: 'http://env.example/page', loginCache: 'miss' });
     expect(sse[1]).toMatchObject({ result: 'solidified', solidified: 2, kept: 0 });
-    // 固化不落库：DB 步骤 compiled 保持 NULL（等待 verify_case 验收 + 用户勾选保存）
+    // Solidification does not persist: DB step compiled stays NULL (waiting for verify_case acceptance + user-selected save)
     const after = await pool.query(`SELECT compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
     expect(after.rows[0]!.compiled).toBeNull();
     expect(after.rows[1]!.compiled).toBeNull();
@@ -419,7 +419,7 @@ describe('solidify_case 编排', () => {
     expect(String(call[1])).toContain('第 1 步 / 共 1 步');
     const opts = call[4] as { maxTurns: number; valueSub: (v: string) => string };
     expect(opts.maxTurns).toBe(5);
-    expect(opts.valueSub('普通值')).toBe('普通值'); // 无凭据环境：占位符替换为空、字面量原样
+    expect(opts.valueSub('普通值')).toBe('普通值'); // No credentials environment: placeholders replaced with empty, literals kept as-is
     expect(typeof opts.onAction).toBe('function');
     const { __testState } = (await import('playwright-core')) as unknown as { __testState: { gotos: string[] } };
     expect(__testState.gotos).toEqual(['http://env.example/page']);
@@ -434,8 +434,8 @@ describe('solidify_case 编排', () => {
       ],
     });
     stepQueue = [
-      {}, // 敏感步骤照常 AI 执行（占位符协议），但动作不收集
-      {}, // 已编译步骤执行（compiled 作参考），不属固化候选
+      {}, // Sensitive step still runs via AI (placeholder protocol), but actions are not collected
+      {}, // Compiled step executes (compiled as reference), not a solidification candidate
       { actions: [[{ type: 'click', selector: '#del' }, true]] },
     ];
     const emitLog: unknown[] = [];
@@ -443,11 +443,11 @@ describe('solidify_case 编排', () => {
     const r = await buildSolidifyCaseTool(toolCtx(emitLog)).execute({ caseId });
     expect(r.ok).toBe(true);
     const { runAiTask } = await import('../src/execute/aiTask.js');
-    expect(runAiTask).toHaveBeenCalledTimes(3); // 所有步骤都真实执行（副作用与执行一致）
-    // 敏感步骤提示词注入 __ITEST_STEP_SECRET__ 段（与 verify_case 同协议）
+    expect(runAiTask).toHaveBeenCalledTimes(3); // All steps really execute (side effects match execution)
+    // Sensitive step instruction injects the __ITEST_STEP_SECRET__ section (same protocol as verify_case)
     const sensitiveInstruction = String(vi.mocked(runAiTask).mock.calls[0]![1]);
     expect(sensitiveInstruction).toContain('__ITEST_STEP_SECRET__');
-    expect(secretProbes[0]).toBe('StepSecret!9'); // 调用时刻快照（循环结束后 stepSecret 已重置）
+    expect(secretProbes[0]).toBe('StepSecret!9'); // Snapshot at call time (stepSecret is reset after the loop ends)
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('solidified');
@@ -458,7 +458,7 @@ describe('solidify_case 编排', () => {
       expect(data.steps[2]).toMatchObject({ order: 3, status: 'solidified' });
     }
     const ops = await stageOps();
-    expect(ops).toHaveLength(1); // 仅第 3 步
+    expect(ops).toHaveLength(1); // Only step 3
     const start = emitLog.find((e) => (e as { phase?: string }).phase === 'start') as { solidifiable: number; total: number };
     expect(start).toMatchObject({ solidifiable: 1, total: 3 });
   });
@@ -481,7 +481,7 @@ describe('solidify_case 编排', () => {
       expect(data.failure.page.elements[0]).toContain('button#del');
       expect(data.failure.note).toContain('未暂存任何修改');
     }
-    // 第 1 步已通过也不暂存（整轮原子）
+    // Step 1 already passed but still not staged (whole-round atomicity)
     expect(await stageOps()).toHaveLength(0);
     const end = emitLog.filter((e) => (e as { type?: string }).type === 'solidify_progress').at(-1) as { result: string; reason: string };
     expect(end).toMatchObject({ result: 'failed', reason: '保存按钮不可点击' });
@@ -495,22 +495,22 @@ describe('solidify_case 编排', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       const data = JSON.parse(r.data!);
-      expect(data.result).toBe('solidified'); // 成功的那个 click 仍被收集
+      expect(data.result).toBe('solidified'); // The successful click is still collected
       expect(data.steps[0]).toMatchObject({ order: 1, status: 'solidified' });
     }
-    // 再验：全部动作失败 → 有 instruction → 固化为 AI 执行步（aiTask），机械验收/回放不再 compile-missing
+    // Re-verify: all actions fail → has instruction → solidified into an AI execution step (aiTask), so mechanical acceptance/replay no longer hits compile-missing
     const caseId2 = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
     stepQueue = [{ actions: [[{ type: 'click', selector: '#wrong' }, false]] }];
     const r2 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: caseId2 });
     expect(r2.ok).toBe(true);
     if (r2.ok) {
       const data2 = JSON.parse(r2.data!);
-      expect(data2.result).toBe('solidified'); // aiTask 化计入固化
+      expect(data2.result).toBe('solidified'); // aiTask conversion counts as solidified
       expect(data2.steps[0]).toMatchObject({ status: 'aiTask-fallback' });
       expect(String(data2.steps[0].reason)).toContain('无可映射动作');
       expect(data2.steps[0].compiled).toEqual([{ kind: 'aiTask', instruction: '点击删除按钮' }]);
     }
-    expect(await stageOps()).toHaveLength(2); // 两轮各 1 条（机械映射 + aiTask 化）
+    expect(await stageOps()).toHaveLength(2); // 1 entry per round (mechanical mapping + aiTask conversion)
   });
 
   it('含 press 动作的步骤 → aiTask 化附原因，其余步骤正常固化', async () => {
@@ -531,7 +531,7 @@ describe('solidify_case 编排', () => {
       expect(data.steps[1]).toMatchObject({ status: 'solidified' });
     }
     const ops = await stageOps();
-    expect(ops).toHaveLength(2); // 第 1 步 aiTask 化 + 第 2 步机械映射
+    expect(ops).toHaveLength(2); // Step 1 aiTask conversion + step 2 mechanical mapping
   });
 
   it('凭据填充被拒步 → aiTask 化且 instruction 带自助登录提示（prod228 缺口 1）；重复固化幂等覆盖', async () => {
@@ -550,13 +550,13 @@ describe('solidify_case 编排', () => {
       expect(data.steps[0]).toMatchObject({ status: 'aiTask-fallback' });
       const staged = data.steps[0].compiled as Array<{ kind: string; instruction: string }>;
       expect(staged[0]!.kind).toBe('aiTask');
-      expect(staged[0]!.instruction.startsWith('输入账号密码并登录')).toBe(true); // 原 instruction 保留在前
+      expect(staged[0]!.instruction.startsWith('输入账号密码并登录')).toBe(true); // Original instruction kept at the front
       expect(staged[0]!.instruction).toContain('__ITEST_USERNAME__');
       expect(staged[0]!.instruction).toContain('__ITEST_PASSWORD__');
       expect(staged[0]!.instruction).toContain('登录后状态');
     }
     expect(await stageOps()).toHaveLength(1);
-    // 重复固化（确定性 localId solidify-<stepId>）：upsert 覆盖，不产生第二条暂存
+    // Repeated solidification (deterministic localId solidify-<stepId>): upsert overwrites, no second staging entry
     stepQueue = [{ actions: [[{ type: 'click', selector: '#loginBtn' }, true]] }];
     const r2 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
     expect(r2.ok).toBe(true);
@@ -570,8 +570,8 @@ describe('solidify_case 编排', () => {
   });
 
   it('幂等：已固化的 aiTask 步（指令未变）→ unchanged-aiTask 不重映射不暂存，仅其余视觉步重跑', async () => {
-    // 回归动机:prod228 实录——非凭据类 aiTask-fallback 步每轮重固化都重跑重映射,
-    // 轨迹一变产物就漂移。固化输出应是 instruction 的确定性函数,已固化态直接保持原样。
+    // Regression motivation: prod228 field report — non-credential aiTask-fallback steps were re-run and re-mapped on every re-solidification;
+    // whenever the action trail changed, the artifact drifted. Solidification output should be a deterministic function of the instruction; already-solidified state stays untouched.
     const caseId = await seedCase({
       steps: [
         { instruction: '按下回车提交', compiled: [{ kind: 'aiTask', instruction: '按下回车提交' }] },
@@ -581,7 +581,7 @@ describe('solidify_case 编排', () => {
     const stepRows = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
     const stepId2 = stepRows.rows[1]!.id as string;
     stepQueue = [
-      { actions: [[{ type: 'press', key: 'Enter' }, true]] }, // 步 1 照常执行但不收集
+      { actions: [[{ type: 'press', key: 'Enter' }, true]] }, // Step 1 still executes but is not collected
       { actions: [[{ type: 'click', selector: '#del' }, true]] },
     ];
     const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
@@ -591,7 +591,7 @@ describe('solidify_case 编排', () => {
     expect(data.steps[0]).toMatchObject({ order: 1, status: 'unchanged-aiTask' });
     expect(data.steps[1]).toMatchObject({ order: 2, status: 'solidified' });
     const ops = await stageOps();
-    expect(ops).toHaveLength(1); // 已固化步不再暂存
+    expect(ops).toHaveLength(1); // Already-solidified step is no longer staged
     expect(ops[0]!.local_id).toBe(`solidify-${stepId2}`);
   });
 
@@ -628,8 +628,8 @@ describe('solidify_case 编排', () => {
   });
 
   it('导航冗余提示：case.url 深链直达 + 首步「进入菜单」→ warning（advisory，不阻断固化）', async () => {
-    // 回归动机:prod228 实录——用例 url 直达资产详情页,首步仍「进入资产管理菜单」,
-    // 固化后回放的菜单 click 把页面带离深链落地页。
+    // Regression motivation: prod228 field report — the case url deep-links straight to an asset detail page, yet the first step still says "enter the asset management menu",
+    // so after solidification the replayed menu click navigates the page away from the deep-link landing page.
     const caseId = await seedCase({
       url: 'http://env.example/assets/detail',
       steps: [{ instruction: '进入资产管理菜单' }],
@@ -639,7 +639,7 @@ describe('solidify_case 编排', () => {
     const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId });
     expect(r.ok).toBe(true);
     const data = JSON.parse((r as { data: string }).data);
-    expect(data.steps[0].status).toBe('solidified'); // 只提示，不影响固化结果
+    expect(data.steps[0].status).toBe('solidified'); // Advisory only, does not affect the solidification result
     expect(String(data.steps[0].warning)).toContain('冗余');
   });
 
@@ -687,19 +687,19 @@ describe('solidify_case 编排', () => {
       expect(data.result).toBe('solidified');
       expect(data.basedOn).toBe('staged');
     }
-    // 整例重暂存：steps 的 compiled 被就地填充
+    // Whole-case restaging: steps' compiled filled in place
     const row = await pool.query(`SELECT steps FROM ai_stage_cases WHERE local_id = $1`, [localId]);
     const steps = row.rows[0]!.steps as Array<{ compiled: unknown[] | null }>;
     expect(steps[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }]);
     expect(steps[1]!.compiled).toEqual([
       { kind: 'fill', locator: [{ strategy: 'css', value: 'input[name="ruleName"]' }], value: '规则A' },
     ]);
-    // 草稿不产生 case_op 暂存，emitStage 广播 kind=case
+    // Drafts produce no case_op staging; emitStage broadcasts kind=case
     expect(await stageOps()).toHaveLength(0);
     const stageEvents = emitLog.filter((e) => (e as { type?: string }).type === 'stage');
     expect(stageEvents).toHaveLength(1);
     expect(stageEvents[0]).toMatchObject({ kind: 'case', id: localId, action: 'stage' });
-    // 全程不落库
+    // Nothing persisted anywhere
     const dbRows = await pool.query(`SELECT id FROM test_cases WHERE title = '草稿用例'`);
     expect(dbRows.rows).toHaveLength(0);
   });
@@ -714,17 +714,17 @@ describe('solidify_case 编排', () => {
     stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
     const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
     const r = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: localId });
-    // 修复前：先直查 testCases.id(uuid 列) → invalid input syntax for type uuid，草稿回落没机会跑
+    // Before the fix: query testCases.id (uuid column) directly first → invalid input syntax for type uuid, and the draft fallback never got a chance to run
     expect(r.ok).toBe(true);
     if (r.ok) expect(JSON.parse(r.data!)).toMatchObject({ result: 'solidified', basedOn: 'staged', caseId: localId });
   });
 
   it('草稿相对 url → resolveCaseUrl 拼默认 web 服务 origin（不落 about:blank）', async () => {
-    // 回归:stage-tools 约束要求 AI 写相对 case.url,草稿分支若按字面量渲染相对地址会得到
-    // targetUrl=undefined → about:blank。此处断言初始 goto 落在 web 服务 origin + 路径。
+    // Regression: stage-tools constraints require AI to write a relative case.url; if the draft branch rendered the relative address literally, it would yield
+    // targetUrl=undefined → about:blank. Here we assert the initial goto lands on the web service origin + path.
     const envRow = await pool.query(`SELECT id FROM test_environments WHERE project_id = $1 AND is_default = true`, [projectId]);
     const envId = envRow.rows[0]!.id as string;
-    // beforeEach 已在该默认环境种入默认 web 对象；改写其 host/port 验证相对 url 拼接
+    // beforeEach has already seeded the default web object into that default environment; rewrite its host/port to verify relative url joining
     await pool.query(
       `UPDATE environment_objects SET payload = $2::jsonb
        WHERE environment_id = $1 AND object_type = 'web' AND is_default = true`,
@@ -747,7 +747,7 @@ describe('solidify_case 编排', () => {
   });
 
   it('基于 stage_case_op 暂存叠加：update_step 置 null 回退视觉后固化 → basedOn=staged', async () => {
-    // DB 步骤已编译；暂存 update_step 把 compiled 置 null（回退视觉模式）→ 固化基于叠加态
+    // DB step is compiled; the staged update_step sets compiled to null (fallback to vision mode) → solidification based on the overlaid state
     const caseId = await seedCase({
       steps: [{ instruction: '点击删除按钮', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#old' }] }] }],
     });
@@ -769,20 +769,20 @@ describe('solidify_case 编排', () => {
       expect(data.stagedOpsApplied).toBe(1);
       expect(data.steps[0]).toMatchObject({ status: 'solidified' });
     }
-    // 固化暂存（solidify-<stepId>）与前置回退暂存共存于同一草稿区
+    // Solidification staging (solidify-<stepId>) and the preceding fallback staging coexist in the same draft area
     const ops = await stageOps();
     expect(ops).toHaveLength(2);
     expect(ops.map((o) => o.local_id)).toContain(`solidify-${stepId}`);
   });
 
   it('叠加态插入步（暂存 insert_step 未落库）固化 → compiled 写回该 insert 暂存行，不产出指向占位 stepId 的 update_step', async () => {
-    // 回归动机：prod228 2026-11-11——固化把叠加态步骤（id 形如 staged:<localId>，DB 里还不存在）
-    // 暂成 update_step(stepId='staged:1')，落库时 stepId 非 uuid → ZodError → 前端只见
-    // 「参数校验失败，请检查输入」；且失败不回滚，用户重试把同一条步骤重复插了 3 份。
+    // Regression motivation: prod228 2026-11-11 — solidification staged an overlaid-state step (id shaped like staged:<localId>, not yet in the DB)
+    // as update_step(stepId='staged:1'); on persistence the non-uuid stepId → ZodError → the frontend only saw
+    // "parameter validation failed, check your input"; and the failure did not roll back, so a user retry inserted the same step 3 times.
     const caseId = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
     const stepRows = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
     const dbStepId = stepRows.rows[0]!.id as string;
-    // 暂存里已插入、还没落库的新步骤（叠加态 id = staged:<insert op 的 localId>）
+    // New step already inserted in staging but not yet persisted (overlaid-state id = staged:<localId of the insert op>)
     const insertLocalId = 'ins-local-1';
     await pool.query(
       `INSERT INTO ai_stage_case_ops(thread_id, local_id, version_id, case_id, op, payload, summary, staged_at)
@@ -804,12 +804,12 @@ describe('solidify_case 编排', () => {
       expect(data.steps[1]).toMatchObject({ order: 2, status: 'solidified' });
     }
     const ops = await stageOps();
-    // 关键不变式：没有任何 update_step 指向还没落库的叠加态步骤
+    // Key invariant: no update_step points at an overlaid-state step that is not yet persisted
     for (const o of ops) {
       const p = o.payload as { action?: string; stepId?: string };
       if (p.action === 'update_step') expect(String(p.stepId)).not.toMatch(/^staged:/);
     }
-    // 叠加态步骤的 compiled 写回它自己的 insert 暂存行（同 localId 覆盖，不新增行）
+    // The overlaid-state step's compiled is written back to its own insert staging row (same localId overwrite, no new row)
     const insertOp = ops.find((o) => o.local_id === insertLocalId)!;
     expect(insertOp).toBeDefined();
     expect(insertOp.op).toBe('insert_step');
@@ -817,7 +817,7 @@ describe('solidify_case 编排', () => {
       action: 'insert_step', caseId, instruction: '填写规则名称',
       compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: 'input[name="ruleName"]' }], value: '规则A' }],
     });
-    // DB 步骤仍是普通 update_step 暂存（确定性 localId）
+    // DB step is still a plain update_step staging (deterministic localId)
     const dbOp = ops.find((o) => o.local_id === `solidify-${dbStepId}`)!;
     expect(dbOp).toBeDefined();
     expect(dbOp.op).toBe('update_step');
@@ -826,7 +826,7 @@ describe('solidify_case 编排', () => {
 
   it('ctx.liveView=false：不注册实时画面且 start 无 liveUrl（批量后台链路）；缺省会话行为不变', async () => {
     const { registerLiveView } = await import('../src/execute/liveView.js');
-    // 关闭路径：liveView=false → 零注册、start 事件无 liveUrl
+    // Off path: liveView=false → zero registration, start event without liveUrl
     const caseOff = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
     stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
     const emitOff: unknown[] = [];
@@ -836,7 +836,7 @@ describe('solidify_case 编排', () => {
     expect(registerLiveView).not.toHaveBeenCalled();
     const startOff = emitOff.find((e) => (e as { phase?: string }).phase === 'start') as { liveUrl?: string };
     expect(startOff.liveUrl).toBeUndefined();
-    // 缺省（undefined）：会话链路照旧注册并带流地址
+    // Default (undefined): the session chain still registers and carries the stream address
     const caseOn = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
     stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
     const emitOn: unknown[] = [];
@@ -859,7 +859,7 @@ describe('solidify_case 编排', () => {
     expect(r.ok).toBe(true);
     const { __testState } = (await import('playwright-core')) as unknown as { __testState: { ctxOpts: Array<Record<string, unknown> | undefined> } };
     expect(__testState.ctxOpts[0]).toMatchObject({ storageState: fakeState });
-    // 回写：mock context.storageState 返回 sid=cached
+    // Write-back: mock context.storageState returns sid=cached
     expect(getLoginState(`${envIdRow.rows[0]!.id}:`)).toEqual({ cookies: [{ name: 'sid', value: 'cached' }], origins: [] });
     const start = emitLog.find((e) => (e as { phase?: string }).phase === 'start') as { loginCache: string };
     expect(start.loginCache).toBe('hit');
@@ -867,7 +867,7 @@ describe('solidify_case 编排', () => {
 });
 
 describe('solidify_case 轨迹缓存零执行路径', () => {
-  /** 与 solidify 内部从 DB/草稿行构造的 effectiveSteps 同字段值（哈希只覆盖这 5 个字段）。 */
+  /** Same field values as the effectiveSteps solidify builds internally from DB/draft rows (the hash covers only these 5 fields). */
   const hStep = (instruction: string) =>
     ({ instruction, compiled: null, assertion: null, sensitive: false, delayMs: null }) as never;
   const META = { url: 'http://env.example/page', defaultEnvId: null, versionId: '' };
@@ -887,7 +887,7 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
         [stepId2, [{ type: 'fill', selector: 'input[name="ruleName"]', value: '规则A' }]],
       ]) as never,
     );
-    // 缓存路径必须先于 LLM 前置检查（不需要 client）——直接断言零调用，避免 once 队列跨测试泄漏
+    // The cache path must come before the LLM precondition check (no client needed) — assert zero calls directly to avoid once-queue leakage across tests
     const { resolveLlmClient } = await import('../src/agent/llmSettings.js');
     const emitLog: unknown[] = [];
     const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
@@ -905,7 +905,7 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
       expect(data.steps[1]).toMatchObject({ order: 2, status: 'solidified' });
       expect(data.note).toContain('verify_case');
     }
-    // 暂存照常落行（确定性 localId + 映射 compiled）
+    // Staging still writes rows as usual (deterministic localId + mapped compiled)
     const ops = await stageOps();
     expect(ops).toHaveLength(2);
     expect(ops[0]).toMatchObject({ op: 'update_step', case_id: caseId, local_id: `solidify-${stepId1}` });
@@ -913,12 +913,12 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
       action: 'update_step', caseId, stepId: stepId1,
       compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }],
     });
-    // SSE：start（无 liveUrl、带 traceReused）→ end
+    // SSE: start (no liveUrl, with traceReused) → end
     const sse = emitLog.filter((e) => (e as { type?: string }).type === 'solidify_progress');
     expect(sse.map((e) => (e as { phase: string }).phase)).toEqual(['start', 'end']);
     expect(sse[0]).toMatchObject({ caseId, total: 2, solidifiable: 2, targetUrl: 'http://env.example/page', traceReused: true });
     expect(sse[1]).toMatchObject({ result: 'solidified', solidified: 2, kept: 0 });
-    // DB 步骤仍不落库
+    // DB steps still not persisted
     const after = await pool.query(`SELECT compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
     expect(after.rows[0]!.compiled).toBeNull();
   });
@@ -961,7 +961,7 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
     expect(steps[1]!.compiled).toEqual([
       { kind: 'fill', locator: [{ strategy: 'css', value: 'input[name="ruleName"]' }], value: '规则A' },
     ]);
-    expect(await stageOps()).toHaveLength(0); // 草稿不产生 case_op
+    expect(await stageOps()).toHaveLength(0); // Drafts produce no case_op
     const stageEvents = emitLog.filter((e) => (e as { type?: string }).type === 'stage');
     expect(stageEvents).toHaveLength(1);
     expect(stageEvents[0]).toMatchObject({ kind: 'case', id: localId, action: 'stage' });
@@ -973,7 +973,7 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
     const { runAiTask } = await import('../src/execute/aiTask.js');
     const { buildSolidifyCaseTool } = await import('../src/pi/space/tools/solidifyCase.js');
 
-    // 1) stepsHash 不等：用例真实 instruction 与轨迹哈希所依据的不一致
+    // 1) stepsHash mismatch: the case's real instruction differs from what the trail hash was computed on
     const caseId1 = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
     const stepId1 = (await pool.query(`SELECT id FROM test_steps WHERE case_id = $1`, [caseId1])).rows[0]!.id as string;
     saveVerifiedTrace(
@@ -986,16 +986,16 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
     const r1 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: caseId1 });
     expect(r1.ok).toBe(true);
     if (r1.ok) expect(JSON.parse(r1.data!).traceReused).toBeUndefined();
-    expect(getVerifiedTrace(traceKey('t1', caseId1))).toBeNull(); // 过期即删
+    expect(getVerifiedTrace(traceKey('t1', caseId1))).toBeNull(); // Expired means deleted
     expect(runAiTask).toHaveBeenCalledTimes(1);
 
-    // 2) metaHash 不等：换环境 = 换被测对象
+    // 2) metaHash mismatch: different environment = different SUT
     const caseId2 = await seedCase({ steps: [{ instruction: '点击删除按钮' }] });
     saveVerifiedTrace(
       traceKey('t1', caseId2),
       hashEffectiveSteps([hStep('点击删除按钮')] as never),
       hashVerifyMeta({ url: 'http://other.example/page', defaultEnvId: null, versionId }),
-      new Map([[stepId1, [{ type: 'click', selector: '#del' }]]]) as never, // key 随便：meta 先判不过
+      new Map([[stepId1, [{ type: 'click', selector: '#del' }]]]) as never, // key is arbitrary: meta check fails first anyway
     );
     stepQueue = [{ actions: [[{ type: 'click', selector: '#del' }, true]] }];
     const r2 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: caseId2 });
@@ -1003,7 +1003,7 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
     if (r2.ok) expect(JSON.parse(r2.data!).traceReused).toBeUndefined();
     expect(runAiTask).toHaveBeenCalledTimes(2);
 
-    // 3) 轨迹缺步：两个视觉步只缓存了一步 → required 不全
+    // 3) Trail missing a step: two vision steps but only one cached → required incomplete
     const caseId3 = await seedCase({ steps: [{ instruction: '点击删除按钮' }, { instruction: '填写名称' }] });
     const ids3 = (await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId3]))
       .rows.map((r) => r.id as string);
@@ -1020,7 +1020,7 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
     const r3 = await buildSolidifyCaseTool(toolCtx()).execute({ caseId: caseId3 });
     expect(r3.ok).toBe(true);
     if (r3.ok) expect(JSON.parse(r3.data!).traceReused).toBeUndefined();
-    expect(runAiTask).toHaveBeenCalledTimes(4); // 真跑逐步执行
+    expect(runAiTask).toHaveBeenCalledTimes(4); // Real run executes step by step
   });
 
   it('空动作条目（步骤通过但无可映射动作）→ aiTask 化暂存，与真跑路径同结果', async () => {
@@ -1034,7 +1034,7 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
       hashEffectiveSteps([hStep('人工核对页面'), hStep('点击删除按钮')] as never),
       hashVerifyMeta({ ...META, versionId }),
       new Map([
-        [ids[0]!, []], // 空数组：步骤通过但没收集到可映射动作
+        [ids[0]!, []], // Empty array: step passed but no mappable action was collected
         [ids[1]!, [{ type: 'click', selector: '#del' }]],
       ]) as never,
     );
@@ -1052,7 +1052,7 @@ describe('solidify_case 轨迹缓存零执行路径', () => {
       expect(data.steps[1]).toMatchObject({ status: 'solidified' });
     }
     const ops = await stageOps();
-    expect(ops).toHaveLength(2); // 第 1 步 aiTask 化 + 第 2 步机械映射
+    expect(ops).toHaveLength(2); // Step 1 aiTask conversion + step 2 mechanical mapping
   });
 });
 
@@ -1066,14 +1066,14 @@ describe('solidify_case 注册', () => {
 
 describe('solidify_case 超时预算', () => {
   it('全局看门狗随步数缩放（与 verify_case 同公式）：1-2 步保底 300s，3 步起线性 130s/步', async () => {
-    // 回归动机：固定 300s 装不下多步用例——AI 相 85~107s/步，第 4 步中途被强杀
-    // 「固化超时（300s）已终止」。预算必须随步数增长才谈得上多步用例可固化。
+    // Regression motivation: a fixed 300s cannot fit multi-step cases — the AI phase ran 85~107s/step and step 4 was killed mid-flight
+    // with "solidification timeout (300s) terminated". The budget must scale with step count for multi-step solidification to be viable.
     const { computeSolidifyTimeoutMs } = await import('../src/pi/space/tools/solidifyCase.js');
-    expect(computeSolidifyTimeoutMs(0)).toBe(300_000); // 兜底（无步骤前置已拦截，绝不至于 0）
+    expect(computeSolidifyTimeoutMs(0)).toBe(300_000); // Fallback (no-steps is blocked earlier, so 0 never happens)
     expect(computeSolidifyTimeoutMs(1)).toBe(300_000);
-    expect(computeSolidifyTimeoutMs(2)).toBe(300_000); // 2×130k=260k < 保底 → 仍 300k
-    expect(computeSolidifyTimeoutMs(3)).toBe(3 * 130_000); // 3×130k=390k 起越保底，线性爬升
-    expect(computeSolidifyTimeoutMs(10)).toBe(10 * 130_000); // 10 步 ≈ 21.7min
+    expect(computeSolidifyTimeoutMs(2)).toBe(300_000); // 2×130k=260k < floor → still 300k
+    expect(computeSolidifyTimeoutMs(3)).toBe(3 * 130_000); // 3×130k=390k crosses the floor, climbing linearly
+    expect(computeSolidifyTimeoutMs(10)).toBe(10 * 130_000); // 10 steps ≈ 21.7min
     expect(computeSolidifyTimeoutMs(10)).toBeGreaterThan(300_000);
   });
 });

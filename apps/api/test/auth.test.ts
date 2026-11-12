@@ -9,7 +9,7 @@ import { SCHEMA_SQL, SEED_USER_PASSWORD } from './helpers/db.js';
 let pool: Pool;
 let app: import('express').Express;
 
-// 组织 + 两个用户：manager（正常密码）/ target（首登强制改密）
+// Org + two users: manager (normal password) / target (forced password change on first login)
 let orgId: string;
 let orgPath: string;
 let managerId: string;
@@ -130,7 +130,7 @@ describe('强制改密流程', () => {
     expect(relogin.status).toBe(200);
     expect(relogin.body.status).toBe('ok');
 
-    // token 过期复用：旧 passwordChangeToken 已一次性消耗（用户 tokenVersion 已变，且登录不再要求改密）
+    // Token replay after expiry: the old passwordChangeToken was consumed one-shot (the user's tokenVersion has changed, and login no longer demands a change)
     const reuse = await request(app).post('/api/auth/change-password').send({
       passwordChangeToken: login.body.passwordChangeToken,
       newPassword: 'Another789!',
@@ -236,13 +236,13 @@ describe('PATCH /api/auth/me/password 自助改密', () => {
 
 describe('tokenVersion 服务端吊销', () => {
   it('直接铸的 token 在 DB tokenVersion 不匹配时被拒', async () => {
-    // 手工把 manager1 的 tokenVersion +1，模拟其他设备登出
+    // Bump manager1's tokenVersion by hand, simulating a logout from another device
     await pool.query(`UPDATE users SET token_version = token_version + 1 WHERE id = $1`, [managerId]);
     const login = await request(app).post('/api/auth/login').send({ username: 'manager1', password: SEED_USER_PASSWORD });
     const cookie = cookieFrom(login);
-    // 登录后的 token 与最新 tokenVersion 一致 → 可用
+    // The post-login token matches the latest tokenVersion -> usable
     expect((await request(app).get('/api/auth/me').set('Cookie', cookie)).status).toBe(200);
-    // 再次 +1 → 旧 token 失效
+    // Bump again -> the old token is invalidated
     await pool.query(`UPDATE users SET token_version = token_version + 1 WHERE id = $1`, [managerId]);
     expect((await request(app).get('/api/auth/me').set('Cookie', cookie)).status).toBe(401);
   });

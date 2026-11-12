@@ -2,7 +2,7 @@ import { inject } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 
-/** test/globalSetup.ts provide 的共享 PG 容器连接信息。 */
+/** Connection info of the shared PG container provided by test/globalSetup.ts. */
 interface PgInfo {
   host: string;
   port: number;
@@ -25,8 +25,8 @@ if (!pgInfo) {
 }
 
 /**
- * 在共享 PG 容器里为本测试文件建一个全新的空数据库，返回连接信息。
- * 与旧的"每文件一个容器"语义等价：本文件独占该库，schema 变更/TRUNCATE/全局断言互不影响。
+ * Create a brand-new empty database for this test file in the shared PG container; returns connection info.
+ * Equivalent to the old "one container per file" semantics: this file owns the database exclusively; schema changes/TRUNCATE/global assertions do not interfere.
  */
 export async function createTestDatabase(): Promise<TestDatabase> {
   const database = `itest_${randomUUID().replaceAll('-', '').slice(0, 16)}`;

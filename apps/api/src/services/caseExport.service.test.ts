@@ -5,7 +5,7 @@ function mkCase(over: Partial<ExportCaseRow> = {}): ExportCaseRow {
   return {
     id: over.id ?? crypto.randomUUID(),
     title: over.title ?? '验证登录成功',
-    // 不用 ??：需区分「未传」与「显式 null」，否则空字段用例无法构造
+    // Not using ??: must tell "not passed" apart from "explicit null", otherwise an empty-field case can't be constructed
     description: over.description !== undefined ? over.description : '1.系统运行正常',
     expectedOutcome: over.expectedOutcome !== undefined ? over.expectedOutcome : '1.跳转首页',
     groupId: over.groupId ?? 'g1',
@@ -34,9 +34,9 @@ describe('buildExportTree', () => {
     expect(c.children!.map((n) => n.title)).toEqual(['预置条件', '测试步骤', '预期结果']);
     const steps = c.children![1]!.children!;
     expect(steps[0]!.title).toBe('1. 打开登录页');
-    // instruction 空 → DSL 摘要
+    // empty instruction → DSL summary
     expect(steps[1]!.title).toBe('2. 点击 css=.btn-login');
-    // 无 instruction 无 compiled → assertion 兜底渲染
+    // no instruction and no compiled → assertion fallback rendering
     expect(steps[2]!.title).toBe('3. 验证文本等于「登录成功」');
   });
 

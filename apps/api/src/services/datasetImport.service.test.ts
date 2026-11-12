@@ -3,12 +3,12 @@ import ExcelJS from 'exceljs';
 import { buildTemplateWorkbook, parseImportWorkbook } from './datasetImport.service.js';
 import { HttpError } from '../middleware/errorHandler.js';
 
-/** 按行构造「数据」sheet 的 xlsx（模拟用户上传的文件）。 */
+/** Builds the "数据" (data) sheet's xlsx row by row (simulating a user-uploaded file). */
 async function buildSheet(rows: Array<Array<string | number>>): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('数据');
   for (const r of rows) ws.addRow(r);
-  // exceljs Buffer 与 @types/node Buffer 类型互斥，运行时直通 JSZip，仅类型收窄
+  // exceljs's Buffer and @types/node's Buffer types are mutually exclusive; at runtime it flows straight into JSZip — type narrowing only
   return Buffer.from((await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer);
 }
 

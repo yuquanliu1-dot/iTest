@@ -1,10 +1,10 @@
 /**
- * RCA 触发条件：run 收尾后 rcaEnabled && failedCases>0 才入队。
- * 测试环境无 REDIS_URL → inline fire-and-forget 路径，直接断言 processRcaJob 被调用。
- * 用 FORCE_FAIL_CASE_IDS 造失败（runCase 在进 CDP 前直接写失败报告，无需浏览器）。
+ * RCA trigger condition: a run enqueues RCA only when rcaEnabled && failedCases>0 at finalization.
+ * The test environment has no REDIS_URL → the inline fire-and-forget path; assert processRcaJob was called directly.
+ * Failures are produced via FORCE_FAIL_CASE_IDS (runCase writes the failure report before entering CDP, no browser needed).
  *
- * 「全过不触发」用 deprecated 用例（收尾 skipped、failedCases=0）：裸用例无环境配置会以
- * EnvMissing 失败，无法在不启动浏览器的前提下造出真 passed，deprecated skip 是确定性零失败路径。
+ * The "all passed, no trigger" case uses a deprecated case (finalizes as skipped, failedCases=0): a bare case without environment
+ * config fails with EnvMissing, so a real passed cannot be produced without launching a browser; deprecated skip is the deterministic zero-failure path.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Pool } from 'pg';
@@ -18,7 +18,7 @@ let pool: Pool;
 beforeAll(async () => {
   const pgDb = await createTestDatabase();
   process.env.DATABASE_URL = pgDb.uri;
-  delete process.env.REDIS_URL; // inline 路径
+  delete process.env.REDIS_URL; // inline path
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   await import('../src/db/client.js');
@@ -62,7 +62,7 @@ async function runPlanAndWait(planId: string, caseId: string): Promise<string> {
   }
 }
 
-/** RCA 入队是 fire-and-forget，run 收敛后 mock 可能还没被调到——短暂轮询等待。 */
+/** RCA enqueueing is fire-and-forget; after the run settles the mock may not have been invoked yet — poll briefly. */
 async function waitForRcaCalls(min: number, timeoutMs = 5000): Promise<number> {
   const { processRcaJob } = await import('../src/scheduler/rcaWorker.js');
   const deadline = Date.now() + timeoutMs;

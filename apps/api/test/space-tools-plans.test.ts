@@ -32,7 +32,7 @@ function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContex
   return { ctx, events };
 }
 
-/** 动态 import:必须在 beforeAll 设置 DATABASE_URL 之后(测试体内)加载,否则 db/client 固化默认连接串。 */
+/** Dynamic import: must load after DATABASE_URL is set in beforeAll (inside the test body), otherwise db/client freezes the default connection string. */
 async function toolOf(ctx: SpaceToolsContext) {
   const { buildPlansTools } = await import('../src/pi/space/tools/plans.js');
   return buildPlansTools(ctx)[0]!;
@@ -44,7 +44,7 @@ async function makeCase(groupId: string, versionId: string, title: string): Prom
   )).rows[0]!.id as string;
 }
 
-/** execute 在 confirm 前有异步 DB 查询 → 轮询等 confirm_request(与 space-tools-cases.test.ts 同模式)。 */
+/** execute runs async DB queries before confirm → poll and wait for confirm_request (same pattern as space-tools-cases.test.ts). */
 async function untilConfirm(events: Array<Record<string, unknown>>): Promise<string> {
   for (let i = 0; i < 100; i++) {
     const e = events.find((x) => x.type === 'confirm_request');
@@ -89,12 +89,12 @@ describe('manage_plans 工具', () => {
     expect(detail.groups).toHaveLength(1);
     expect(detail.groups[0]!.name).toBe('默认分组');
     expect(detail.groups[0]!.cases.map((c) => c.id)).toEqual([c1, c2]);
-    expect(detail.cases.map((c) => c.id)).toEqual([c1, c2]); // 平铺视图按组序拼接
+    expect(detail.cases.map((c) => c.id)).toEqual([c1, c2]); // the flat view is stitched in group order
   }, 30_000);
 
   it('add_cases 跨产品线 → 门控前报错不出确认卡;remove_cases/update 需确认,stage 带确认时同一 diff', async () => {
     const seed = await seedProject(pool);
-    // R2 起越界判定按产品线（不是项目）做，外案必须挂在**另一条**线上。
+    // Since R2 the out-of-scope check is done at the product-line level (not project), so the foreign case must hang off a **different** line.
     const otherLineId = await seedOtherProductLine(pool);
     const other = await seedProject(pool, { productLineId: otherLineId });
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
@@ -105,13 +105,13 @@ describe('manage_plans 工具', () => {
     await tool.execute({ action: 'create', name: '全量', caseIds: [c1, c2] });
     const planId = (await pool.query(`SELECT id FROM execution_plans WHERE name='全量'`)).rows[0]!.id as string;
 
-    // 归属校验在门控前:直接报错并点名越界用例,不出确认卡、数据不变
+    // Ownership check happens before the gate: errors out directly and names the out-of-scope case, no confirmation card, data unchanged
     const crossRes = (await tool.execute({ action: 'add_cases', planId, caseIds: [foreign] })) as { ok: boolean; error: string };
     expect(crossRes).toMatchObject({ ok: false });
     expect(crossRes.error).toContain(foreign);
     expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
     expect((await pool.query(`SELECT count(*)::int AS n FROM plan_cases WHERE plan_id=$1`, [planId])).rows[0]!.n).toBe(2);
-    // 混合传入只点名越界者,不误伤本项目的用例
+    // Mixed input only names the out-of-scope one; this project's cases are untouched
     const mixed = (await tool.execute({ action: 'add_cases', planId, caseIds: [c2, foreign] })) as { ok: boolean; error: string };
     expect(mixed.ok).toBe(false);
     expect(mixed.error).toContain(foreign);
@@ -125,7 +125,7 @@ describe('manage_plans 工具', () => {
     expect(stage.action).toBe('remove_cases');
     expect(stage.diff).toContain('cases: -1');
     const detail = JSON.parse(((await tool.execute({ action: 'get', planId })) as { data: string }).data) as { cases: Array<{ order: number; title: string }> };
-    expect(detail.cases.map((c) => c.order)).toEqual([1]); // c2 重排
+    expect(detail.cases.map((c) => c.order)).toEqual([1]); // c2 renumbered
 
     events.length = 0;
     const upd = tool.execute({ action: 'update', planId, name: '全量2', strategy: 'fail_fast' });
@@ -135,7 +135,7 @@ describe('manage_plans 工具', () => {
     expect(stage2.diff).toContain('name: 全量 → 全量2');
     expect(stage2.diff).toContain('strategy: run_all → fail_fast');
 
-    // environmentId 已从工具退役:传入被忽略,不再构成可修改字段(环境请到 UI 分组配置)
+    // environmentId retired from the tool: passed values are ignored and it's no longer a modifiable field (configure environments in the UI's group settings)
     events.length = 0;
     const envOnly = (await tool.execute({ action: 'update', planId, environmentId: null })) as { ok: boolean; error: string };
     expect(envOnly.ok).toBe(false);
@@ -158,7 +158,7 @@ describe('manage_plans 工具', () => {
 
   it('create 部分失败:计划已建不回滚,错误含 planId 且不重复建;add_cases 确认后可补齐', async () => {
     const seed = await seedProject(pool);
-    // 越界用例要挂在**另一条**产品线上才会被拒（同线内引用合法）。
+    // Out-of-scope cases are only rejected when hanging off a **different** product line (same-line references are legal).
     const otherLineId = await seedOtherProductLine(pool);
     const other = await seedProject(pool, { productLineId: otherLineId });
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
@@ -204,7 +204,7 @@ describe('manage_plans 工具', () => {
     await tool.execute({ action: 'create', name: '增量计划', caseIds: [c1] });
     const planId = (await pool.query(`SELECT id FROM execution_plans WHERE name='增量计划'`)).rows[0]!.id as string;
 
-    // add_cases 拒绝:重复 id 去重后精确计数(+2),取消后组合不变
+    // add_cases rejected: duplicate ids deduped into an exact count (+2); after cancel the composition is unchanged
     events.length = 0;
     const rejected = tool.execute({ action: 'add_cases', planId, caseIds: [c2, c3, c2] });
     await untilConfirm(events);
@@ -215,14 +215,14 @@ describe('manage_plans 工具', () => {
     const n = (await pool.query(`SELECT count(*)::int AS n FROM plan_cases WHERE plan_id=$1`, [planId])).rows[0]!.n as number;
     expect(n).toBe(1);
 
-    // remove_cases 拒绝:取消后用例仍在
+    // remove_cases rejected: after cancel the case is still there
     events.length = 0;
     const rmReject = tool.execute({ action: 'remove_cases', planId, caseIds: [c1] });
     resolveConfirmation(await untilConfirm(events), false);
     expect(await rmReject).toMatchObject({ ok: false, error: '用户取消了该操作' });
     expect((await pool.query(`SELECT count(*)::int AS n FROM plan_cases WHERE plan_id=$1`, [planId])).rows[0]!.n).toBe(1);
 
-    // remove_cases N=0:短路,不进确认
+    // remove_cases N=0: short-circuit, no confirmation
     events.length = 0;
     const rmNone = await tool.execute({ action: 'remove_cases', planId, caseIds: [c2] });
     expect(rmNone).toMatchObject({ ok: true });
@@ -233,10 +233,11 @@ describe('manage_plans 工具', () => {
 
 describe('manage_plans 工具·schedule CRUD', () => {
   let testCounter = 0;
-  /** 造一个空 plan + 配套 ctx,一并返回 planId/projectId/tool/events。
-   *  关键点:tool 必须与 plan 同一 ctx(共享 projectId/versionId/emit),否则后面
-   *  tool.execute 会报「计划不存在或不属于当前项目」。
-   *  用唯一 planName 避免跨测试残留(每个 seedProject 也是新项目,但 plans 表没 projectId 索引时按 name 查会撞同名)。 */
+  /** Build an empty plan + a matching ctx, returning planId/projectId/tool/events together.
+   *  Key point: the tool must share the same ctx as the plan (shared projectId/versionId/emit), otherwise later
+   *  tool.execute calls error with "plan doesn't exist or doesn't belong to the current project".
+   *  A unique planName avoids cross-test residue (each seedProject is also a new project, but when the plans table
+   *  has no projectId index, name-based lookups would collide on the same name). */
   async function newPlan(): Promise<{ planId: string; projectId: string; tool: Awaited<ReturnType<typeof toolOf>>; events: Array<Record<string, unknown>> }> {
     const name = `调度测试-${++testCounter}-${randomUUID().slice(0, 8)}`;
     const seed = await seedProject(pool);
@@ -247,7 +248,7 @@ describe('manage_plans 工具·schedule CRUD', () => {
     return { planId, projectId: seed.projectId, tool, events };
   }
 
-  /** 直接走 service 造调度(绕过 confirm 卡挂起);后续 update/delete 测试要 trigger confirm。 */
+  /** Create a schedule straight through the service (bypassing the confirm card's hang); later update/delete tests need trigger confirm. */
   async function seedSchedule(planId: string, cron = '0 9 * * *'): Promise<string> {
     const { createPlanSchedule } = await import('../src/services/planSchedules.service.js');
     const { seedOrg } = await import('./helpers/db.js');
@@ -260,7 +261,7 @@ describe('manage_plans 工具·schedule CRUD', () => {
     const seed = await seedProject(pool);
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await toolOf(ctx);
-    // 同一个 ctx 上下文建 plan + 调度,确保 ctx.projectId === plan.projectId
+    // Build the plan and schedule under the same ctx, ensuring ctx.projectId === plan.projectId
     const planId = await (async () => {
       const r = await tool.execute({ action: 'create', name: '每天9点' });
       if (!r.ok) throw new Error('seed create plan failed: ' + (r as { error?: string }).error);
@@ -288,7 +289,7 @@ describe('manage_plans 工具·schedule CRUD', () => {
     const other = await seedProject(pool);
     const { ctx, events } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await toolOf(ctx);
-    // 造一个属于 other 项目的 plan
+    // Create a plan belonging to the other project
     const { createPlan } = await import('../src/services/plans.service.js');
     const otherPlan = await createPlan(other.projectId, { name: '别人的', versionId: other.versionId });
 
@@ -305,7 +306,7 @@ describe('manage_plans 工具·schedule CRUD', () => {
     const { planId, tool, events } = await newPlan();
     const sid = await seedSchedule(planId, '0 9 * * *');
 
-    // 拒绝路径
+    // Rejection path
     events.length = 0;
     const rejected = tool.execute({ action: 'update_schedule', scheduleId: sid, cronExpr: '30 8 * * *' });
     await untilConfirm(events);
@@ -316,7 +317,7 @@ describe('manage_plans 工具·schedule CRUD', () => {
     const before = (await pool.query(`SELECT cron_expr FROM plan_schedules WHERE id=$1`, [sid])).rows[0]!.cron_expr as string;
     expect(before).toBe('0 9 * * *');
 
-    // 通过路径
+    // Approval path
     events.length = 0;
     const approved = tool.execute({ action: 'update_schedule', scheduleId: sid, cronExpr: '30 8 * * *' });
     const cid2 = await untilConfirm(events);
@@ -355,13 +356,13 @@ describe('manage_plans 工具·schedule CRUD', () => {
     const { planId, tool, events } = await newPlan();
     const sid = await seedSchedule(planId, '0 9 * * *');
 
-    // 不存在 → 短路,不弹卡
+    // Doesn't exist → short-circuit, no card
     events.length = 0;
     const r0 = await tool.execute({ action: 'delete_schedule', scheduleId: '00000000-0000-0000-0000-000000000000' });
     expect(r0).toMatchObject({ ok: true, data: expect.stringContaining('调度不存在或已删除') });
     expect(events.find((e) => e.type === 'confirm_request')).toBeUndefined();
 
-    // 拒绝 → 行保留
+    // Rejected → row kept
     events.length = 0;
     const rejected = tool.execute({ action: 'delete_schedule', scheduleId: sid });
     await untilConfirm(events);
@@ -373,7 +374,7 @@ describe('manage_plans 工具·schedule CRUD', () => {
     const n1 = (await pool.query(`SELECT count(*)::int AS n FROM plan_schedules WHERE id=$1`, [sid])).rows[0]!.n as number;
     expect(n1).toBe(1);
 
-    // 通过 → 删除
+    // Approved → deleted
     events.length = 0;
     const approved = tool.execute({ action: 'delete_schedule', scheduleId: sid });
     const cid = await untilConfirm(events);

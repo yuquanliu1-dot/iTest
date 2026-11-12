@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// 启动一个 iOS Simulator（agent-device 内部 prepare ios-runner）→ 跑 3 条 mobile step：appOpen / tap / screenshot。
-// 校验 report.status === 'passed'、screenshots 目录产出 png。
-// 不在 CI 跑；本地手动验证用：node apps/api/probe-mobile.mjs
-// DRY_RUN=1 时仅打印请求序列不发请求。
+// Boot an iOS Simulator (agent-device's internal prepare ios-runner) -> run 3 mobile steps: appOpen / tap / screenshot.
+// Verify report.status === 'passed' and that the screenshots directory produces png files.
+// Not run in CI; manual local verification: node apps/api/probe-mobile.mjs
+// With DRY_RUN=1 only the request sequence is printed, no requests are sent.
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -42,7 +42,7 @@ async function request(method, path, body) {
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  // 首次 login 之后记住 cookie 以便后续 Bearer 头复用
+  // Remember the cookie after the first login so later requests can reuse the Bearer header
   const setCookie = res.headers.get('set-cookie');
   if (setCookie) {
     const m = setCookie.match(/(?:^|,\s*)authToken=([^;]+)/);
@@ -111,13 +111,13 @@ async function pollReport(reportId, timeoutMs = 60_000) {
 
 async function main() {
   await login();
-  // DRY_RUN 下跳过 /auth/me 解析（dry request 返回 __dry 占位），让用户自己传 ORG_ID
+  // Under DRY_RUN skip /auth/me resolution (dry request returns the __dry placeholder); let the user supply ORG_ID themselves
   const orgId = DRY_RUN && !ORG_ID ? 'DRY_ORG_ID' : await resolveOrgId();
   const stamp = Date.now();
   const projectName = `mobile-probe-${stamp}`;
 
   step('create project');
-  // 项目归属产品线（组织由产品线推导）；ORG_ID 仅用于确认调用者能在该组织下建项目。
+  // The project belongs to a product line (organization is derived from the product line); ORG_ID is only used to confirm the caller can create projects under that organization.
   const lines = await request('GET', '/api/product-lines');
   const line = (lines ?? [])[0];
   if (!line) throw new Error('没有可用产品线，请先在「产品线」页建一条');
@@ -184,7 +184,7 @@ async function main() {
   if (!last?.screenshot) fail('final step has no screenshot field', last);
   ok(`final step screenshot ${last.screenshot}`);
 
-  // /screenshots/... 是静态映射,确认本地 png 真的写出来了
+  // /screenshots/... is a static mapping; confirm the local png was actually written
   try {
     const entries = await readdir(join(process.cwd(), 'screenshots', reportId));
     const pngs = entries.filter((f) => f.endsWith('.png'));

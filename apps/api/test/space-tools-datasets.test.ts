@@ -6,8 +6,8 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 import type { ToolExecutor } from '../src/pi/tools.js';
 
-// 注意:stage-tools / services 链上静态引入 db/client(DATABASE_URL 在 beforeAll 才指向容器),
-// 必须在测试体内动态 import(与 space-case-ops.test.ts 同模式),否则查询打到默认本地库。
+// Note: the stage-tools / services chain statically imports db/client (DATABASE_URL only points at the container inside beforeAll),
+// so it must be dynamically imported inside the test body (same pattern as space-case-ops.test.ts), otherwise queries hit the default local DB.
 let pool: Pool;
 
 beforeAll(async () => {
@@ -16,7 +16,7 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // listStage 并行查全部 6 张 stage 表,其余 4 张补空表(列定义照 src/db/schema.ts)
+  // listStage queries all 6 stage tables in parallel; the other 4 are topped up as empty tables (column definitions per src/db/schema.ts)
   await pool.query(`
     CREATE TABLE ai_stage_datasets (
       thread_id text NOT NULL,
@@ -29,8 +29,8 @@ beforeAll(async () => {
       staged_at timestamp NOT NULL DEFAULT now(),
       CONSTRAINT ai_stage_datasets_pk PRIMARY KEY(thread_id, local_id)
     )`);
-  // listStage 并行查全部 6 张 stage 表,其余 4 张补空表(列定义照 src/db/schema.ts);
-  // ai_stage_case_ops 已收录进 SCHEMA_SQL,此处幂等兜底
+  // listStage queries all 6 stage tables in parallel; the other 4 are topped up as empty tables (column definitions per src/db/schema.ts);
+  // ai_stage_case_ops is already in SCHEMA_SQL, this is an idempotent fallback
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ai_stage_case_ops (
       thread_id text NOT NULL,
@@ -137,9 +137,9 @@ describe('stage_dataset 工具', () => {
     expect(unknownCol.ok).toBe(false);
     expect((unknownCol as { error: string }).error).toContain('未在 columns 声明的列');
 
-    // zod record(string) 拒绝非 string 单元格
+    // zod record(string) rejects non-string cells
     const badCell = await tool.execute({
-      // @ts-expect-error 故意传 number 单元格
+      // @ts-expect-error deliberately passing a number cell
       ...VALID_BODY, localId: randomUUID(), columns: [{ name: 'a' }], rows: [{ cells: { a: 123 } }],
     });
     expect(badCell.ok).toBe(false);
@@ -155,12 +155,12 @@ describe('stage_dataset 工具', () => {
 
     const ok = await tool.execute(VALID_BODY);
     expect(ok.ok).toBe(true);
-    // SSE stage 事件 kind=dataset 且 payload 带明文(用户预览语义)
+    // SSE stage event has kind=dataset and payload carries plaintext (user-preview semantics)
     const ev = events.find((e) => e.type === 'stage' && e.kind === 'dataset');
     expect(ev).toBeTruthy();
     expect(JSON.stringify(ev)).toContain('SUPER-SECRET');
 
-    // stage 表存明文(加密只发生在落库 createDataset)
+    // The stage table stores plaintext (encryption only happens at createDataset persistence)
     const row = (await pool.query(`SELECT name, columns, rows FROM ai_stage_datasets WHERE thread_id=$1 AND local_id=$2`, [ctx.threadId, VALID_BODY.localId])).rows[0]!;
     expect(row.name).toBe('登录数据集');
     expect(JSON.stringify(row.rows)).toContain('SUPER-SECRET');
@@ -171,7 +171,7 @@ describe('stage_dataset 工具', () => {
     expect(doc.datasets[0]!.columns.map((c) => c.name)).toEqual(['username', 'password', 'expectedTip']);
     expect(doc.datasets[0]!.rows[0]!.cells.password).toBe('SUPER-SECRET');
 
-    // 同 localId 重发 = 幂等 upsert(改名后仍 1 行)
+    // Resending the same localId = idempotent upsert (still 1 row after rename)
     const ok2 = await tool.execute({ ...VALID_BODY, name: '登录数据集v2' });
     expect(ok2.ok).toBe(true);
     const cnt = await pool.query(`SELECT count(*)::int AS n, max(name) AS name FROM ai_stage_datasets WHERE thread_id=$1`, [ctx.threadId]);
@@ -186,13 +186,13 @@ describe('stage_dataset 工具', () => {
     const caseTool = await toolOf(ctx, 'stage_case');
     await dsTool.execute(VALID_BODY);
 
-    // 负例:compiled 引用与数据集列不一致的 {{用户名}} → 体检在暂存响应里立即指出
+    // Negative case: compiled references {{用户名}} inconsistent with dataset columns → the check-up calls it out immediately in the staging response
     const bad = await caseTool.execute({
       localId: randomUUID(), title: '变量写错', datasetLocalId: VALID_BODY.localId,
       steps: [{ action: '输入 {{用户名}}', compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#u' }], value: '{{用户名}}' }] }],
     });
     expect(bad.ok).toBe(true);
-    // 中文变量名不进 VAR_RE,由宽松 {{...}} 兜底点名(回放时它会以字面量填入,必须当场暴露)
+    // Chinese variable names don't enter VAR_RE; the loose {{...}} fallback names them (at replay they'd be filled literally, so it must be exposed on the spot)
     expect((bad as { data: string }).data).toContain('{{用户名}} 不是合法变量名');
 
     const ok = await caseTool.execute({
@@ -219,7 +219,7 @@ describe('stage_case 覆盖类型(coverageTypes)', () => {
     const data1 = (first as { data: string }).data;
     expect(data1).toContain('覆盖回执');
     expect(data1).toContain('本条覆盖 功能（正常流）');
-    // 第一条时其余类型均未覆盖,模型据此知道自己还没切
+    // With the first case the other types are all uncovered; the model learns from this it hasn't switched yet
     expect(data1).toContain('异常场景×0');
 
     await tool.execute({ localId: randomUUID(), title: '密码错误', coverageTypes: ['exception'] });
@@ -240,7 +240,7 @@ describe('stage_case 覆盖类型(coverageTypes)', () => {
     const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await toolOf(ctx, 'stage_case');
 
-    // @ts-expect-error 故意传未知类型 key
+    // @ts-expect-error deliberately passing an unknown type key
     const bad = await tool.execute({ localId: randomUUID(), title: 'X', coverageTypes: ['perf'] });
     expect(bad.ok).toBe(false);
 
@@ -257,7 +257,7 @@ describe('stage_case 覆盖类型(coverageTypes)', () => {
     const { listStage } = await import('../src/pi/space/tools/stage-tools.js');
     const row = (await listStage(ctx.threadId)).cases[0]!;
 
-    // stageRoute 的落库就是这组字段的透传
+    // stageRoute's persistence is a plain passthrough of this set of fields
     const { createCaseWithSteps } = await import('../src/services/cases.service.js');
     const created = await createCaseWithSteps({
       groupId: seed.groupId, versionId: seed.versionId, title: row.title,
@@ -270,27 +270,27 @@ describe('stage_case 覆盖类型(coverageTypes)', () => {
 
 describe('stage_case 文案：DB/API 步例外 + sql 变量绑定规则', () => {
   it('stage_case 描述与 promptGuidelines 放行 DB/API 步带 compiled;sql 绑定规则与执行器一致', async () => {
-    // 工具层文案是 AI 真正读到的那一份——与 reqDesign 的 guide 平行，两处都不能漏。
+    // The tool-layer copy is the one the AI actually reads — parallel to reqDesign's guide; neither place may miss it.
     const { STAGE_PROMPT_GUIDELINES } = await import('../src/pi/space/tools/stage-tools.js');
     const { ctx } = makeCtx();
     const tool = await toolOf(ctx, 'stage_case');
     const guidelines = tool.promptGuidelines.join('\n');
 
-    // ① DB/API 例外：stage 阶段就必须带 compiled（它们不经浏览器执行）
+    // (1) DB/API exception: compiled must be carried at the stage stage already (they don't go through the browser)
     expect(tool.description).toContain('查库/调接口的步——sql / httpRequest——必须给出');
     expect(guidelines).toContain('唯一例外：查库/调接口的步骤（sql / httpRequest）必须在这一步就带上 compiled');
     expect(guidelines).toContain('DB/API 步（sql / httpRequest）不经浏览器执行');
-    // 原禁令仍存在（不得删成无条件放行），但紧跟例外
+    // The original ban still exists (must not be deleted into unconditional allowance), but immediately followed by the exception
     const ban = guidelines.indexOf('stage_case 的 step 默认不输出 compiled 字段');
     const exc = guidelines.indexOf('唯一例外：查库/调接口的步骤（sql / httpRequest）必须在这一步就带上 compiled');
     expect(ban).toBeGreaterThanOrEqual(0);
     expect(exc).toBeGreaterThan(ban);
 
-    // ② sql 变量绑定规则与 runSql 的真实语义一致（{{变量}} 写在文本里；不与 params/占位符混用）
+    // (2) The sql variable-binding rule matches runSql's real semantics ({{var}} written in the text; never mixed with params/placeholders)
     expect(guidelines).toContain('{{变量}} 直接写在 sql 文本里即可');
     expect(guidelines).toContain('sql-params-conflict');
     expect(guidelines).toContain('select table_name from information_schema.tables');
-    // 旧的错误规则（与代码相反）不得回潮
+    // The old wrong rule (contrary to the code) must not come back
     expect(guidelines).not.toContain('必须写在 params 里配 ? 占位符');
     expect(guidelines).not.toContain('不能写进 sql 文本');
   });
@@ -302,8 +302,8 @@ describe('stage_case localId 契约', () => {
     const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await toolOf(ctx, 'stage_case');
 
-    // prod228 2026-10-27 实录:agent 自造 "login-a-positiven" 暂存成功,verify_case 直查 uuid 列炸
-    // invalid input syntax for type uuid——契约从文案升级为 zod 校验
+    // prod228 2026-10-27 incident: an agent invented "login-a-positiven" and it staged successfully, but verify_case's direct uuid-column query blew up with
+    // invalid input syntax for type uuid — the contract was upgraded from copy text to zod validation
     const bad = await tool.execute({ localId: 'login-a-positiven', title: '登录正向', steps: [{ action: '点击登录' }] });
     expect(bad.ok).toBe(false);
     expect((bad as { error: string }).error).toContain('UUID');
@@ -328,16 +328,16 @@ describe('落库链路(createDataset 加密 + createCase 绑定校验)', () => {
       columns: VALID_BODY.columns,
       rows: VALID_BODY.rows,
     });
-    // 出参打码
+    // Output masked
     expect(created.rows[0]!.cells.password).toEqual({ __masked: true });
-    // DB 密文:不含明文,含 {c,i,t} 三元组
+    // DB ciphertext: no plaintext, contains the {c,i,t} triple
     const raw = (await pool.query(`SELECT rows FROM datasets WHERE id=$1`, [created.id])).rows[0]!;
     const rawStr = JSON.stringify(raw.rows);
     expect(rawStr).not.toContain('SUPER-SECRET');
     const encCell = raw.rows[0].cells.password as { c: string; i: string; t: string };
     expect(typeof encCell.c).toBe('string');
 
-    // 绑定成功
+    // Binding succeeded
     const c = await casesSvc.createCaseWithSteps({
       groupId: seed.groupId, versionId: seed.versionId, title: '登录-数据驱动', datasetId: created.id,
       steps: [{ instruction: '登录' }],
@@ -345,12 +345,12 @@ describe('落库链路(createDataset 加密 + createCase 绑定校验)', () => {
     const bound = (await pool.query(`SELECT dataset_id FROM test_cases WHERE id=$1`, [c.id])).rows[0]!;
     expect(bound.dataset_id).toBe(created.id);
 
-    // 未知 datasetId → 404
+    // Unknown datasetId → 404
     await expect(casesSvc.createCase({
       groupId: seed.groupId, versionId: seed.versionId, title: 'x', datasetId: randomUUID(),
     })).rejects.toMatchObject({ status: 404 });
 
-    // 跨项目 → 400 dataset_project_mismatch
+    // Cross-project → 400 dataset_project_mismatch
     const other = await seedProject(pool);
     const otherDs = await createDataset(other.projectId, {
       name: `他项目-${randomUUID().slice(0, 8)}`,

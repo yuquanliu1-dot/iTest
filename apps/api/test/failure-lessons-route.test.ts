@@ -1,12 +1,12 @@
-/** 失败教训路由：列表（status 过滤）/retire（active 守卫 404）/权限门。 */
+/** Failure lesson routes: list (status filter) / retire (active guard 404) / permission gate. */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import type { Express } from 'express';
 import request from 'supertest';
 import { SCHEMA_SQL, seedOrg } from './helpers/db.js';
-// auth helpers 不能静态 import：auth.service → db/client 在模块加载期即固化
-// DATABASE_URL，会把应用 db 指到 beforeAll 设 env 之前的库（prompt-modules-route 同款坑）。
+// auth helpers cannot be statically imported: auth.service → db/client snapshots
+// DATABASE_URL at module-load time, which would point the app db at the pre-beforeAll-env database (same gotcha as prompt-modules-route).
 let managerUserOf: typeof import('./helpers/auth.js').managerUserOf;
 let memberUserOf: typeof import('./helpers/auth.js').memberUserOf;
 

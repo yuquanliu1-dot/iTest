@@ -9,8 +9,8 @@ import { planRunDetailKey } from '../src/lib/cache-keys.js';
 let pool: Pool;
 let app: import('express').Express;
 
-// 最小 ioredis 桩：Map 存储，wrap 的 get/set 与 del 全走这里（范式同 test/cache.test.ts）。
-// 提到模块级让用例能直接检查回填/失效效果。
+// Minimal ioredis stub: Map storage; wrap's get/set and del all go through here (same pattern as test/cache.test.ts).
+// Hoisted to module level so cases can directly check backfill/invalidation effects.
 const fake = (() => {
   const store = new Map<string, { value: string; expiresAt: number }>();
   return {
@@ -70,7 +70,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** 造一个计划 + 一次运行 + N 个成员用例（每个成员带一份报告）。 */
+/** Create a plan + one run + N member cases (each member with a report). */
 async function seedRun(opts: { status?: string; reportCount?: number } = {}) {
   const { projectId, groupId } = await seedProject(pool);
   const plan = await pool.query(`INSERT INTO execution_plans(project_id, name) VALUES ($1, 'p') RETURNING id`, [projectId]);
@@ -107,13 +107,13 @@ describe('plan-run detail cache', () => {
     const first = await request(app).get(`/api/plan-runs/${runId}`);
     expect(first.status).toBe(200);
     expect(first.body.summary).toBe('v1');
-    // 首次 GET 已把详情回填进缓存
+    // The first GET has backfilled the detail into the cache
     expect(fake.store.has(planRunDetailKey(runId))).toBe(true);
 
     await pool.query(`UPDATE plan_runs SET summary = 'v2' WHERE id = $1`, [runId]);
     const second = await request(app).get(`/api/plan-runs/${runId}`);
     expect(second.status).toBe(200);
-    expect(second.body.summary).toBe('v1'); // 命中缓存，不反映库内变化
+    expect(second.body.summary).toBe('v1'); // Cache hit, does not reflect the DB change
   });
 
   it('运行中的运行不缓存：每次 GET 反映库内最新值', async () => {
@@ -139,7 +139,7 @@ describe('plan-run detail cache', () => {
 
     const del = await request(app).delete(`/api/plan-runs/${runId}`);
     expect(del.status).toBe(200);
-    // 删除路径已把缓存 key 清掉
+    // The delete path has already cleared the cache key
     expect(fake.store.has(planRunDetailKey(runId))).toBe(false);
 
     const after = await request(app).get(`/api/plan-runs/${runId}`);

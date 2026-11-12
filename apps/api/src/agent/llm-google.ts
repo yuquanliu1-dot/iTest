@@ -15,12 +15,12 @@ export class GoogleClient implements LLMClient {
     const m = this.client.getGenerativeModel({
       model,
       systemInstruction: systemPrompt || 'You are a helpful assistant. Reply with JSON only.',
-      // 未配置不传参（走服务商默认，与既有行为一致）
+      // Don't pass the parameter when unconfigured (use the provider default, consistent with existing behavior)
       generationConfig: { responseMimeType: 'application/json', temperature: 0.2, ...(this.cfg.maxTokens ? { maxOutputTokens: this.cfg.maxTokens } : {}) },
     });
-    // 多轮累积：req.messages 存在时按 user/assistant 交替回传，否则退化为单轮。
-    // 空数组按单轮处理：startChat 的 history 必须以 user 开头，且末轮要单独 sendMessage，
-    // 空历史会导致 turns[-1] 为 undefined。
+    // Multi-turn accumulation: when req.messages exists, replay alternating user/assistant turns; otherwise degrade to single-turn.
+    // Empty arrays are treated as single-turn: startChat's history must start with user, and the last turn needs a separate sendMessage;
+    // an empty history would make turns[-1] undefined.
     const src = req.messages && req.messages.length > 0 ? req.messages : [{
       role: 'user' as const,
       content: [
@@ -35,7 +35,7 @@ export class GoogleClient implements LLMClient {
         : { text: b.text })),
     }));
     const t0 = Date.now();
-    // startChat 需要历史（不含当前轮）+ 当前轮 parts；单轮形态时 history 为空。
+    // startChat needs history (excluding the current turn) + current-turn parts; history is empty in single-turn form.
     const chat = m.startChat({ history: turns.slice(0, -1).map((t) => ({ ...t, parts: t.parts as never })) });
     const resp = await chat.sendMessage(turns[turns.length - 1]!.parts as never);
     const durationMs = Date.now() - t0;
@@ -43,9 +43,9 @@ export class GoogleClient implements LLMClient {
     const json = tryParseJson(text);
     const base: LLMCompleteResult = json ? { kind: 'json', value: json } : { kind: 'text', value: text };
     const meta = resp.response.usageMetadata;
-    // Gemini 口径：promptTokenCount 含 cachedContentTokenCount（后者是它的子集）。平台统一口径是
-    // 「promptTokens = 本次新计算的、cacheReadTokens = 命中缓存的」（见 LLMUsage 注释，
-    // 与 Anthropic 原生口径一致），故这里减去缓存部分，否则命中率会重复计数。
+    // Gemini semantics: promptTokenCount includes cachedContentTokenCount (the latter is a subset of it). The platform's unified convention is
+    // "promptTokens = newly computed this call, cacheReadTokens = cache hits" (see the LLMUsage comment,
+    // consistent with Anthropic's native convention), so subtract the cached part here, otherwise the hit rate would be double-counted.
     const cached = meta?.cachedContentTokenCount ?? 0;
     const usage = meta ? { promptTokens: Math.max(0, (meta.promptTokenCount ?? 0) - cached), completionTokens: meta.candidatesTokenCount ?? 0, cacheReadTokens: cached } : undefined;
     return { ...base, provider: 'google', vision: turns.some((x) => x.parts.some((p) => 'inlineData' in p)), ...(usage ? { usage } : {}), durationMs, model };

@@ -11,7 +11,7 @@ import { assignmentsService, assertProjectVisibleForAssignments } from '../servi
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
-/** 解析 project → 所属 org id（经 product_lines）；项目不存在返回 null。 */
+/** Resolves project → owning org id (via product_lines); returns null when the project doesn't exist. */
 async function projectOrgId(projectId: string): Promise<string | null> {
   const rows = await db
     .select({ organizationId: productLines.organizationId })
@@ -22,7 +22,7 @@ async function projectOrgId(projectId: string): Promise<string | null> {
   return rows[0]?.organizationId ?? null;
 }
 
-/** 分配/解分配的管理员闸门：须是项目所属组织（或其祖先）的管理员。 */
+/** Assign/unassign admin gate: must be a manager of the project's owning org (or an ancestor). */
 async function requireProjectManager(projectId: string, user: NonNullable<Express.Request['user']>, missing: string): Promise<string> {
   const orgId = await projectOrgId(projectId);
   if (!orgId) throw new HttpError(404, 'not_found', missing);
@@ -31,7 +31,7 @@ async function requireProjectManager(projectId: string, user: NonNullable<Expres
   return orgId;
 }
 
-/** 与 iDO requireProjectAccess 等价：manager 走子树，user 走 assignment。 */
+/** Equivalent to iDO requireProjectAccess: manager via subtree, user via assignment. */
 async function requireProjectAccess(projectId: string, user: NonNullable<Express.Request['user']>): Promise<void> {
   await assertProjectVisibleForAssignments(projectId, user);
 }
@@ -52,7 +52,7 @@ router.get('/:projectId/assignments', async (req, res) => {
 
 router.post('/:projectId/assignments', async (req, res) => {
   const projectId = req.params.projectId!;
-  // 仅 manager 可分配（与 iDO 一致）
+  // Only managers may assign (same as iDO)
   const orgId = await requireProjectManager(projectId, req.user!, 'project not found');
 
   const body = AssignBody.parse(req.body);

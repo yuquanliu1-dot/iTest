@@ -12,8 +12,8 @@ import {
   type StaticLocatorReport,
 } from '../src/execute/staticLocator.js';
 
-/** 假 grep 计数器：把 pattern 当正则对假源码行跑，模拟 repo_grep 的真实匹配语义，
- *  从而证明 extractGrepKeys 产出的键确实命中真实源码形态（HTML 属性 / Vue 绑定 / JS 对象）。 */
+/** Fake grep counter: runs the pattern as a regex against fake source lines, mimicking repo_grep's real matching semantics,
+ *  thereby proving the keys produced by extractGrepKeys do hit real source shapes (HTML attributes / Vue bindings / JS objects). */
 function makeCounter(lines: string[]): LocatorCountFn {
   return async (pattern) => {
     const re = new RegExp(pattern);
@@ -22,15 +22,15 @@ function makeCounter(lines: string[]): LocatorCountFn {
   };
 }
 
-// ── 键提取：证明精确键覆盖真实源码邻接形态 ──
+// ── Key extraction: proving the precise key covers real source-adjacent shapes ──
 describe('extractGrepKeys', () => {
   it('css 属性选择器：属性名+值邻接，兼容双引号/单引号/Vue 绑定/JS 对象', () => {
     const lines = [
-      '<i title="查看"></i>',          // HTML 双引号
-      "<span :title=\"'查看'\"></span>", // Vue 绑定(:title="'查看'")
-      "const t = { title: '查看' };",   // JS 对象
+      '<i title="查看"></i>',          // HTML double quotes
+      "<span :title=\"'查看'\"></span>", // Vue binding(:title="'查看'")
+      "const t = { title: '查看' };",   // JS object
     ];
-    // 三个形态同属「title=查看」锚点 → 精确键应全命中
+    // All three shapes belong to the same「title=查看」anchor → the precise key should hit all of them
     const keys = extractGrepKeys('css', '[title="查看"]');
     expect(keys).toEqual({ precise: 'title\\s*[:=]\\s*[\'"]{1,2}查看', loose: '\\btitle\\b' });
     for (const l of lines) expect(new RegExp(keys!.precise).test(l)).toBe(true);
@@ -61,7 +61,7 @@ describe('extractGrepKeys', () => {
   });
 });
 
-// ── 夹具 1：testid 全覆盖项目 ──
+// ── Fixture 1: project fully covered by testid ──
 describe('夹具 1 · testid 覆盖项目', () => {
   const lines = [
     '<button data-testid="login">登录</button>',
@@ -83,11 +83,11 @@ describe('夹具 1 · testid 覆盖项目', () => {
   });
 });
 
-// ── 夹具 2：SOC 验收锚点（混合项目：零 testid、语义 icon 类）──
+// ── Fixture 2: SOC acceptance anchors (mixed project: zero testid, semantic icon class) ──
 describe('夹具 2 · SOC 混合项目（验收锚点 .icon-chakan）', () => {
-  // 伪唯一锚点 title="查看" 在源码里被 5 处复用（工具条/菜单/多个视图的表格操作列）
+  // The pseudo-unique anchor title="查看" is reused in 5 source places (toolbar/menu/table action columns of multiple views)
   const lines = [
-    '<i class="icon-chakan operateBtn" title="查看"></i>', // 唯一的一处语义 icon 类（既是模板定义处）
+    '<i class="icon-chakan operateBtn" title="查看"></i>', // the single semantic icon class (also the template definition site)
     '<button class="toolbar-link" title="查看">查看</button>',
     '<a title="查看">查看</a>',
     '<li><span title="查看">查看</span></li>',
@@ -117,7 +117,7 @@ describe('夹具 2 · SOC 混合项目（验收锚点 .icon-chakan）', () => {
   });
 });
 
-// ── 夹具 3：无属性项目（纯 text / 历史 xpath）──
+// ── Fixture 3: attribute-less project (pure text / legacy xpath) ──
 describe('夹具 3 · 无属性项目', () => {
   const lines = Array.from({ length: 5 }, () => '<button>确认</button>');
 
@@ -134,11 +134,11 @@ describe('夹具 3 · 无属性项目', () => {
   });
 });
 
-// ── 夹具 4：动态渲染项目（关键：不误杀 dynamic 元素）──
+// ── Fixture 4: dynamically rendered project (key: don't wrongly kill dynamic elements) ──
 describe('夹具 4 · 动态渲染不误杀', () => {
   const lines = [
-    '<el-input :placeholder="keywordPlaceholder" />', // placeholder 来自数据绑定
-    '<li :data-id="item.id" v-for="item in list">...</li>', // data-id 来自动态值
+    '<el-input :placeholder="keywordPlaceholder" />', // placeholder comes from a data binding
+    '<li :data-id="item.id" v-for="item in list">...</li>', // data-id comes from a dynamic value
   ];
 
   it('[placeholder="请输入关键字"] 字面量不在源码但 placeholder 绑定存在 → dynamic-suspect（不判 not-found）', async () => {
@@ -147,7 +147,7 @@ describe('夹具 4 · 动态渲染不误杀', () => {
       makeCounter(lines),
     );
     expect(r!.verdict).toBe('dynamic-suspect');
-    // 关键断言：dynamic-suspect ≠ 拒绝——绝不落入 not-found
+    // Key assertion: dynamic-suspect ≠ rejection — it must never fall into not-found
     expect(r!.verdict).not.toBe('not-found');
   });
 
@@ -166,7 +166,7 @@ describe('夹具 4 · 动态渲染不误杀', () => {
   });
 });
 
-// ── 排行器 ──
+// ── Ranker ──
 describe('reorderCandidates', () => {
   it('稳定重排：unique → dynamic-suspect → multiple → not-found → skipped', () => {
     const mk = (value: string, verdict: StaticLocatorReport['verdict']): StaticLocatorReport => ({
@@ -184,7 +184,7 @@ describe('reorderCandidates', () => {
   });
 });
 
-// ── 摘要与去重缓存 ──
+// ── Summary and dedupe cache ──
 describe('summarizeStaticReports / 缓存', () => {
   it('摘要覆盖多命中/未命中/动态三类', async () => {
     const lines = [
@@ -205,7 +205,7 @@ describe('summarizeStaticReports / 缓存', () => {
     expect(s).toBeTruthy();
     expect(s!).toContain('源码命中多处');
     expect(s!).toContain('动态绑定');
-    // .icon-chakan 唯一 → 不进入摘要
+    // .icon-chakan is unique → doesn't enter the summary
     expect(s!).not.toContain('.icon-chakan');
   });
 
@@ -231,14 +231,14 @@ describe('summarizeStaticReports / 缓存', () => {
       { strategy: 'css', value: '#other' },
     ];
     await analyzeLocatorCandidates(cands, counting);
-    expect(calls).toBe(2); // .wat 与 #other 各一次
+    expect(calls).toBe(2); // .wat and #other once each
   });
 });
 
-// ── 批量版：判决必须与逐条版逐字段一致 ──
+// ── Batch version: verdicts must match the per-item version field for field ──
 describe('analyzeLocatorCandidatesBatch', () => {
-  /** 假批量计数器：一次调用收到全部 pattern，用同一份假源码判命中。
-   *  顺带断言「跨候选的重复 pattern 只出现一次」（批量版相对逐条版的去重收益来源）。 */
+  /** Fake batch counter: one call receives all patterns, judging hits against the same fake source.
+   *  Also asserts "duplicate patterns across candidates appear only once" (the dedupe benefit the batch version has over the per-item one). */
   function makeBatch(lines: string[]): BatchLocatorCountFn {
     return async (patterns) => {
       const table = new Map<string, SourceCount>();
@@ -291,9 +291,9 @@ describe('analyzeLocatorCandidatesBatch', () => {
     await analyzeLocatorCandidatesBatch(
       [
         { strategy: 'css', value: '[placeholder="账号"]' }, // precise + loose
-        { strategy: 'css', value: '[placeholder="账号"]' }, // 重复候选
-        { strategy: 'css', value: '.icon-chakan' }, // 仅 precise
-        { strategy: 'xpath', value: '/html/body' }, // 无静态可判，不带 pattern
+        { strategy: 'css', value: '[placeholder="账号"]' }, // duplicate candidate
+        { strategy: 'css', value: '.icon-chakan' }, // precise only
+        { strategy: 'xpath', value: '/html/body' }, // statically undecidable, no pattern carried
       ],
       batch,
     );

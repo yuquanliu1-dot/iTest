@@ -1,23 +1,23 @@
 /**
- * 存量计划回迁（幂等，可在任何状态重跑）：
- * 1. 有用例且尚无分组的计划 → 建一个「默认分组」，拷贝计划级环境 + 登录配置，
- *    fail_fast = (计划 strategy = 'fail_fast')；
- * 2. group_id 为空的 plan_cases 全部挂入所属计划的默认分组（组内序沿用原全局序）。
- * 空计划不建组。执行时机：migrate.ts 拿到 advisory lock 后、drizzle-kit push 之前——
- * 这样 push 才能安全地把 group_id 置 NOT NULL。
- * 计划级旧列被后续迁移删除后，本函数自动 no-op（列不存在则跳过回填段）。
+ * Backfill for existing plans (idempotent, safe to re-run in any state):
+ * 1. Plans that have cases but no group yet → create a '默认分组' (default group), copying the plan-level environment + login config,
+ *    fail_fast = (plan strategy = 'fail_fast');
+ * 2. plan_cases rows with empty group_id are all attached to their plan's default group (in-group order follows the original global order).
+ * Empty plans get no group. Timing: after migrate.ts acquires the advisory lock, before drizzle-kit push —
+ * only then can push safely set group_id to NOT NULL.
+ * Once the plan-level legacy columns are dropped by later migrations, this function becomes an automatic no-op (the backfill segment is skipped when the columns don't exist).
  *
- * 参数放宽为结构化 query：兼容 pg.Pool 与 migrate.ts 的 pg.Client。
+ * The parameter is relaxed to a structured query: compatible with both pg.Pool and migrate.ts's pg.Client.
  */
 export async function backfillPlanCaseGroups(client: { query: (sql: string) => Promise<unknown> }): Promise<void> {
-  // 列存在性探测：旧列已删（迁移完成后）或全新库（无表）则整体跳过。
+  // Column existence probe: skip entirely when legacy columns are gone (post-migration) or the DB is fresh (no tables).
   const cols = (await client.query(
     `SELECT column_name FROM information_schema.columns WHERE table_name = 'execution_plans'`,
   )) as { rows: Array<{ column_name: string }> };
   const has = (c: string) => cols.rows.some((r) => r.column_name === c);
-  if (!has('login_prepare_enabled')) return; // 已完成删列迁移（或全新库），无事可做
+  if (!has('login_prepare_enabled')) return; // column-drop migration already done (or fresh DB), nothing to do
 
-  // push 之前表/列可能尚不存在（老库首次升级）：先补幂等 DDL，保证下述回填可安全执行。
+  // Tables/columns may not exist yet before push (first upgrade of an old DB): apply idempotent DDL first so the backfill below can run safely.
   await client.query(`
     CREATE TABLE IF NOT EXISTS plan_case_groups (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

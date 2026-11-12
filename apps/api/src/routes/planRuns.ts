@@ -18,12 +18,12 @@ export const planRunsRoute = Router();
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
-/** 清理报告对应的截图目录；目录不存在或权限不足时静默吞掉（不影响删除 API 成功） */
+/** Clean up the screenshot directory of a report; silently swallow missing directories or permission errors (does not affect delete API success) */
 async function unlinkReportScreenshots(reportId: string): Promise<void> {
   await rm(join(SCREENSHOTS_DIR, reportId), { recursive: true, force: true }).catch(() => {});
 }
 
-/** 收集一次计划运行产出的全部报告 id：plan_run_cases.report_id 与 report_ids 数组里的每个 id。 */
+/** Collect all report ids produced by one plan run: plan_run_cases.report_id plus every id in the report_ids array. */
 async function collectRunReportIds(planRunIds: string[]): Promise<string[]> {
   const rows = await db
     .select({ reportId: planRunCases.reportId, reportIds: planRunCases.reportIds })
@@ -38,14 +38,15 @@ async function collectRunReportIds(planRunIds: string[]): Promise<string[]> {
 }
 
 /**
- * 删除计划运行及其成员报告。
+ * Delete plan runs and their member reports.
  *
- * 成员报告必须一并删：plan_run_cases 才是「这份报告属于某次计划运行」的唯一链接，
- * 运行删掉后链接消失，报告会以「独立用例执行」的形态重新出现在执行历史的单用例列表里
- * （executions 的 case 分支靠 not exists 排除 plan 成员报告）——用户看到的等于「删了运行、
- * 报告却还在」。
+ * Member reports must be deleted along with them: plan_run_cases is the only link establishing
+ * "this report belongs to a plan run"; once the run is deleted the link disappears and the report
+ * reappears in the execution history single-case list as an "independent case execution"
+ * (the executions case branch excludes plan member reports via not exists) — to the user this looks
+ * like "the run was deleted but the reports are still there".
  *
- * 报告删掉后其 screenshots/<reportId>/ 目录一并清理，避免磁盘堆积。
+ * After reports are deleted, their screenshots/<reportId>/ directories are cleaned up too, avoiding disk buildup.
  */
 export async function deleteRunsWithReports(planRunIds: string[]): Promise<number> {
   const reportIds = await collectRunReportIds(planRunIds);
@@ -54,17 +55,17 @@ export async function deleteRunsWithReports(planRunIds: string[]): Promise<numbe
     .where(inArray(planRuns.id, planRunIds))
     .returning({ id: planRuns.id });
   if (reportIds.length) {
-    // report_id 外键是 ON DELETE SET NULL，删报告后 plan_run_cases 的链接被置空；
-    // 此刻 plan_runs 已删，成员行随之级联消失，不留悬挂引用。
+    // The report_id FK is ON DELETE SET NULL; deleting reports nulls plan_run_cases' links;
+    // by then plan_runs is already gone and member rows cascade away with it, leaving no dangling references.
     await db.delete(reports).where(inArray(reports.id, reportIds));
     await Promise.all(reportIds.map((id) => unlinkReportScreenshots(id).catch(() => {})));
   }
-  // 终态详情缓存失效:删除后重访必须立即可 404,不能返回幽灵快照
+  // Terminal detail cache invalidation: a revisit right after deletion must be able to 404 immediately, not return a ghost snapshot
   await Promise.all(deleted.map((d) => cache.del(planRunDetailKey(d.id))));
   return deleted.length;
 }
 
-/** 运行中的计划运行不允许删除：执行器还会往成员表和报告表继续写，删了库等于删一半。 */
+/** Running plan runs must not be deleted: the executor keeps writing to the member and report tables; deleting the DB rows equals deleting half. */
 export async function assertNotRunning(planRunIds: string[]): Promise<void> {
   const running = await db
     .select({ id: planRuns.id })
@@ -79,9 +80,9 @@ const PLAN_RUN_TERMINAL_STATUSES = ['passed', 'failed', 'cancelled'];
 const PLAN_RUN_DETAIL_TTL_MS = 5 * 60_000;
 
 /**
- * 组装运行详情 payload;运行不存在返回 null(wrap 不缓存 null,删除后立即可 404)。
- * 终态快照仍可能因 rca 落库/成员报告删除而变化——前者由 rcaWorker/saveRcaResult 显式失效,
- * 后者靠 TTL 兜底(已知取舍,见 planRunDetailKey)。
+ * Assemble the run detail payload; returns null when the run doesn't exist (wrap doesn't cache null, so a deleted run can 404 immediately).
+ * Terminal snapshots can still change due to rca persistence / member report deletion — the former is invalidated
+ * explicitly by rcaWorker/saveRcaResult, the latter relies on TTL as fallback (a known tradeoff, see planRunDetailKey).
  */
 async function buildPlanRunDetail(runId: string) {
   const run = (await db.select().from(planRuns).where(eq(planRuns.id, runId)))[0];
@@ -92,19 +93,19 @@ async function buildPlanRunDetail(runId: string) {
     .where(eq(planRunCases.planRunId, run.id))
     .orderBy(asc(planRunCases.order));
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, run.planId)))[0];
-  // 批量查 case 标题，避免 N+1
+  // Batch-fetch case titles, avoiding N+1
   const caseIds = Array.from(new Set(caseRows.map((c) => c.caseId)));
   const titleRows = caseIds.length
     ? await db.select({ id: testCases.id, title: testCases.title }).from(testCases).where(inArray(testCases.id, caseIds))
     : [];
   const titleMap = new Map(titleRows.map((t) => [t.id, t.title]));
-  // 数据集迭代：批量取全部行 report 的状态，供前端展示「i/N 行通过」
+  // Dataset iterations: batch-fetch the statuses of all row reports so the frontend can show "i/N rows passed"
   const reportIdList = caseRows.flatMap((c) => (Array.isArray(c.reportIds) ? c.reportIds : []));
   const statusRows = reportIdList.length
     ? await db.select({ id: reports.id, status: reports.status }).from(reports).where(inArray(reports.id, reportIdList))
     : [];
   const statusMap = new Map(statusRows.map((r) => [r.id, r.status]));
-  // 批量取每份报告的最后断言（vision reason / 失败步 error），口径与 /executions 列表一致
+  // Batch-fetch each report's last assertion (vision reason / failed step error), same criterion as the /executions list
   const allReportIds = Array.from(
     new Set([...reportIdList, ...caseRows.map((c) => c.reportId).filter((v): v is string => !!v)]),
   );
@@ -112,7 +113,7 @@ async function buildPlanRunDetail(runId: string) {
     ? await db
         .select({
           id: reports.id,
-          // 最后断言：step_results 数组末位元素 —— vision reason 优先，否则失败步 error
+          // Last assertion: the last element of the step_results array — vision reason first, otherwise the failed step's error
           lastAssertion: sql<string | null>`
             case
               when jsonb_typeof(${reports.stepResults}) = 'array' and jsonb_array_length(${reports.stepResults}) > 0 then
@@ -132,7 +133,7 @@ async function buildPlanRunDetail(runId: string) {
   const assertionMap = new Map(assertionRows.map((r) => [r.id, r.lastAssertion]));
   const cases = caseRows.map((c) => {
     const ids = c.reportIds?.length ? c.reportIds : c.reportId ? [c.reportId] : [];
-    // 数据集多行：优先展示首个失败行的断言；全过则取末行
+    // Dataset multi-row: prefer the first failed row's assertion; when all pass, take the last row
     const assertions = ids.map((id) => assertionMap.get(id) ?? null);
     const failedIdx = ids.findIndex((id) => statusMap.get(id) === 'failed');
     const lastAssertion = (failedIdx >= 0 ? assertions[failedIdx] : assertions[assertions.length - 1]) ?? null;
@@ -154,9 +155,9 @@ async function buildPlanRunDetail(runId: string) {
 planRunsRoute.get('/:id', async (req, res) => {
   const run = (await db.select({ id: planRuns.id, projectId: planRuns.projectId, status: planRuns.status }).from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
   if (!run) throw new HttpError(404, 'not_found', 'plan run not found');
-  // 可见性必须在缓存之外:缓存的是数据不是鉴权结果,跨组织用户不得命中他人 payload
+  // Visibility must stay outside the cache: what's cached is data, not authorization results; cross-org users must not hit someone else's payload
   await assertProjectVisible(run.projectId, req.user!);
-  // 运行中(轮询期)实时组装不缓存;终态快照缓存 5min,前端 2s 轮询/重访共享同一份
+  // While running (polling) assemble in real time, uncached; terminal snapshots cache 5min, shared by the frontend's 2s polling/revisits
   const payload = PLAN_RUN_TERMINAL_STATUSES.includes(run.status)
     ? await cache.wrap(planRunDetailKey(run.id), PLAN_RUN_DETAIL_TTL_MS, () => buildPlanRunDetail(run.id))
     : await buildPlanRunDetail(run.id);
@@ -184,7 +185,7 @@ planRunsRoute.delete('/:id', async (req, res) => {
 
 planRunsRoute.post('/batch-delete', async (req, res) => {
   const body = z.object({ planRunIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
-  // 与 reports/batch-delete 一致：按可见性逐个校验，违规直接 404
+  // Same as reports/batch-delete: validate visibility one by one, violations 404 immediately
   for (const id of body.planRunIds) await assertPlanRunVisible(id, req.user!);
   await assertNotRunning(body.planRunIds);
   const count = await deleteRunsWithReports(body.planRunIds);
@@ -198,7 +199,7 @@ planRunsRoute.get('/:id/events', async (req, res) => {
     res.status(404).end();
     return;
   }
-  // EventSource 无法带自定义头，靠 cookie 鉴权；不可见一律断开
+  // EventSource cannot carry custom headers; auth relies on cookies; invisible always disconnects
   try {
     await assertProjectVisible(run.projectId, req.user!);
   } catch {
@@ -221,9 +222,9 @@ planRunsRoute.get('/:id/events', async (req, res) => {
   req.on('close', () => unsub());
 });
 
-/** 计划运行的实时画面（MJPEG）：runPlanAsync 注册的 `planrun:<id>` 源；运行中才可连。
- *  ?replay=1 为本轮运行的录制回放（执行结束 30min 内）；&speed=N 为回放倍速；
- *  ?replay=meta 探测录制是否仍可回放（前端据此决定是否显示「回放」按钮）。 */
+/** Plan run live view (MJPEG): the `planrun:<id>` source registered by runPlanAsync; connectable only while running.
+ *  ?replay=1 replays this run's recording (within 30min after the run ends); &speed=N sets the replay speed;
+ *  ?replay=meta probes whether the recording is still replayable (the frontend uses this to decide whether to show the "replay" button). */
 planRunsRoute.get('/:id/live', async (req, res) => {
   const run = (await db.select().from(planRuns).where(eq(planRuns.id, req.params.id)))[0];
   if (!run) throw new HttpError(404, 'not_found', 'plan run not found');

@@ -18,7 +18,7 @@ const JWT_SECRET: string = process.env.AUTH_JWT_SECRET ?? ((): string => {
 const JWT_EXPIRES_IN = '8h';
 const SALT_ROUNDS = 10;
 
-// 首登强制改密用的短时 token：独立 scope，5 分钟有效
+// Short-lived token for forced password change on first login: separate scope, valid for 5 minutes
 const PASSWORD_CHANGE_TOKEN_TTL = '5m';
 
 export const PASSWORD_POLICY = {
@@ -67,7 +67,7 @@ function toSafeUser(row: typeof users.$inferSelect): SafeUser {
   };
 }
 
-/** JWT payload：携带完整租户上下文（激活组织 + 角色 + 可管理子树 + 吊销版本号）。 */
+/** JWT payload: carries the full tenant context (active org + roles + manageable subtree + revision version). */
 export interface AuthUser {
   userId: string;
   username: string;
@@ -99,7 +99,7 @@ export function generateSessionToken(u: AuthUser): string {
 export function verifySessionToken(token: string): AuthUser | null {
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as Record<string, unknown>;
-    // 缺 orgPath/managerOrgPaths/tokenVersion 的旧 token 强制重登
+    // Old tokens missing orgPath/managerOrgPaths/tokenVersion are forced to re-login
     if (typeof decoded.orgPath !== 'string' || decoded.orgPath.length === 0) return null;
     if (!Array.isArray(decoded.managerOrgPaths) || !decoded.managerOrgPaths.every((p) => typeof p === 'string')) return null;
     if (typeof decoded.tokenVersion !== 'number') return null;
@@ -141,15 +141,15 @@ export class PasswordValidationError extends Error {
   }
 }
 
-/** 从成员资格列表计算 managerOrgPaths（管理的组织的 path 列表）。 */
+/** Computes managerOrgPaths (the list of managed org paths) from the membership list. */
 function managerOrgPathsOf(memberships: Array<{ path: string; isManager: boolean }>): string[] {
   return memberships.filter((m) => m.isManager).map((m) => m.path);
 }
 
 /**
- * 某用户是否为「有效管理员」——算法与 login/switchOrganization 派生 AuthUser 完全同源：
- * path 最短的成员资格为激活组织；任一(激活其或祖先)成员资格 isManager → 有效管理员。
- * 供空间助手工具在无 JWT 上下文时，从 createdByUserId 惰性解析管理权限（membershipsOf 已缓存）。
+ * Whether the user is an "effective manager" — the algorithm shares its source of truth with how login/switchOrganization derive AuthUser:
+ * the shortest-path membership is the active org; any membership (of the active one or an ancestor) with isManager → effective manager.
+ * Lets space-assistant tools lazily resolve management rights from createdByUserId when there's no JWT context (membershipsOf is cached).
  */
 export async function isEffectiveManagerOf(userId: string): Promise<boolean> {
   const memberships = await membershipsOf(userId);
@@ -175,13 +175,13 @@ export type LoginResult =
 export async function login(username: string, password: string): Promise<LoginResult | null> {
   const user = await findByUsername(username);
   if (!user) {
-    // 时序对齐的 dummy bcrypt 比较，防止按响应时间枚举用户名
+    // Timing-aligned dummy bcrypt compare, preventing username enumeration via response time
     await bcrypt.compare('dummy', '$2b$10$0000000000000000000000000000000000000000000000000000');
     return null;
   }
   if (!(await verifyPassword(password, user.passwordHash))) return null;
 
-  // 首登（从未改密）或被标记强制改密 → 进入改密流程
+  // First login (never changed password) or flagged must-change → enter the password-change flow
   const mustReset = user.mustChangePassword || user.passwordUpdatedAt === null;
   if (mustReset) {
     return { status: 'password_change_required', passwordChangeToken: generatePasswordChangeToken(user.id, user.username), username: user.username };
@@ -190,7 +190,7 @@ export async function login(username: string, password: string): Promise<LoginRe
   const memberships = await membershipsOf(user.id);
   if (memberships.length === 0) return null;
 
-  // path 最短者优先（根组织优先）；同长按字典序稳定排序
+  // Shortest path wins (root org first); ties broken stably by lexicographic order
   const sorted = [...memberships].sort((a, b) => a.path.length - b.path.length || a.path.localeCompare(b.path));
   const active = sorted[0]!;
 
@@ -242,12 +242,12 @@ export async function getMe(userId: string, activeOrgId: string): Promise<{
   activeOrganizationId: string;
   organizations: Array<{ id: string; name: string; parentId: string | null; path: string; isManager: boolean; isUser: boolean }>;
 } | null> {
-  // tokenVersion 由调用方在 JWT 里携带,作为 key 后缀实现版本键:
-  // 登出/改密后 tokenVersion+1,旧 JWT 携带旧 tv → 旧 key 不可达(自然失效),无需主动 del。
-  // activeOrgId 不进 key(用户切换组织时 memberships 没变,允许同 tv 复用)。
+  // tokenVersion is carried in the JWT by the caller and used as a key suffix for versioned keys:
+  // after logout/password change tokenVersion+1, old JWTs carry the old tv → the old key is unreachable (naturally invalid), no explicit del needed.
+  // activeOrgId stays out of the key (memberships don't change when switching orgs, so the same tv can be reused).
   const user = await findById(userId);
   if (!user) return null;
-  // 用空字符串占位让 key 与 tokenVersion 强绑定,避免 activeOrgId 变化引入额外维度
+  // An empty-string placeholder strongly binds the key to tokenVersion, avoiding an extra dimension from activeOrgId changes
   const cacheKey = meKey(userId, user.tokenVersion);
   return wrap(cacheKey, 60_000, async () => {
     const memberships = await membershipsOf(userId);
@@ -260,8 +260,8 @@ export async function getMe(userId: string, activeOrgId: string): Promise<{
 }
 
 /**
- * 修改密码：校验强度 → 写新 hash + 清除强制改密标记 → tokenVersion+1
- * （改密即吊销：该用户所有现存 JWT 立即失效）。
+ * Change password: validate strength → write new hash + clear the must-change flag → tokenVersion+1
+ * (changing the password is revocation: all of the user's existing JWTs invalidate immediately).
  */
 export async function changePassword(userId: string, newPassword: string, opts: { checkOldByHash?: string } = {}): Promise<void> {
   const pv = validatePasswordStrength(newPassword);
@@ -281,14 +281,14 @@ export async function changePassword(userId: string, newPassword: string, opts: 
     .where(eq(users.id, userId));
 }
 
-/** 登出 → tokenVersion+1，让该用户所有现存 JWT 即时失效（单点登出踢掉全部设备，内部工具语义下更安全）。 */
+/** Logout → tokenVersion+1, instantly invalidating all of the user's existing JWTs (single-point logout kicks every device; safer for an internal tool). */
 export async function logout(userId: string): Promise<void> {
   const user = await findById(userId);
-  if (!user) return; // 用户不存在时静默成功
+  if (!user) return; // silently succeeds when the user doesn't exist
   await db.update(users).set({ tokenVersion: user.tokenVersion + 1, updatedAt: new Date() }).where(eq(users.id, userId));
 }
 
-/** 按 username 查用户（成员管理添加成员用）；不存在返回 null。 */
+/** Finds a user by username (used by member management to add members); returns null when missing. */
 export async function findUserByUsername(username: string): Promise<{ id: string; username: string; displayName: string } | null> {
   const rows = await db
     .select({ id: users.id, username: users.username, displayName: users.displayName })
@@ -299,21 +299,21 @@ export async function findUserByUsername(username: string): Promise<{ id: string
 }
 
 /**
- * 生成一次性临时密码（admin/manager 重置他人密码用）。满足 PASSWORD_POLICY：
- *   - 长度 12（介于 10-64 之间）
- *   - 含小写、大写、数字、特殊字符
- * 字符集避开易混淆字符（0/O、1/l/I），密码在控制台/聊天里复述不易抄错。
+ * Generates a one-time temporary password (for admin/manager resetting someone else's password). Satisfies PASSWORD_POLICY:
+ *   - length 12 (between 10-64)
+ *   - contains lowercase, uppercase, digits, special chars
+ * The charset avoids confusable characters (0/O, 1/l/I) so the password is less error-prone when relayed in a console/chat.
  */
 const TEMP_PASSWORD_LENGTH = 12;
 const TEMP_PASSWORD_CHARSET =
-  'abcdefghijkmnpqrstuvwxyz' + // 去掉 l
-  'ABCDEFGHJKLMNPQRSTUVWXYZ' + // 去掉 I, O
-  '23456789' + // 去掉 0, 1
+  'abcdefghijkmnpqrstuvwxyz' + // drop l
+  'ABCDEFGHJKLMNPQRSTUVWXYZ' + // drop I, O
+  '23456789' + // drop 0, 1
   '!@#$%^&*';
 export function generateRandomPassword(): string {
-  // crypto.randomInt 在 Node 22 是同步的，避免 callback 形态的额外开销
+  // crypto.randomInt is synchronous in Node 22, avoiding the callback-form overhead
   const buf = new Uint32Array(TEMP_PASSWORD_LENGTH);
-  // Node 全局 crypto 在 19+ 暴露 randomUUID / getRandomValues
+  // Node's global crypto exposes randomUUID / getRandomValues since 19+
   (globalThis.crypto as Crypto).getRandomValues(buf);
   let out = '';
   for (let i = 0; i < TEMP_PASSWORD_LENGTH; i++) {

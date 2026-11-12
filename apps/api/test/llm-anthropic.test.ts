@@ -13,7 +13,7 @@ import { newAiUsage } from '../src/execute/aiUsage.js';
 
 describe('AnthropicClient.complete · content 防守', () => {
   it('网关返回 200 但无 content（安全策略静默拦截形态）→ 抛带含义的 LLMProviderError，而非裸 TypeError', async () => {
-    // prod228 实测形态:200 + usage.output_tokens 0、无 content、无 stop_reason
+    // Shape observed in prod228: 200 + usage.output_tokens 0, no content, no stop_reason
     createMock.mockResolvedValueOnce({
       id: 'msg_1', type: 'message', role: 'assistant', model: 'gemini-3.8-flash-n',
       usage: { input_tokens: 1197, output_tokens: 0 },
@@ -54,7 +54,7 @@ describe('AnthropicClient.complete · max_tokens 可配置', () => {
     content: [{ type: 'text', text: '{"ok":true}' }],
     usage: { input_tokens: 5, output_tokens: 3 },
   };
-  /** 取最后一次请求体的 max_tokens。 */
+  /** Reads max_tokens from the last request body. */
   const lastMaxTokens = () => (createMock.mock.calls.at(-1)![0] as { max_tokens: number }).max_tokens;
 
   it('cfg.maxTokens=16384 → 请求体透传（思考模型把思考计入预算，4096 会被整段吃光致空文本）', async () => {
@@ -73,7 +73,7 @@ describe('AnthropicClient.complete · max_tokens 可配置', () => {
 });
 
 describe('AnthropicClient.complete · 缓存断点与多轮累积', () => {
-  /** 取最后一次 createMock 调用的请求体。 */
+  /** Reads the request body of the last createMock call. */
   function lastBody(): {
     system: Array<{ type: string; text?: string; cache_control?: unknown }>;
     messages: Array<{ role: string; content: Array<{ type: string; text?: string; cache_control?: unknown }> }>;
@@ -100,15 +100,15 @@ describe('AnthropicClient.complete · 缓存断点与多轮累积', () => {
       ],
     });
     const b = lastBody();
-    // system 带断点
+    // system carries a breakpoint
     expect(b.system[0]!.cache_control).toEqual({ type: 'ephemeral' });
     const msgs = b.messages;
     const lastMsg = msgs[msgs.length - 1]!;
-    // 末尾 block（图片）带断点：只打在最后一条，才能覆盖逐轮增长的历史
+    // Trailing block (the image) carries a breakpoint: only on the last message, so it covers the per-turn-growing history
     expect(lastMsg.content.at(-1)!.cache_control).toEqual({ type: 'ephemeral' });
-    // 同一条消息里非末尾的 block 不打（否则一个请求出现多个断点，浪费写入配额）
+    // Non-trailing blocks in the same message get none (otherwise one request carries multiple breakpoints, wasting write quota)
     expect(lastMsg.content[0]!.cache_control).toBeUndefined();
-    // 历史消息一律不打：它们靠"最后一条"的断点被前缀覆盖
+    // History messages never get one: they are prefix-covered by the "last message" breakpoint
     expect(msgs[0]!.content[0]!.cache_control).toBeUndefined();
     expect(msgs[1]!.content[0]!.cache_control).toBeUndefined();
   });
@@ -128,7 +128,7 @@ describe('AnthropicClient.complete · 缓存断点与多轮累积', () => {
     const b = lastBody();
     expect(b.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
     expect(b.messages[0]!.content[0]!.text).toBe('第1轮');
-    // 图片 block 转成 SDK 的 source 形态，并保住 base64
+    // Image blocks are converted to the SDK's source shape, preserving the base64
     const img = b.messages[2]!.content[1] as unknown as { type: string; source: { data: string; media_type: string } };
     expect(img.type).toBe('image');
     expect(img.source).toEqual({ type: 'base64', media_type: 'image/png', data: 'AAA' });
@@ -157,8 +157,8 @@ describe('AnthropicClient.complete · 缓存断点与多轮累积', () => {
   });
 
   it('端到端：client.usage 的缓存 token 能进到报告用的 aiUsage 累加器', async () => {
-    // 链路：AnthropicClient.complete → onUsage(r) → newAiUsage().stat（挂到 stepResult.aiUsage）。
-    // 中间任一环丢掉 cacheReadTokens，报告页就看不到命中率。
+    // Chain: AnthropicClient.complete → onUsage(r) → newAiUsage().stat (attached to stepResult.aiUsage).
+    // If any link drops cacheReadTokens, the report page can no longer show the hit rate.
     createMock.mockResolvedValueOnce({
       ...okResp,
       usage: { input_tokens: 12, output_tokens: 3, cache_read_input_tokens: 6000, cache_creation_input_tokens: 250 },

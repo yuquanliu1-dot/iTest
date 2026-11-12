@@ -1,15 +1,17 @@
 /**
- * solidify_case 工具：把视觉模式（aiTask / 纯 instruction）步骤固化为机械 compiled DSL，就地改写源用例。
- * 双模式用例的收敛路径：增量需求期步骤以自然语言由 AI 临场执行（视觉模式），功能稳定后固化成
- * 可机械回放的 compiled。编排与 verify_case 的 AI 相同骨架（登录占位符自愈 / 敏感解密 / watchdog），
- * 差异仅在 runAiTask 挂 onAction 收集器：AI 实际执行过的 click/fill/navigate 机械映射为 DSL 动作，
- * 映射结果经 stage_case_op update_step 暂存（草稿用例则整例重暂存），最终由 verify_case 验收
- * （含 compiled 机械干跑）后才落库。副作用与执行一致（会真实再跑一遍用例）。
+ * solidify_case tool: solidifies visual-mode (aiTask / pure instruction) steps into mechanical compiled DSL, rewriting the source case in place.
+ * The convergence path for dual-mode cases: during incremental-requirement periods steps run live as natural language by the AI (visual mode);
+ * once the functionality stabilizes they solidify into mechanically replayable compiled. Orchestration shares the verify_case AI skeleton
+ * (login placeholder self-heal / sensitive decryption / watchdog); the only difference is that runAiTask hooks an onAction collector:
+ * the click/fill/navigate the AI actually executed map mechanically to DSL actions, the mapping is staged via stage_case_op update_step
+ * (draft cases get the whole case re-staged), and only after verify_case acceptance (including a compiled mechanical dry run) does it persist.
+ * Side effects match real execution (it genuinely re-runs the case).
  *
- * 安全：登录/敏感 fill 在 AI 相走占位符协议（valueSub 执行时刻替换），onAction 收到的是替换前的
- * 原始动作参数——占位符字面量出现在收集值里时该步不机械固化（凭据属于环境，不属于用例），
- * 但会固化为带凭据占位提示的 aiTask 执行步：回放 aiTask 分支经 valueSub/preflight 替换与把关，
- * 字面量本身无真实凭据，aiTaskCache 也不会缓存凭据填充（cdp 只在映射成功时写缓存）。
+ * Safety: login/sensitive fill go through the placeholder protocol in the AI phase (valueSub substitutes at execution time); onAction receives
+ * the pre-substitution original action params — when a placeholder literal shows up in the collected values, that step is not mechanically
+ * solidified (credentials belong to the environment, not the case), but it does solidify into an aiTask execution step carrying a credential
+ * placeholder hint: the replay aiTask branch goes through valueSub/preflight substitution and gating, the literal itself carries no real
+ * credentials, and aiTaskCache never caches credential fills (cdp writes the cache only on successful mapping).
  */
 import { randomUUID } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
@@ -44,14 +46,14 @@ import type { SpaceToolsContext } from './context.js';
 import { st, type StLang } from '../../../i18n.js';
 import { aiLangFrom } from '../../../agent/langDirective.js';
 
-/** caseId 是 UUID 形状才允许直查 testCases.id（uuid 列）；否则只可能是草稿 localId，跳过 DB 查询
- *  （与 verify_case 同款防御：非 UUID 直查 uuid 列会炸 invalid input syntax for type uuid）。 */
+/** Only a UUID-shaped caseId may query testCases.id directly (uuid column); otherwise it can only be a draft localId — skip the DB query
+ *  (same defense as verify_case: querying a uuid column with a non-UUID throws invalid input syntax for type uuid). */
 const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 步骤是否已是「AI 执行步固化」的稳定产物（compiled=[aiTask] 且 instruction 未被改过）。
- *  幂等的关键：这类步骤的固化输出是其 instruction 的确定性函数，重复固化只会原样覆盖；
- *  但不设防时每轮仍会为它真跑一遍 AI 再映射——轨迹一变（如被二次 full 覆盖缓存）产物就漂移。
- *  已固化态直接跳过重映射；用户改过 instruction（≠ 存量 aiTask.instruction）即视为要求重固化。 */
+/** Whether the step is already the stable product of "AI-execution-step solidification" (compiled=[aiTask] and its instruction unmodified).
+ *  Key to idempotency: this class of step's solidify output is a deterministic function of its instruction — re-solidifying would only overwrite identically;
+ *  but unguarded, every round would still really run the AI and re-map it — any trace change (e.g. being overwritten by a second full run's cache) makes the product drift.
+ *  Already-solidified steps skip remapping outright; a user-edited instruction (≠ the stored aiTask.instruction) counts as a re-solidify request. */
 function isAiTaskSolidified(s: EffectiveStep): boolean {
   const c = Array.isArray(s.compiled) ? s.compiled : [];
   if (c.length !== 1) return false;
@@ -61,32 +63,35 @@ function isAiTaskSolidified(s: EffectiveStep): boolean {
   return inst.length > 0 && a.instruction === inst;
 }
 
-// 与 verify_case 同款伸缩预算：AI 逐步骤临场执行是慢路径（prod228 实测 85~107s/步），
-// 固定 300s 只装得下 2~3 步用例——多步用例 solidify 必超时（批量固化报告实测）。
-// 预算 = max(保底 300s, 步数 × 130s/步)，公式与 verify_case 的 computeVerifyTimeoutMs 一致。
+// Stretching budget, same as verify_case: AI live per-step execution is the slow path (prod228 measured 85~107s/step);
+// a fixed 300s only fits 2~3-step cases — multi-step cases would always time out (measured in the batch-solidify report).
+// Budget = max(floor 300s, steps × 130s/step); the formula matches verify_case's computeVerifyTimeoutMs.
 const SOLIDIFY_TIMEOUT_BASE_MS = 300_000;
 const SOLIDIFY_TIME_PER_STEP_MS = 130_000;
 const STEP_MAX_TURNS = 5;
 
-/** 全局看门狗预算 = max(基础 300s, 步数 × 每步 130s)。 */
+/** Global watchdog budget = max(base 300s, steps × 130s per step). */
 export function computeSolidifyTimeoutMs(stepCount: number): number {
   return Math.max(SOLIDIFY_TIMEOUT_BASE_MS, stepCount * SOLIDIFY_TIME_PER_STEP_MS);
 }
 
-// 映射实现已下沉 execute/aiActionMap.ts（aiTask 运行时缓存共用），此处转出口径不变（测试直接 import 本模块）。
-// isVisualStep 同源下沉（verify_case 轨迹收集共用），转出口径不变。
+// The mapping implementation sank to execute/aiActionMap.ts (shared with the aiTask runtime cache); the re-export surface here is unchanged (tests import this module directly).
+// isVisualStep sank the same way (shared with verify_case trace collection); the re-export surface is unchanged.
 export { mapAiActionsToCompiled, isVisualStep, type SolidifyMapResult } from '../../../execute/aiActionMap.js';
 
 /**
- * 映射 + 暂存：把收集到的 AI 动作轨迹逐视觉步骤映射为 compiled 并暂存（DB 用例逐步骤
- * update_step 确定性 localId 幂等覆盖；草稿用例整例重暂存）。真跑收集与轨迹缓存两路共用。
- * 映射失败（凭据占位/press/选择器不可映射/纯观察动作）但有 instruction 的步骤固化为显式
- * aiTask 执行步——留 null 会让机械验收与正式回放在该步 compile-missing 卡死（prod228 实测）。
+ * Mapping + staging: maps the collected AI action trail per visual step into compiled and stages it (DB cases get per-step
+ * update_step overwrites keyed by deterministic localId, idempotent; draft cases get the whole case re-staged). Shared by both the
+ * real-run collection path and the trace-cache path.
+ * Steps whose mapping failed (credential placeholder / press / unmappable selector / pure observational action) but that have an
+ * instruction solidify into explicit aiTask execution steps — leaving null would deadlock mechanical acceptance and formal replay
+ * at that step with compile-missing (measured on prod228).
  */
-/** 导航步冗余探测（只提示不删）：case.url 是深链（非根路径/非登录页）直达目标页时，
- *  首步再写「进入 XX 菜单」就是冗余导航——init goto 已落地目标页，回放时的菜单 click/
- *  navigate 是重复动作，还可能把页面带离深链落地页。2026-10-28 prod228 实录：用例 url
- *  直达资产详情页，首步仍「进入资产管理菜单」。措辞千变万化，仅认菜单语义词。 */
+/** Redundant-navigation detection for the first step (advisory only, never deletes): when case.url is a deep link (non-root path,
+ *  non-login page) that lands on the target page directly, a first step saying 「进入 XX 菜单」 is redundant navigation — the init
+ *  goto already landed on the target page, so the menu click/navigate in replay is a repeated action and may even carry the page
+ *  away from the deep-link landing page. 2026-10-28 prod228 record: the case url went straight to an asset-detail page yet the
+ *  first step still said 「进入资产管理菜单」. Wording varies endlessly; only menu-semantic words are recognized. */
 const NAV_STEP_RE = /进入|导航|跳转|打开.{0,10}菜单|点击.{0,10}菜单/;
 
 export function isDeepLinkUrl(raw: string): boolean {
@@ -106,9 +111,9 @@ async function mapAndStageSteps(
     dbCase: typeof testCases.$inferSelect | null | undefined;
     stagedCase: typeof aiStageCases.$inferSelect | null;
     lang: StLang;
-    /** 用例有效 url（叠加暂存后）：首步导航冗余探测用。 */
+    /** The case's effective url (after staging overlay): used for first-step redundant-navigation detection. */
     caseUrl?: string | null;
-    /** 本线程该用例的暂存 op（含 localId）：叠加态步骤要把 compiled 写回对应的 insert 行。 */
+    /** This thread's staged ops for the case (with localId): overlay-state steps write their compiled back to the matching insert row. */
     stagedOps?: Array<{ localId: string; op: string; payload: unknown }>;
   },
 ): Promise<{ stepReports: Array<Record<string, unknown>>; solidifiedCount: number; keptCount: number }> {
@@ -118,7 +123,7 @@ async function mapAndStageSteps(
   const stepReports: Array<Record<string, unknown>> = [];
   let solidifiedCount = 0;
   let keptCount = 0;
-  // 首步导航冗余提示（advisory）：深链直达 + 首步是「进入菜单」类导航才提示。
+  // First-step redundant-navigation note (advisory): only when deep-link direct + the first step is a 「进入菜单」-style navigation.
   const navNote = (() => {
     const url = typeof opts.caseUrl === 'string' ? opts.caseUrl : '';
     const first = effectiveSteps[0];
@@ -147,18 +152,19 @@ async function mapAndStageSteps(
     const mapped = mapAiActionsToCompiled(collected.get(s.id) ?? []);
     const inst = typeof s.instruction === 'string' ? s.instruction.trim() : '';
     if (!mapped.ok && !inst) {
-      // 连 instruction 都没有的步骤无法固化为 aiTask（无执行语义），只能保持 null
+      // A step without even an instruction cannot solidify into an aiTask (no execution semantics); it can only stay null
       keptCount += 1;
       stepReports.push({ ...base, status: 'kept-aiTask', reason: mapped.reason });
       continue;
     }
-    // 映射失败但有 instruction：固化为显式 AI 执行步（平台约定 AI 执行步必须显式 aiTask，不能留
-    // null——留 null 机械验收/正式回放会在该步 compile-missing 卡死）。机械回放的 aiTask 分支
-    // 真实执行该步（含凭据自助登录），映射原因附在 reason 供人工审查。
+    // Mapping failed but an instruction exists: solidify into an explicit AI execution step (the platform convention is that AI execution
+    // steps must be explicit aiTask — leaving null would deadlock mechanical acceptance/formal replay at that step with compile-missing).
+    // The mechanical-replay aiTask branch genuinely executes the step (including credential self-service login); the mapping reason is
+    // attached in reason for human review.
     const fallback = !mapped.ok;
     const credentialBlock = fallback && /凭据占位符/.test(mapped.reason);
-    // 凭据被拒的步骤在 instruction 里教回放 AI 自助登录：裸占位符非 {{}} 形态不被 substituteVars
-    // 碰，valueSub/credentialPreflight 在填入瞬间替换/把关（与环境无凭据时 fail-fast）。
+    // For credential-refused steps the instruction teaches the replay AI self-service login: bare placeholders aren't in {{}} form so
+    // substituteVars doesn't touch them; valueSub/credentialPreflight substitute/gate at fill time (fail-fast when the environment has no credentials).
     const aiInstruction = credentialBlock
       ? `${inst}（若页面已处于登录后状态则直接完成；用户名输入框填 ${USER_PH}、密码填 ${PASSWORD_PH}，平台在填入瞬间替换为环境真实凭据）`.slice(0, 2000)
       : inst;
@@ -178,18 +184,18 @@ async function mapAndStageSteps(
             ...(warning ? { warning } : {}),
           },
     );
-    // 暂存写：DB 用例逐步骤 update_step（确定性 localId，重复固化幂等覆盖）；草稿整例重暂存。
+    // Staging write: DB cases get per-step update_step (deterministic localId; re-solidify overwrites idempotently); drafts get the whole case re-staged.
     //
-    // 叠加态步骤（id 形如 staged:<insertLocalId>，即「暂存里已插入、还没落库」的步骤）：
-    // 机械 compiled 写回那一条 insert 暂存行，不暂存 update_step——合成 stepId 不是 uuid，
-    // 落库时的 uuid 校验会把整条 op 拒掉，用户点保存只看到「参数校验失败，请检查输入」
-    // （prod228 2026-11-11 实测）。
+    // Overlay-state steps (id shaped like staged:<insertLocalId>, i.e. "inserted in staging, not yet persisted"):
+    // the mechanical compiled is written back to that one insert staging row, not staged as update_step — the synthetic stepId
+    // is not a uuid, so the uuid validation at persist time would reject the whole op and the user would only see
+    // 「参数校验失败，请检查输入」 when clicking save (measured on prod228 2026-11-11).
     if (dbCase) {
       const insertLocalId = overlayInsertLocalId(s.id);
       if (insertLocalId) {
         const pending = opts.stagedOps?.find((o) => o.localId === insertLocalId);
         if (!pending || pending.op !== 'insert_step') {
-          // 找不到对应的 insert 暂存行（不该发生）→ 不产出非法 op，报告里点名。
+          // No matching insert staging row found (shouldn't happen) → produce no invalid op; call it out in the report.
           stepReports.push({ ...base, status: 'skipped-overlay', reason: '叠加态步骤找不到对应的暂存插入行，未暂存修改' });
           continue;
         }
@@ -267,11 +273,11 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
     execute: async (input, signal) => {
       const lang: StLang = aiLangFrom(ctx.lang);
       const { caseId } = input as { caseId: string };
-      // 停止检查点：会话已停止就直接短路，不起浏览器不烧 LLM。
+      // Stop checkpoint: if the session already stopped, short-circuit directly — no browser launch, no LLM spend.
       if (signal?.aborted) return { ok: false, error: '已停止：用户中断了本次固化' };
       try {
-        // ── 前置校验（不启动浏览器）：caseId 双形态，与 verify_case 一致 ──
-        // 非 UUID 形状的 localId 跳过 uuid 列查询直查草稿（同 verify_case）
+        // ── Preflight validation (no browser launch): caseId dual shape, same as verify_case ──
+        // Non-UUID-shaped localIds skip the uuid-column query and go straight to drafts (same as verify_case)
         const dbCase = UUID_SHAPE_RE.test(caseId)
           ? (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0]
           : undefined;
@@ -294,7 +300,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               expectedOutcome: dbCase.expectedOutcome,
               defaultEnvId: dbCase.defaultEnvId,
               versionId: dbCase.versionId,
-              // 用例绑定的 web 服务名：无 @ref 占位符的凭据归属（与执行层/verify_case 同一把尺）。
+              // The case-bound web service name: credential ownership for non-@ref placeholders (same yardstick as the execution layer / verify_case).
               webServiceRef: dbCase.webServiceRef ?? null,
             }
           : {
@@ -303,7 +309,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               expectedOutcome: stagedCase!.expectedOutcome ?? null,
               defaultEnvId: stagedCase!.defaultEnvId ?? null,
               versionId: stagedCase!.versionId,
-              // 暂存表无 web_service_ref 列，草稿恒走默认链。
+              // The staging table has no web_service_ref column; drafts always take the default chain.
               webServiceRef: null,
             };
         const steps: EffectiveStep[] = dbCase
@@ -322,12 +328,12 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }));
         if (steps.length === 0) return { ok: false, error: '用例没有可执行的步骤' };
 
-        // 暂存叠加（与 verify_case 一致：基于暂存状态继续）
+        // Staging overlay (same as verify_case: continue from the staged state)
         let effectiveSteps = steps;
         const overlayPatches: { url?: string | null; defaultEnvId?: string | null } = {};
         let opsApplied = 0;
-        // 暂存 op 清单带 localId：叠加态步骤的合成 id 是 staged:<insert op 的 localId>，
-        // 固化要把机械 compiled 写回那一条 insert 暂存行——没有 localId 就定位不到目标行。
+        // The staged-op listing carries localId: an overlay-state step's synthetic id is staged:<the insert op's localId>,
+        // and solidify must write the mechanical compiled back to that one insert staging row — without localId the target row can't be located.
         let stagedOps: Array<{ localId: string; op: string; payload: unknown }> = [];
         if (dbCase) {
           stagedOps = await db
@@ -346,17 +352,17 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         }
         if (effectiveSteps.length === 0) return { ok: false, error: '用例没有可执行的步骤' };
 
-        // 可固化候选 = 视觉模式且非敏感且未处于 AI 执行步固化态（isAiTaskSolidified 已固化的
-        // 步骤保持原样 → 重复固化幂等，见 P1-1）。全无候选时直接短返回，不启动浏览器。
+        // Solidifiable candidates = visual mode, non-sensitive, and not already an AI-execution-step solidification (isAiTaskSolidified
+        // already-solidified steps stay as they are → re-solidify is idempotent, see P1-1). With zero candidates, return early; no browser launch.
         const visualSteps = effectiveSteps.filter((s) => isVisualStep(s) && !isAiTaskSolidified(s));
         if (visualSteps.length === 0) {
           return { ok: false, error: '用例没有待固化的视觉模式步骤（全部已编译、已是 AI 执行步固化或为敏感步骤），无需固化——重复调用是幂等的。若要重新固化某步，先用 stage_case_op update_step 把该步 compiled 置 null（或改它的 instruction）。' };
         }
         const effectiveCase = { ...caseMeta, ...overlayPatches };
 
-        // ── 轨迹缓存命中：verify_case 实测整轮通过且步骤/环境未变 → 零执行秒级固化 ──
-        // 不启动浏览器、不需要 LLM/环境解析（哈希输入全部来自 effectiveCase/effectiveSteps）；
-        // 过期命中会删条目并回退真跑（solidify 自产的 solidify-* ops 会改 overlay → 哈希变 → 自然失效）。
+        // ── Trace cache hit: verify_case's measured full pass with steps/environment unchanged → zero-execution second-level solidify ──
+        // No browser launch, no LLM/environment resolution needed (all hash inputs come from effectiveCase/effectiveSteps);
+        // a stale hit deletes the entry and falls back to a real run (solidify's own solidify-* ops change the overlay → hash changes → naturally invalidated).
         const cachedTrace = takeFreshTrace(
           traceKey(ctx.threadId, caseId),
           hashEffectiveSteps(effectiveSteps),
@@ -389,7 +395,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           };
         }
 
-        // ── LLM 前置检查 ──
+        // ── LLM preflight check ──
         let client: Awaited<ReturnType<typeof resolveLlmClient>>['client'];
         try {
           client = (await resolveLlmClient()).client;
@@ -397,7 +403,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           return { ok: false, error: `LLM 未配置，无法执行 AI 固化: ${(e as Error).message}` };
         }
 
-        // ── 环境解析 ──
+        // ── Environment resolution ──
         let envCtx: Awaited<ReturnType<typeof resolveEnv>>;
         try {
           envCtx = await resolveEnv(
@@ -410,12 +416,12 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (errName === 'EnvProjectMismatch') return { ok: false, error: '环境所属项目与当前用例不匹配' };
           return { ok: false, error: `环境解析失败: ${(e as Error).message}` };
         }
-        // 提示词里的 web 服务清单（只含 name/origin/有无凭据，绝不含真实值）；环境解析后算一次，逐步骤复用。
+        // Web-service listing for prompts (name/origin/credential-presence only, never real values); computed once after environment resolution, reused per step.
         const webManifest = (() => {
           try { return renderWebResourceManifest({ envCtx }); } catch { return ''; }
         })();
 
-        // ── 浏览器 + watchdog → 逐步骤 AI 驱动执行（与 verify_case AI 相同骨架）+ onAction 收集 ──
+        // ── Browser + watchdog → per-step AI-driven execution (same skeleton as verify_case's AI phase) + onAction collection ──
         let browser: Browser | undefined;
         let live: ReturnType<typeof registerLiveView> | undefined;
         let timedOut = false;
@@ -424,21 +430,21 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           timedOut = true;
           if (browser) void browser.close().catch(() => undefined);
         }, solidifyTimeoutMs);
-        // 停止守卫：用户点停止即抢占在途 AI；finally 关浏览器让残余操作随之终止。
+        // Stop guard: a user stop preempts the in-flight AI; the finally block closes the browser so residual work terminates with it.
         const stopGuard = abortGuard(signal, '已停止：用户中断了本次固化');
         try {
           const resolvedUrl = await resolveCaseUrl(
             {
               url: effectiveCase.url,
-              // 草稿无 DB 行:groupId 在传 envCtx 时未被使用(仅 defaultEnvFallback 的 displayWebEnv 需要),填空串;
-              // webServiceRef 草稿无法绑定命名服务 → null 走默认 web 服务。
+              // Drafts have no DB row: groupId goes unused when passing envCtx (only defaultEnvFallback's displayWebEnv needs it), so pass an empty string;
+              // a draft's webServiceRef can't bind a named service → null takes the default web service.
               groupId: stagedCase ? '' : dbCase!.groupId,
               webServiceRef: stagedCase ? null : (dbCase!.webServiceRef ?? null),
             },
             { envCtx },
           );
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
-          // 停止检查点：起浏览器前再探一次（前置校验/环境解析期间用户可能已点停止）。
+          // Stop checkpoint: probe once more before launching the browser (the user may have hit stop during preflight/environment resolution).
           if (signal?.aborted) return { ok: false, error: '已停止：用户中断了本次固化' };
           browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
           const loginKey = loginStateKey(envCtx.envId, envCtx.login?.user);
@@ -449,11 +455,11 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(cachedState ? { storageState: cachedState } : {}),
           });
           const page = await context.newPage();
-          // 浏览器 console error / pageerror 采集：本路径不经 runStepsInContext（AI 相自管 page），
-          // 自挂一次订阅，失败时 drain 进归因证据。
+          // Browser console error / pageerror capture: this path doesn't go through runStepsInContext (the AI phase manages the page itself),
+          // so subscribe once here and drain into the attribution evidence on failure.
           const consoleCapture = createConsoleCapture(page);
-          // playground 实时画面：与 verify_case 同模式（注册页面源 → start 事件带流地址 → finally close）。
-          // ctx.liveView === false 为批量后台链路：不注册画面源，省 0.5fps 截图轮询开销。
+          // Playground live view: same pattern as verify_case (register the page source → the start event carries the stream url → finally close).
+          // ctx.liveView === false means a batch background path: no page source is registered, saving the 0.5fps screenshot polling cost.
           if (ctx.liveView !== false) {
             live = registerLiveView();
             live.setPage(page);
@@ -470,16 +476,16 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
-          // 占位符 → 真实值。复用执行层唯一实现（与 verify_case/机械回放同一把尺）。
+          // Placeholder → real value. Reuses the execution layer's single implementation (same yardstick as verify_case/mechanical replay).
           let stepSecret: string | undefined;
-          // 每次取值都重新构造源：stepSecret 逐步骤解密后才赋值，构造时快照会把敏感值冻在 undefined。
+          // Reconstruct the source on every evaluation: stepSecret is decrypted per step before being assigned — snapshotting at construction would freeze sensitive values at undefined.
           const valueSub = (v: string): string =>
             makeCredentialValueSub(
               buildCredentialSource({ envCtx, caseWebServiceRef: effectiveCase.webServiceRef }, stepSecret),
             )(v);
 
           const reportId = `solidify-${randomUUID()}`;
-          // stepId → 该步骤收集到的成功动作（按执行顺序）。AI 相对动作的原始参数（占位符未替换）。
+          // stepId → the successful actions collected for that step (in execution order). The AI phase's original action params (placeholders unsubstituted).
           const collected = new Map<string, AiAction[]>();
           let failedIndex = -1;
           let failedError = '';
@@ -494,7 +500,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           for (let i = 0; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
             const solidifiable = isVisualStep(s) && !s.sensitive && !isAiTaskSolidified(s);
-            // 停止检查点：每步开始前探测，命中即收尾 cancelled（不暂存任何修改）。
+            // Stop checkpoint: probe at the start of each step; on hit, wrap up as cancelled (nothing gets staged).
             if (signal?.aborted) {
               ctx.emit({ type: 'solidify_progress', phase: 'end', result: 'cancelled' });
               return { ok: false, error: '已停止：用户中断了本次固化（未暂存任何修改）' };
@@ -535,7 +541,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 maxTurns: STEP_MAX_TURNS,
                 valueSub,
                 lang: ctx.lang,
-                // 只收集可固化步骤的动作；敏感步骤凭据动作不进收集（占位符协议值本就无真实凭据，但语义上凭据不属于用例）
+                // Only collect actions from solidifiable steps; sensitive steps' credential actions stay out of the collection (placeholder protocol values carry no real credentials anyway, but semantically credentials don't belong to the case)
                 onAction: (action, ok) => {
                   if (solidifiable && ok) stepActions.push(action);
                 },
@@ -550,7 +556,7 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               }
               if (solidifiable && stepActions.length > 0) collected.set(s.id, stepActions);
             } catch (e) {
-              // 用户停止：丢弃在途 aiRun（finally 关浏览器令其终止），不暂存任何修改。
+              // User stopped: drop the in-flight aiRun (the finally block closes the browser, terminating it), stage nothing.
               if (signal?.aborted) {
                 void aiRun?.catch(() => undefined);
                 ctx.emit({ type: 'solidify_progress', phase: 'end', result: 'cancelled' });
@@ -564,15 +570,15 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
-          // 登录态回写（与 verify_case 一致：无条件存当前会话，未登录存匿名会话亦自愈）
+          // Login-state writeback (same as verify_case: unconditionally store the current session; storing an anonymous session when not logged in also self-heals)
           const savedState = await context.storageState().catch(() => null);
           if (savedState) saveLoginState(loginKey, savedState);
 
-          // 执行失败：不暂存任何修改（原子语义），失败页元素清单供 agent 修正 instruction 后重跑
+          // Execution failed: stage nothing (atomic semantics); the failed page's element list lets the agent fix the instruction and re-run.
           if (failedIndex >= 0) {
             const failurePage = await extractPageElements(page).catch(() => null);
             const failedStep = effectiveSteps[failedIndex]!;
-            // 失败归因（与 verify_case 同一判别）：形态无关探针（每条 locator 实时命中数）+ 浮层清单 + 元素清单交 LLM 归因。
+            // Failure attribution (same discriminator as verify_case): shape-agnostic probes (per-locator live hit counts) + overlay list + element list handed to the LLM for attribution.
             const probes = await probeLocatorHits(page, collectStepLocators(failedStep.compiled));
             const evidence = await extractPageEvidence(page).catch(() => ({ overlays: [] as Array<{ tag: string; selector: string; text: string }> }));
             const consoleEntries = consoleCapture.drain();
@@ -604,13 +610,13 @@ export function buildSolidifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             };
           }
           if (timedOut) return { ok: false, error: `固化超时（${solidifyTimeoutMs / 1000}s）已终止` };
-          // 停止检查点：映射/暂存前再探一次——停止意味着什么都不暂存。
+          // Stop checkpoint: probe once more before mapping/staging — a stop means nothing gets staged.
           if (signal?.aborted) {
             ctx.emit({ type: 'solidify_progress', phase: 'end', result: 'cancelled' });
             return { ok: false, error: '已停止：用户中断了本次固化（未暂存任何修改）' };
           }
 
-          // ── 映射 + 暂存：全部步骤执行通过，逐视觉步骤把收集到的动作映射为 compiled ──
+          // ── Mapping + staging: all steps executed successfully; map each visual step's collected actions into compiled ──
           const { stepReports, solidifiedCount, keptCount } = await mapAndStageSteps(
             ctx, effectiveSteps, collected, { dbCase, stagedCase, lang, caseUrl: effectiveCase.url, stagedOps },
           );

@@ -1,13 +1,17 @@
 /**
- * R3.5 失败教训蒸馏层：
- *  - collectUnconsumedSignals：S1 回滚/恢复默认（既有版本链直查）+ S2 负向反馈 + S3 nl_ai_fail
- *    + R3.6 S4 session（近 7 天会话质量，采集器见 sessionSignals.ts），
- *    过滤「已被任意 status 教训 signals 引用」的信号（一次性消费，防 retire→再喂循环）。
- *  - distillLessons：LLM call#1，逐条归因（prompt/step_description/platform/sut），
- *    单条坏丢弃不炸批次；整体失败 throw 由调用方降级（solidifyService）。
- *  - listProposalInputLessons：阶段 2 输入用——仅 prompt/step_description 的 active 教训，
- *    被 pending/approved 提案引用的 blocked，被 rejected 引用的注明「曾有提案被驳回」。
- * 本文件被 solidifyService import，不能反向依赖——withLlmTimeout 自带副本（免 import 环）。
+ * R3.5 failure-lesson distillation layer:
+ *  - collectUnconsumedSignals: S1 rollback/restore-default (direct query over the existing version
+ *    chain) + S2 negative feedback + S3 nl_ai_fail + R3.6 S4 session (last-7-days session quality;
+ *    collector in sessionSignals.ts), filtering out signals "already referenced by any-status
+ *    lesson's signals" (one-shot consumption, preventing a retire→re-feed loop).
+ *  - distillLessons: LLM call#1, per-item attribution (prompt/step_description/platform/sut);
+ *    a bad item is dropped without blowing the batch; an overall failure throws and the caller
+ *    degrades (solidifyService).
+ *  - listProposalInputLessons: for the phase-2 input — only active lessons of
+ *    prompt/step_description; ones referenced by pending/approved proposals are blocked, ones
+ *    referenced by rejected proposals are marked "had a proposal rejected".
+ * This file is imported by solidifyService and must not depend back on it — withLlmTimeout carries
+ * its own copy (avoids an import cycle).
  */
 import { asc, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -22,16 +26,16 @@ import { collectSessionSignals } from './sessionSignals.js';
 export type SignalType = 'rollback' | 'restore_default' | 'negative_feedback' | 'nl_ai_fail' | 'session';
 
 export interface CollectedSignal {
-  /** LLM 引用键：rollback#<seq> / negfb#<uuid> / nlaifail#<uuid> / session#<threadId>#<epoch>。 */
+  /** LLM reference key: rollback#<seq> / negfb#<uuid> / nlaifail#<uuid> / session#<threadId>#<epoch>. */
   key: string;
   type: SignalType;
-  /** 消费幂等记账：版本行 seq（S1，字符串化）/ 行 uuid（S2/S3）/ threadId#epoch（S4）。 */
+  /** Consumption idempotency bookkeeping: version row seq (S1, stringified) / row uuid (S2/S3) / threadId#epoch (S4). */
   refId: string;
   time: string;
   line: string;
   title: string;
   excerpt: string;
-  /** S1 专属：被回滚掉的行 source=solidify_apply（R3 自身输出质量反馈）。 */
+  /** S1 only: the rolled-back row's source=solidify_apply (R3's own output-quality feedback). */
   selfSolidify: boolean;
 }
 
@@ -39,7 +43,7 @@ const SIGNAL_CAP = 60;
 const TEXT_CAP = 400;
 const clip = (s: string, n = TEXT_CAP) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
-/** 信号采集（查询+fs 扫描，无 LLM）。返回值：signals=截断后的蒸馏输入；total=未消费总数；notes=采集层护栏提示（超 8MB 等）。 */
+/** Signal collection (queries + fs scan, no LLM). Returns: signals = the truncated distillation input; total = unconsumed count; notes = collector-layer guard hints (over 8MB etc.). */
 export async function collectUnconsumedSignals(deps?: { sessionsRoot?: string }): Promise<{ signals: CollectedSignal[]; total: number; notes: string[] }> {
   const lessons = await db.select({ signals: assistantFailureLessons.signals }).from(assistantFailureLessons);
   const consumed = new Set<string>();
@@ -51,7 +55,7 @@ export async function collectUnconsumedSignals(deps?: { sessionsRoot?: string })
 
   const collected: CollectedSignal[] = [];
 
-  // S1：prompt 模块回滚/恢复默认——人工已判定该版文案有问题（归因精度最高，零成本）
+  // S1: prompt module rollback/restore-default — a human already judged this version's copy faulty (highest attribution precision, zero cost)
   const versionRows = await db.select().from(assistantPromptModuleVersions)
     .orderBy(asc(assistantPromptModuleVersions.seq));
   const byKey = new Map<string, typeof versionRows>();
@@ -66,7 +70,7 @@ export async function collectUnconsumedSignals(deps?: { sessionsRoot?: string })
       const isRestore = r.source === 'manual_edit' && r.value == null;
       if (r.source !== 'rollback' && !isRestore) continue;
       if (consumed.has(String(r.seq))) continue;
-      // 被放弃的文案 = 同模块此行之前最近一个非空值行
+      // The abandoned copy = the nearest preceding non-null value row of the same module
       let prev: (typeof rows)[number] | undefined;
       for (let j = i - 1; j >= 0; j--) {
         if (rows[j]!.value != null) { prev = rows[j]; break; }
@@ -90,7 +94,7 @@ export async function collectUnconsumedSignals(deps?: { sessionsRoot?: string })
       .map((l) => [l.id, l.name] as const),
   );
 
-  // S2：负向用户反馈（Phase 1 只收集不消费的表终于有消费者）
+  // S2: negative user feedback (the Phase-1 collect-only table finally has a consumer)
   const fbRows = await db.select().from(aiAssistantFeedback)
     .where(eq(aiAssistantFeedback.sentiment, 'negative'))
     .orderBy(desc(aiAssistantFeedback.createdAt)).limit(200);
@@ -115,7 +119,7 @@ export async function collectUnconsumedSignals(deps?: { sessionsRoot?: string })
     }
   }
 
-  // S3：verify 自然语言步 AI 相失败（采集层落行）
+  // S3: verify natural-language step AI-phase failure (rows written by the collection layer)
   const s3Rows = await db.select().from(assistantFailureSignals)
     .where(eq(assistantFailureSignals.type, 'nl_ai_fail'))
     .orderBy(desc(assistantFailureSignals.createdAt)).limit(200);
@@ -134,7 +138,7 @@ export async function collectUnconsumedSignals(deps?: { sessionsRoot?: string })
     });
   }
 
-  // S4：近 7 天会话质量（R3.6，采集器含消费幂等预剔除——consumed 所有权仍在本层）
+  // S4: last-7-days session quality (R3.6; the collector pre-filters by consumption idempotency — ownership of consumed stays in this layer)
   const sessionBundle = await collectSessionSignals({ consumedRefIds: consumed, sessionsRoot: deps?.sessionsRoot });
   for (const s of sessionBundle.signals) {
     collected.push({
@@ -150,11 +154,11 @@ export async function collectUnconsumedSignals(deps?: { sessionsRoot?: string })
   }
 
   const total = collected.length;
-  // S1 在最前天然优先；session append 在最后再截——超量时先牺牲 S4（选样已限 12）
+  // S1 leads first so it naturally wins priority; session appends go last and get cut first — when over quota S4 is sacrificed (sampling already capped at 12)
   return { signals: collected.slice(0, SIGNAL_CAP), total, notes: sessionBundle.notes };
 }
 
-// ── 教训蒸馏（LLM call #1）──
+// ── Lesson distillation (LLM call #1) ──
 
 const LESSON_SYSTEM_PROMPT = `你是测试助手平台的「失败教训蒸馏器」。输入是平台采集到的原始失败信号清单（每条带 key、类型、时间、来源线与证据摘录）。
 
@@ -187,13 +191,13 @@ const LessonSchema = z.object({
   signalRefs: z.array(z.string().min(1)).min(1),
 });
 
-/** 外层宽松（lessons 逐条校验，单条坏丢弃不炸批次）；notes 上限防炸。 */
+/** Loose outer layer (lessons validated one by one; a bad item is dropped without blowing the batch); notes cap guards against blowups. */
 const LessonOutput = z.object({
   lessons: z.array(z.unknown()).max(20),
   notes: z.array(z.string().max(500)).max(20).default([]),
 });
 
-/** LLM 超时护栏（solidifyService 同款；本文件不能反向 import——免 import 环）。 */
+/** LLM timeout guard (same as solidifyService; this file must not import back — avoids an import cycle). */
 function withLlmTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -202,7 +206,7 @@ function withLlmTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-/** 教训蒸馏：成功返回入库条数；整体失败 throw（调用方降级：批次继续，信号保留待重试）。 */
+/** Lesson distillation: on success returns the number of rows inserted; an overall failure throws (caller degrades: the batch continues, signals stay for retry). */
 export async function distillLessons(client: LLMClient, signals: CollectedSignal[], timeoutMs: number): Promise<number> {
   const userMessage = [
     '【失败信号】（key/类型/时间/来源线/摘录；signalRefs 只能引用这些 key）',
@@ -218,14 +222,14 @@ export async function distillLessons(client: LLMClient, signals: CollectedSignal
   const inserts: Array<typeof assistantFailureLessons.$inferInsert> = [];
   for (const raw of parsed.data.lessons) {
     const l = LessonSchema.safeParse(raw);
-    if (!l.success) continue; // 单条坏丢弃不炸批次
+    if (!l.success) continue; // a bad item is dropped without blowing the batch
     const refs = l.data.signalRefs
       .filter((k) => byKey.has(k))
       .map((k) => {
         const s = byKey.get(k)!;
         return { type: s.type, refId: s.refId, excerpt: clip(s.title, 200) };
       });
-    if (refs.length === 0) continue; // 引用剔空丢弃（R3 sources 同款）
+    if (refs.length === 0) continue; // drop when references empty out after filtering (same as R3 sources)
     inserts.push({
       status: 'active',
       attribution: l.data.attribution,
@@ -239,7 +243,7 @@ export async function distillLessons(client: LLMClient, signals: CollectedSignal
   return inserts.length;
 }
 
-// ── 阶段 2 输入查询 ──
+// ── Phase 2 input queries ──
 
 export interface LessonForInput {
   id: string;
@@ -250,8 +254,8 @@ export interface LessonForInput {
   previouslyRejected: boolean;
 }
 
-/** 阶段 2 的【失败教训】输入：active + prompt/step_description；
- *  被 pending/approved 提案引用的 blocked（防同案重复提案），rejected 引用的注明。 */
+/** The phase-2 【failure lessons】 input: active + prompt/step_description;
+ *  referenced by pending/approved proposals → blocked (prevents repeat proposals for the same case); referenced by rejected → noted. */
 export async function listProposalInputLessons(): Promise<LessonForInput[]> {
   const rows = await db.select().from(assistantFailureLessons)
     .where(eq(assistantFailureLessons.status, 'active'))

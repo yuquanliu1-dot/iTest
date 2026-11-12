@@ -1,7 +1,7 @@
 /**
- * R3 prompt 基线漂移（drift）告警：版本行写入时记录代码默认基线指纹（base_hash），
- * 代码默认演进后据此检测「旧行 shadow 新默认」——改代码默认值发版却不生效的暗坑。
- * 状态：base_hash ≠ 当前指纹 → drift；无指纹（旧版写入）→ unknown；跟随默认行/skill 组不参与。
+ * R3 prompt baseline drift alert: when a version row is written, the code-default baseline fingerprint (base_hash) is recorded;
+ * as code defaults evolve, this detects "an old row shadowing the new default" — the hidden trap of shipping a changed default that never takes effect.
+ * States: base_hash ≠ current fingerprint → drift; no fingerprint (written by an older version) → unknown; follow-default rows / skill groups don't participate.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';

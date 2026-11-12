@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { hashSync } from 'bcryptjs';
 import type { Pool } from 'pg';
 
-/** 与迁移完成后一致的全量建表 SQL（测试容器用，不走迁移）。 */
+/** Full table-creation SQL matching the post-migration state (for test containers; skips migrations). */
 export const SCHEMA_SQL = `
 CREATE TABLE users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), username varchar(50) NOT NULL UNIQUE, password_hash text NOT NULL, display_name varchar(100) NOT NULL, email varchar(255), password_updated_at timestamp, must_change_password boolean NOT NULL DEFAULT false, token_version integer NOT NULL DEFAULT 1, language_preference varchar(16) NOT NULL DEFAULT 'zh-CN', disabled_at timestamp, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now());
 CREATE UNIQUE INDEX users_email_uq ON users(email) WHERE email IS NOT NULL;
@@ -245,12 +245,12 @@ export interface SeedOrg {
   username: string;
 }
 
-/** 测试管理员账号的明文密码（符合密码策略；登录类测试可直接用它走 /api/auth/login）。 */
+/** Plaintext password of the test admin account (meets the password policy; login-type tests can use it directly against /api/auth/login). */
 export const SEED_USER_PASSWORD = 'Test1234!@#$';
 
 /**
- * 写入一条 LLM 渠道（settings 新结构：llm_channels + llm_default_channel）。
- * 旧版 5 个 llm_* 单键已废弃，测试一律走这个 helper。
+ * Write one LLM channel (settings new structure: llm_channels + llm_default_channel).
+ * The legacy 5 individual llm_* keys are deprecated; tests always go through this helper.
  */
 export async function seedLlmChannel(
   pool: Pool,
@@ -285,14 +285,14 @@ export async function seedLlmChannel(
 
 const seedOrgCache = new WeakMap<Pool, Promise<SeedOrg>>();
 
-/** 清空缓存（TRUNCATE 后必须重置，避免 nextSeed 复用已被删的 orgId 触发 FK 违反）。 */
+/** Clear the cache (must be reset after TRUNCATE, otherwise the next seed reusing a deleted orgId triggers an FK violation). */
 export function resetSeedOrgCache(pool: Pool): void {
   seedOrgCache.delete(pool);
 }
 
 /**
- * 每个 pool 惰性创建一次 组织+管理员用户（幂等复用），所有 seedProject 落到同一组织，
- * 测试里注入 manager 身份后即可见全部种子项目。
+ * Lazily create once per pool: org + admin user (idempotent reuse); all seedProject calls land in the same org,
+ * so once a test injects the manager identity, all seeded projects are visible.
  */
 export async function seedOrg(pool: Pool): Promise<SeedOrg> {
   let p = seedOrgCache.get(pool);
@@ -318,7 +318,7 @@ export async function seedOrg(pool: Pool): Promise<SeedOrg> {
   return p;
 }
 
-/** 在 pool 级种子组织下建一条产品线（默认复用同一条，幂等）；返回 id。 */
+/** Create a product line under the pool-level seed org (reuses the same one by default, idempotent); returns its id. */
 export async function seedProductLine(pool: Pool, name?: string): Promise<{ productLineId: string } & SeedOrg> {
   const org = await seedOrg(pool);
   const lineName = name ?? `种子线-${org.orgId.slice(0, 8)}`;
@@ -328,15 +328,15 @@ export async function seedProductLine(pool: Pool, name?: string): Promise<{ prod
   return { productLineId: p.rows[0]!.id as string, ...org };
 }
 
-/** 在指定组织下建一条产品线；返回 id。 */
+/** Create a product line under a given org; returns its id. */
 export async function seedProductLineInOrg(pool: Pool, organizationId: string, name: string): Promise<string> {
   const p = await pool.query(`INSERT INTO product_lines(organization_id, name) VALUES ($1, $2) RETURNING id`, [organizationId, name]);
   return p.rows[0]!.id as string;
 }
 
 /**
- * 在种子组织下再建一条**与种子线不同**的产品线（名字唯一），返回 id。
- * 用于造「跨产品线」场景：R2 起跨项目用例被拒的前提是两条线不同。
+ * Create one more product line under the seed org that is **different from the seed line** (unique name); returns its id.
+ * Used to build "cross-product-line" scenarios: since R2, cross-project case references are rejected only when the two lines differ.
  */
 export async function seedOtherProductLine(pool: Pool): Promise<string> {
   const org = await seedOrg(pool);
@@ -345,13 +345,13 @@ export async function seedOtherProductLine(pool: Pool): Promise<string> {
 }
 
 /**
- * 造一个项目+默认分组+默认版本（挂在 pool 级种子组织下），返回 id 对。
- * 所有需要 group_id/project_id/version_id 的测试都用它。签名不变，所以 R2 删列后
- * 其余测试文件一行都不用改——项目自动挂到种子组织的默认产品线。
+ * Create a project + default group + default version (under the pool-level seed org); returns the id triple.
+ * Every test needing group_id/project_id/version_id uses this. The signature is unchanged, so after R2 dropped the column
+ * no other test file needed a single-line change — projects are automatically attached to the seed org's default product line.
  *
- * opts.productLineId：把项目挂到别的产品线上。R2 起「跨项目」不再等于「跨产品线」，
- * 需要验证 409 cross_project 的用例必须让两项目落在**不同**产品线上（默认两项目
- * 共用种子线，同线内互相引用是合法的）。
+ * opts.productLineId: attach the project to a different product line. Since R2, "cross-project" no longer equals "cross-product-line";
+ * cases verifying 409 cross_project must place the two projects on **different** product lines (by default both projects
+ * share the seed line, and referencing within the same line is legal).
  */
 export async function seedProject(
   pool: Pool,
@@ -374,7 +374,7 @@ export async function seedProject(
   };
 }
 
-/** 在指定组织下造项目：先建该组织的默认线再挂上去（组织由产品线决定）。 */
+/** Create a project under a given org: first create that org's default line, then attach the project (the org is determined by the product line). */
 export async function seedProjectInOrg(pool: Pool, organizationId: string, name: string): Promise<string> {
   const lineId = await seedProductLineInOrg(pool, organizationId, `线-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const p = await pool.query(`INSERT INTO projects(product_line_id, name) VALUES ($1, $2) RETURNING id`, [lineId, name]);
@@ -385,7 +385,7 @@ import jwt from 'jsonwebtoken';
 
 export const SEED_AUTH_SECRET = process.env.AUTH_JWT_SECRET ?? 'dev-auth-secret-change-me';
 
-/** 签发一个会话 token；用 seedOrg 返回的 user/org 信息。 */
+/** Mint a session token; uses the user/org info returned by seedOrg. */
 export async function seedUserAndToken(pool: Pool, opts: { role?: 'admin' | 'member' } = {}): Promise<string> {
   const org = await seedOrg(pool);
   const role = opts.role ?? 'admin';
@@ -404,7 +404,7 @@ export async function seedUserAndToken(pool: Pool, opts: { role?: 'admin' | 'mem
     SEED_AUTH_SECRET,
     { expiresIn: '1h' },
   );
-  // 抑制未使用参数 lint
+  // Suppress unused-parameter lint
   void pool;
   return token;
 }

@@ -4,15 +4,15 @@ import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-// aiTask 运行时缓存测试：真 cdp.ts（不 mock 整模块）+ playwright-core / aiTask.js /
-// llmSettings.js 打桩 + testcontainer PG。核心断言都在 step_action_cache 表与
-// ExecStepResult.cached 字段上——缓存是"自动挡固化"，对 test_steps.compiled 零侵入。
+// aiTask runtime cache tests: real cdp.ts (module not mocked) + playwright-core / aiTask.js /
+// llmSettings.js stubs + testcontainer PG. Core assertions live on the step_action_cache table and
+// the ExecStepResult.cached field -- the cache is "automatic solidify" and is zero-intrusion to test_steps.compiled.
 vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/execute/aiTask.js')>();
   return {
     ...actual,
     runAiTask: vi.fn(),
-    // 与真实同款语义（cdp.ts 凭它判定验证码指令走缓存豁免；aiActionMap 凭占位符常量拦截凭据固化）
+    // Same semantics as the real one (cdp.ts uses it to exempt captcha instructions from the cache; aiActionMap uses the placeholder constants to block credential solidify)
     CAPTCHA_TASK_RE: /验证码|captcha/i,
     USER_PH: '__ITEST_USERNAME__',
     PASSWORD_PH: '__ITEST_PASSWORD__',
@@ -31,8 +31,8 @@ vi.mock('../src/agent/llmSettings.js', () => ({
   })),
 }));
 vi.mock('playwright-core', () => {
-  // clicks 记录机械执行的 click 选择器（缓存命中路径走 playwright，AI 路径走 runAiTask 桩）；
-  // failClicks 注入缓存动作执行失败（页面分叉自愈场景）。
+  // clicks records the selectors of mechanically executed clicks (cache-hit path goes through playwright, AI path goes through the runAiTask stub);
+  // failClicks injects a cache-action execution failure (page-divergence self-heal scenario).
   const state = { clicks: [] as string[], failClicks: 0 };
   const makeLocator = (sel: string) => ({
     click: vi.fn(async () => {
@@ -84,7 +84,7 @@ vi.mock('playwright-core', () => {
   };
 });
 
-// cdp.js → db/client.js 在模块加载时读 DATABASE_URL，必须等 beforeAll 起好容器再动态 import。
+// cdp.js -> db/client.js reads DATABASE_URL at module load; the dynamic import must wait until beforeAll has started the container.
 let executeCaseReal: typeof import('../src/execute/cdp.js').executeCaseReal;
 let runAiTask: ReturnType<typeof vi.fn>;
 let testState: { clicks: string[]; failClicks: number };
@@ -93,7 +93,7 @@ let pool: Pool;
 let groupId: string;
 let versionId: string;
 
-/** 每次回放的 runAiTask 行为脚本（onAction 注入 + 可注入 reject）。 */
+/** Per-replay runAiTask behavior script (onAction injection + injectable reject). */
 let aiActions: Array<[Record<string, unknown>, boolean]> = [];
 let aiError: Error | null = null;
 
@@ -124,7 +124,7 @@ beforeEach(async () => {
       onAction?: (a: Record<string, unknown>, ok: boolean) => void;
       onUsage?: (r: Record<string, unknown>) => void;
     } | undefined;
-    // 模拟一次 LLM 调用的 usage 透出（cdp.ts 经 onUsage 累加进 stepResult.aiUsage）
+    // Simulates the usage exposure of one LLM call (cdp.ts accumulates it into stepResult.aiUsage via onUsage)
     opts?.onUsage?.({ usage: { promptTokens: 100, completionTokens: 50 }, durationMs: 1500, model: 'fake-model' });
     for (const [a, ok] of aiActions) opts?.onAction?.(a, ok);
     if (aiError) throw aiError;
@@ -137,7 +137,7 @@ beforeEach(async () => {
   versionId = seed.versionId;
 });
 
-/** 造一个单 aiTask 步骤的 DB 用例，返回 (caseId, stepId)。 */
+/** Seeds a DB case with a single aiTask step; returns (caseId, stepId). */
 async function seedAiTaskCase(instruction: string): Promise<{ caseId: string; stepId: string }> {
   const caseId = randomUUID();
   await pool.query(
@@ -165,7 +165,7 @@ async function cacheRow(stepId: string): Promise<{ instruction: string; actions:
   return (r.rows[0] as { instruction: string; actions: unknown[]; hits: number }) ?? null;
 }
 
-/** 缓存写入 / 命中计数是 fire-and-forget（回放不阻塞在缓存上），断言前轮询等它落库。 */
+/** Cache writes / hit counting are fire-and-forget (replay never blocks on the cache); poll until persisted before asserting. */
 async function waitForCache(
   stepId: string,
   check: (row: { instruction: string; actions: unknown[]; hits: number }) => boolean,
@@ -183,23 +183,23 @@ describe('aiTask 运行时动作缓存', () => {
     aiActions = [
       [{ type: 'click', selector: '#del' }, true],
       [{ type: 'fill', selector: 'input[name="ruleName"]', value: '规则A' }, true],
-      [{ type: 'screenshot', selector: 'body' }, true], // 观察性动作不进缓存
+      [{ type: 'screenshot', selector: 'body' }, true], // observational actions don't enter the cache
     ];
     const results = await replay(caseId, stepId, '点击删除按钮');
     expect(results[0]).toMatchObject({ status: 'passed' });
     expect(results[0]!.cached).toBeUndefined();
-    // 首跑无缓存：不算 healed；AI 用量透出
+    // First run has no cache: not counted as healed; AI usage is exposed
     expect(results[0]!.healed).toBeUndefined();
     expect(results[0]!.aiUsage).toMatchObject({ calls: 1, promptTokens: 100, completionTokens: 50, modelCallMs: 1500, model: 'fake-model' });
     expect(runAiTask).toHaveBeenCalledTimes(1);
-    expect(testState.clicks).toEqual([]); // AI 相由 runAiTask 桩执行,未经 playwright
+    expect(testState.clicks).toEqual([]); // the AI phase runs via the runAiTask stub, never through playwright
     const row = await waitForCache(stepId, (r) => Array.isArray(r.actions) && r.actions.length === 2);
     expect(row).toMatchObject({ instruction: '点击删除按钮', hits: 0 });
     expect(row.actions).toEqual([
       { kind: 'click', locator: [{ strategy: 'css', value: '#del' }] },
       { kind: 'fill', locator: [{ strategy: 'css', value: 'input[name="ruleName"]' }], value: '规则A' },
     ]);
-    // 对用例定义零侵入
+    // zero intrusion into the case definition
     const step = await pool.query(`SELECT compiled FROM test_steps WHERE id = $1`, [stepId]);
     expect(step.rows[0]!.compiled).toEqual([{ kind: 'aiTask', instruction: '点击删除按钮' }]);
   });
@@ -208,18 +208,18 @@ describe('aiTask 运行时动作缓存', () => {
     const { caseId, stepId } = await seedAiTaskCase('点击删除按钮');
     aiActions = [[{ type: 'click', selector: '#del' }, true]];
     await replay(caseId, stepId, '点击删除按钮');
-    await waitForCache(stepId, (r) => r.actions.length === 1); // 等首写落库,二次回放才有得命中
+    await waitForCache(stepId, (r) => r.actions.length === 1); // wait for the first write to persist; only then can the second replay hit
 
-    aiActions = []; // 若误走 AI 相也无动作可收
+    aiActions = []; // if the AI phase were mistakenly entered there'd be no actions to collect
     runAiTask.mockClear();
     testState.clicks.length = 0;
     const results = await replay(caseId, stepId, '点击删除按钮');
     expect(results[0]).toMatchObject({ status: 'passed', cached: true });
     expect(results[0]!.warning).toContain('缓存命中');
     expect(results[0]!.healed).toBeUndefined();
-    expect(results[0]!.aiUsage).toBeUndefined(); // 零 LLM → 无用量
-    expect(runAiTask).not.toHaveBeenCalled(); // 全程零 LLM
-    expect(testState.clicks).toEqual(['#del']); // 缓存动作经 playwright 机械执行
+    expect(results[0]!.aiUsage).toBeUndefined(); // zero LLM -> no usage
+    expect(runAiTask).not.toHaveBeenCalled(); // zero LLM throughout
+    expect(testState.clicks).toEqual(['#del']); // cached actions executed mechanically via playwright
     expect((await waitForCache(stepId, (r) => r.hits === 1)).hits).toBe(1);
   });
 
@@ -229,20 +229,20 @@ describe('aiTask 运行时动作缓存', () => {
     await replay(caseId, stepId, '点击删除按钮');
     await waitForCache(stepId, (r) => r.actions.length === 1);
 
-    testState.failClicks = 1; // 页面分叉：缓存选择器点击失败一次
+    testState.failClicks = 1; // page divergence: the cached selector's click fails once
     aiActions = [[{ type: 'click', selector: '#del2' }, true]];
     runAiTask.mockClear();
     const results = await replay(caseId, stepId, '点击删除按钮');
-    expect(results[0]).toMatchObject({ status: 'passed' }); // 回退相不算命中
+    expect(results[0]).toMatchObject({ status: 'passed' }); // the fallback phase doesn't count as a hit
     expect(results[0]!.cached).toBeUndefined();
-    expect(results[0]!.healed).toBe(true); // 缓存分叉后 AI 自愈通过
-    expect(results[0]!.aiUsage).toMatchObject({ calls: 1 }); // 自愈相的 AI 用量
-    expect(runAiTask).toHaveBeenCalledTimes(1); // 回退 AI
-    // 就地覆写
+    expect(results[0]!.healed).toBe(true); // AI self-heal passed after the cache divergence
+    expect(results[0]!.aiUsage).toMatchObject({ calls: 1 }); // AI usage of the self-heal phase
+    expect(runAiTask).toHaveBeenCalledTimes(1); // fallback AI
+    // overwrite in place
     const row = await waitForCache(stepId, (r) =>
       JSON.stringify(r.actions).includes('#del2'));
     expect(row.actions).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#del2' }] }]);
-    // 第三次回放：新缓存已可命中
+    // third replay: the new cache is now hittable
     aiActions = [];
     runAiTask.mockClear();
     testState.clicks.length = 0;
@@ -258,8 +258,8 @@ describe('aiTask 运行时动作缓存', () => {
     const results = await replay(caseId, stepId, '点击删除按钮');
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toContain('AI 不可用');
-    expect(results[0]!.healed).toBeUndefined(); // 失败步永不 healed
-    expect(results[0]!.aiUsage?.calls).toBe(1); // 失败步仍透出已发生的 AI 用量
+    expect(results[0]!.healed).toBeUndefined(); // a failed step is never healed
+    expect(results[0]!.aiUsage?.calls).toBe(1); // a failed step still exposes the AI usage already incurred
     expect(await cacheRow(stepId)).toBeNull();
   });
 
@@ -270,7 +270,7 @@ describe('aiTask 运行时动作缓存', () => {
 
     aiActions = [[{ type: 'click', selector: '#new' }, true]];
     runAiTask.mockClear();
-    const results = await replay(caseId, stepId, '新指令'); // 同 stepId 不同 instruction
+    const results = await replay(caseId, stepId, '新指令'); // same stepId, different instruction
     expect(results[0]).toMatchObject({ status: 'passed' });
     expect(results[0]!.cached).toBeUndefined();
     expect(runAiTask).toHaveBeenCalledTimes(1);
@@ -286,7 +286,7 @@ describe('aiTask 运行时动作缓存', () => {
     expect(results[0]!.cached).toBeUndefined();
     expect(runAiTask).toHaveBeenCalledTimes(1);
     expect(await cacheRow(stepId)).toBeNull();
-    // 二次回放同样走 AI
+    // the second replay also goes through AI
     runAiTask.mockClear();
     await replay(caseId, stepId, '识别验证码图片中的字符并填入验证码输入框');
     expect(runAiTask).toHaveBeenCalledTimes(1);
@@ -298,9 +298,9 @@ describe('aiTask 运行时动作缓存', () => {
     aiActions = [[{ type: 'fill', selector: '#q', value: '规则A' }, true]];
     const results = await replay(caseId, stepId, '在搜索框输入 {{keyword}} 并提交', { keyword: '规则A' });
     expect(results[0]).toMatchObject({ status: 'passed' });
-    // runAiTask 收到的是物化后的指令
+    // runAiTask receives the materialized instruction
     expect(String(vi.mocked(runAiTask).mock.calls[0]![1])).toContain('规则A');
-    expect(await cacheRow(stepId)).toBeNull(); // 物化值冻结进缓存会跨行复用出错,v1 豁免
+    expect(await cacheRow(stepId)).toBeNull(); // freezing a materialized value into the cache would break cross-row reuse; exempted in v1
   });
 
   it('不可映射动作（press）：步骤照常通过但不写缓存', async () => {

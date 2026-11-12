@@ -1,4 +1,4 @@
-/** 审批执行：乐观锁/prompt 追加+baseline/skill 先写盘后记行+幂等重放/退役守卫/部分失败回 pending。 */
+/** Approval execution: optimistic lock / prompt append+baseline / skill written to disk before recording rows + idempotent replay / retirement guards / partial failure back to pending. */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -86,7 +86,7 @@ describe('approveProposal：prompt_amendment', () => {
     const rows = (await pool.query(`SELECT * FROM assistant_prompt_module_versions ORDER BY seq`)).rows;
     expect(rows.length).toBe(2);
     expect(rows[0].source).toBe('baseline');
-    expect(rows[0].value).toContain('## 输出风格'); // 代码默认被钉住
+    expect(rows[0].value).toContain('## 输出风格'); // code default is pinned
     expect(rows[1].source).toBe('solidify_apply');
     expect(rows[1].value).toBe(`${rows[0].value}\n\n- 增量文案`);
     expect(rows[1].source_ref).toBe(id);
@@ -111,7 +111,7 @@ describe('approveProposal：prompt_amendment', () => {
     const { memoryId } = await seedSources();
     const id = await seedProposal({ kind: 'prompt_amendment', target: 'space.style.zh', sourceIds: [{ type: 'memory', id: memoryId }] });
     await approveProposal(null, id, []);
-    // 模拟「应用成功但 appliedAt 未落」的部分失败：回 pending 再批
+    // Simulate the partial failure of "apply succeeded but appliedAt not recorded": back to pending, then approve again
     await pool.query(`UPDATE assistant_solidify_proposals SET status='pending', applied_at=null WHERE id=$1`, [id]);
     await approveProposal(null, id, []);
     const n = (await pool.query(`SELECT count(*)::int n FROM assistant_prompt_module_versions WHERE source_ref=$1`, [id])).rows[0]!;
@@ -180,7 +180,7 @@ describe('approveProposal：退役与守卫', () => {
     const id = await seedProposal({ kind: 'prompt_amendment', target: 'space.style.zh', sourceIds: [{ type: 'memory', id: src.memoryId }] });
     await approveProposal(null, id, [src.memoryId]);
     const m = (await pool.query(`SELECT * FROM assistant_memories WHERE id=$1`, [src.memoryId])).rows[0]!;
-    expect(m.status).toBe('retired_manual'); // WHERE status='active' 守卫：不改已退役行
+    expect(m.status).toBe('retired_manual'); // WHERE status='active' guard: retired rows are not touched
   });
 });
 
@@ -217,16 +217,16 @@ describe('approveProposal：prompt_correction', () => {
     const { approveProposal } = await import('../src/pi/space/solidifyApply.js');
     const lessonId = await seedLesson();
     const id = await seedProposal({ kind: 'prompt_correction', target: 'space.style.zh', sourceIds: [{ type: 'lesson', id: lessonId }], baseSeq: 7 });
-    // 盘点后人工又改了一轮 → 当前 max(seq) 前进
+    // After the inventory, a manual edit advanced the state again → current max(seq) moved forward
     await pool.query(`INSERT INTO assistant_prompt_module_versions (module_key, value, source) VALUES ('space.style.zh', '人工改过', 'manual_edit')`);
     await expect(approveProposal(null, id, [])).rejects.toMatchObject({ status: 500 });
     const p = (await pool.query(`SELECT * FROM assistant_solidify_proposals WHERE id=$1`, [id])).rows[0]!;
     expect(p.status).toBe('pending');
     expect(p.apply_error).toContain('人工修改');
     const n = (await pool.query(`SELECT count(*)::int n FROM assistant_prompt_module_versions WHERE source_ref=$1`, [id])).rows[0]!;
-    expect(n.n).toBe(0); // 没写任何版本行
+    expect(n.n).toBe(0); // no version rows written
     const lesson = (await pool.query(`SELECT status FROM assistant_failure_lessons WHERE id=$1`, [lessonId])).rows[0]!;
-    expect(lesson.status).toBe('active'); // 教训不被误 resolved
+    expect(lesson.status).toBe('active'); // the lesson is not mistakenly resolved
   });
 
   it('重试重放：sourceRef 行已存在 → 跳过写值继续（lesson 补 resolved）', async () => {
@@ -234,7 +234,7 @@ describe('approveProposal：prompt_correction', () => {
     const lessonId = await seedLesson();
     const id = await seedProposal({ kind: 'prompt_correction', target: 'space.style.zh', sourceIds: [{ type: 'lesson', id: lessonId }], baseSeq: null });
     await approveProposal(null, id, []);
-    // 模拟「版本行已写但 lesson 未 resolved」的部分失败：回 pending 再批
+    // Simulate the partial failure of "version row written but lesson not resolved": back to pending, then approve again
     await pool.query(`UPDATE assistant_solidify_proposals SET status='pending', applied_at=null WHERE id=$1`, [id]);
     await approveProposal(null, id, []);
     const n = (await pool.query(`SELECT count(*)::int n FROM assistant_prompt_module_versions WHERE source_ref=$1`, [id])).rows[0]!;

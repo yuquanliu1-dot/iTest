@@ -17,9 +17,9 @@ export function canSwitch(from: string, to: string): boolean {
 }
 
 /**
- * 步骤 kind 切换：保留 locator + intentLocator + frameChain（矩阵内 8 个 kind 全部声明帧链，
- * 丢链 = 回放落到顶层文档）；其他字段按目标 kind 的默认初始化。
- * 不支持的切换返回原 action（指针相等），由调用方提示用户。
+ * Step kind switching: keeps locator + intentLocator + frameChain (all 8 kinds in the matrix declare frame chains;
+ * dropping the chain = replay lands in the top-level document); other fields are initialized to the target kind's defaults.
+ * Unsupported switches return the original action (pointer-equal); the caller surfaces that to the user.
  */
 export function switchAction(action: StepAction, to: string): StepAction {
   const from = action.kind;

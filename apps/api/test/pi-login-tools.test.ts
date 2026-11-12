@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// perform_login AI 化编排测试：resolveEnv / runAiTask / llmSettings / playwright 打桩。
+// perform_login AI-orchestration tests: resolveEnv / runAiTask / llmSettings / playwright stubbed.
 vi.mock('../src/execute/envContext.js', () => ({ resolveEnv: vi.fn() }));
-// 只打桩 runAiTask；占位符相关导出（credentialPlaceholder / makeCredentialValueSub 等）走真实实现——
-// 凭据替换的口径必须与执行层一致，测试里另写一套就会漏掉 @ref 归属这类回归。
+// Only runAiTask is stubbed; placeholder-related exports (credentialPlaceholder / makeCredentialValueSub etc.) use the real implementation —
+// the credential-replacement semantics must match the execution layer; a separate copy in the test would miss regressions like @ref attribution.
 vi.mock('../src/execute/aiTask.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/execute/aiTask.js')>()),
   runAiTask: vi.fn(),
@@ -128,7 +128,7 @@ describe('perform_login（AI 驱动）', () => {
     }
     const call = vi.mocked(runAiTask).mock.calls[0]!;
     const instruction = String(call[1]);
-    expect(instruction).toContain('http://e/login'); // 目标导航地址
+    expect(instruction).toContain('http://e/login'); // target navigation address
     expect(instruction).toContain('__ITEST_USERNAME__');
     expect(instruction).toContain('__ITEST_PASSWORD__');
     expect(instruction).not.toContain('Passw0rd!');
@@ -158,14 +158,14 @@ describe('perform_login（AI 驱动）', () => {
     expect(r.ok).toBe(true);
     const call = vi.mocked(runAiTask).mock.calls[0]!;
     const instruction = String(call[1]);
-    expect(instruction).toContain('http://be/login'); // 目标 = 该服务自己的 loginUrl
+    expect(instruction).toContain('http://be/login'); // target = that service's own loginUrl
     expect(instruction).toContain('__ITEST_USERNAME@backend__');
     expect(instruction).toContain('__ITEST_PASSWORD@backend__');
     expect(instruction).not.toContain('Ops@12345');
     const opts = call[4] as { valueSub: (v: string) => string };
     expect(opts.valueSub('__ITEST_USERNAME@backend__')).toBe('ops01');
     expect(opts.valueSub('__ITEST_PASSWORD@backend__')).toBe('Ops@12345');
-    // 清单里同时列出两个服务，模型可自行改用别的 @ref
+    // The list mentions both services, so the model can switch to another @ref on its own
     expect(instruction).toContain('backend');
     expect(instruction).toContain('default-web');
   });

@@ -1,8 +1,8 @@
 /**
- * RCA worker 编排：processRcaJob 的守卫（rcaEnabled/failedCases/versionId）、幂等（一线程一 run）、
- * 线程构建（purpose='rca' + 标题）与任务清单注入。stub 会话工厂免 LLM；
- * stub 的 prompt 处理器直接写 plan_run_cases.rca 模拟 AI 调 save_rca_result 落库，
- * 借此验证超时兜底 fillTimeoutRows 不会覆盖已落库的结论（isNull(rca) 过滤）。
+ * RCA worker orchestration: processRcaJob's guards (rcaEnabled/failedCases/versionId), idempotency (one thread per run),
+ * thread construction (purpose='rca' + title) and checklist injection. A stub session factory avoids the LLM;
+ * the stub's prompt handler writes plan_run_cases.rca directly, simulating the AI calling save_rca_result to persist,
+ * which verifies the timeout fallback fillTimeoutRows does not overwrite an already-persisted conclusion (isNull(rca) filter).
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { Pool } from 'pg';
@@ -37,7 +37,7 @@ interface FakeSession {
   factoryCtx: Record<string, unknown> | null;
 }
 
-/** 注入 stub 会话工厂：prompt 记录原文，并模拟 AI 按清单调 save_rca_result 落库（rca.status=skipped）。 */
+/** Inject the stub session factory: prompt records the original text and simulates the AI calling save_rca_result per the checklist to persist (rca.status=skipped). */
 async function stubFactory(): Promise<FakeSession> {
   const fake: FakeSession = { prompts: [], aborted: false, factoryCtx: null };
   const { setSpaceSessionFactory } = await import('../src/pi/space/session.js');
@@ -70,7 +70,7 @@ async function stubFactory(): Promise<FakeSession> {
   return fake;
 }
 
-/** 造一条 failed 报告：含失败步骤（failureReason/humanMessage）供清单注入断言。 */
+/** Seed a failed report: contains a failed step (failureReason/humanMessage) for checklist-injection assertions. */
 async function seedFailedReport(caseId: string): Promise<string> {
   const rep = await pool.query(
     `INSERT INTO reports(case_id, status, step_results, summary) VALUES ($1, 'failed', $2::jsonb, 'e2e') RETURNING id`,
@@ -85,9 +85,9 @@ async function seedFailedReport(caseId: string): Promise<string> {
   return rep.rows[0]!.id as string;
 }
 
-/** 造 failed 计划运行 + 失败用例行。rcaEnabled=false / failedCases<=0 时不插失败行
- *  （真实收尾语义：没有失败就无可分析）。withVersion=false 时 plan.version_id=null，
- *  但失败行照插——验证 versionId 守卫先于失败清单检查。 */
+/** Seed a failed plan run + failed case row. When rcaEnabled=false / failedCases<=0, no failure row is inserted
+ *  (real finalization semantics: no failures means nothing to analyze). With withVersion=false, plan.version_id=null,
+ *  yet the failure row is still inserted — verifying the versionId guard fires before the failure checklist check. */
 async function seedFailedRun(
   opts: { rcaEnabled?: boolean; failedCases?: number; withVersion?: boolean } = {},
 ): Promise<{ runId: string; planRunCaseId: string | null; versionId: string }> {
@@ -138,7 +138,7 @@ describe('RCA worker 编排', () => {
     expect(prompt).toContain('登录后看不到订单');
     expect(prompt).toContain('LocatorAllFailed');
 
-    // stub 模拟的 save_rca_result 落库生效，且不被 fillTimeoutRows（isNull(rca)）覆盖成 timeout
+    // The stub's simulated save_rca_result persist works, and fillTimeoutRows (isNull(rca)) does not overwrite it as timeout
     const row = await pool.query(`SELECT rca FROM plan_run_cases WHERE id=$1`, [planRunCaseId]);
     expect((row.rows[0]!.rca as Record<string, unknown>).status).toBe('skipped');
   });
@@ -159,7 +159,7 @@ describe('RCA worker 编排', () => {
     const { processRcaJob } = await import('../src/scheduler/rcaWorker.js');
     const a = await seedFailedRun({ rcaEnabled: false });
     const b = await seedFailedRun({ failedCases: 0 });
-    const c = await seedFailedRun({ withVersion: false }); // 失败行存在，但 plan.versionId=null
+    const c = await seedFailedRun({ withVersion: false }); // failure row exists, but plan.versionId=null
     await processRcaJob({ kind: 'rca', planRunId: a.runId });
     await processRcaJob({ kind: 'rca', planRunId: b.runId });
     await processRcaJob({ kind: 'rca', planRunId: c.runId });
@@ -179,7 +179,7 @@ describe('RCA worker 编排', () => {
   });
 
   it('崩溃扫补：早于 cutoff 的 rca 线程补标 timeout，年轻线程不动', async () => {
-    // 直接 SQL 插线程模拟崩溃现场：线程已建、进程死亡、rca 从未落库
+    // Insert threads via raw SQL to simulate a crash scene: thread created, process died, rca never persisted
     const old = await seedFailedRun();
     const young = await seedFailedRun();
     const insertThread = (runId: string, versionId: string, age: string) =>
@@ -188,8 +188,8 @@ describe('RCA worker 编排', () => {
          VALUES (gen_random_uuid(), 'version', $1, 'rca', $2, '根因分析 · 崩溃扫补', '', now() - $3::interval)`,
         [versionId, runId, age],
       );
-    await insertThread(old.runId, old.versionId, '1 hour'); // 远超 30+3+5min cutoff
-    await insertThread(young.runId, young.versionId, '2 minutes'); // 可能是别副本的活分析
+    await insertThread(old.runId, old.versionId, '1 hour'); // far past the 30+3+5min cutoff
+    await insertThread(young.runId, young.versionId, '2 minutes'); // could be another replica's live analysis
 
     const { sweepStaleRcaRuns } = await import('../src/scheduler/rcaWorker.js');
     const filled = await sweepStaleRcaRuns();
@@ -211,7 +211,7 @@ describe('RCA worker 编排', () => {
   });
 
   it('兜底不覆盖已落结论、只碰 business 失败行', async () => {
-    // stub 落 skipped 模拟 AI 已落结论
+    // stub persists skipped, simulating the AI having already recorded a conclusion
     await stubFactory();
     const analyzed = await seedFailedRun();
     const { processRcaJob, sweepStaleRcaRuns } = await import('../src/scheduler/rcaWorker.js');
@@ -219,8 +219,8 @@ describe('RCA worker 编排', () => {
     const analyzedRow = await pool.query(`SELECT rca FROM plan_run_cases WHERE id=$1`, [analyzed.planRunCaseId]);
     expect((analyzedRow.rows[0]!.rca as Record<string, unknown>).status).toBe('skipped');
 
-    // 同一 run 再造一条未分析的失败 business 行 + 一条 login_prepare 失败行，
-    // 线程回拨过 cutoff 后扫补：只补未落库的 business 行，已落结论行与 login_prepare 行不动
+    // Add one unanalyzed failed business row + one login_prepare failed row to the same run,
+    // then rewind the thread past the cutoff and sweep: only the unpersisted business row is backfilled; the concluded row and the login_prepare row are untouched
     const c1 = (await pool.query(`SELECT case_id FROM plan_run_cases WHERE id=$1`, [analyzed.planRunCaseId])).rows[0]!.case_id as string;
     const groupId = (await pool.query(`SELECT group_id FROM test_cases WHERE id=$1`, [c1])).rows[0]!.group_id as string;
     const c2 = await pool.query(
@@ -246,8 +246,8 @@ describe('RCA worker 编排', () => {
       `SELECT step_kind, rca FROM plan_run_cases WHERE plan_run_id=$1 ORDER BY "order"`,
       [analyzed.runId],
     );
-    expect((rows.rows[0]!.rca as Record<string, unknown>).status).toBe('skipped'); // 已落结论不动
-    expect((rows.rows[1]!.rca as Record<string, unknown>).status).toBe('timeout'); // business 补标
-    expect(rows.rows[2]!.rca).toBeNull(); // login_prepare 不碰
+    expect((rows.rows[0]!.rca as Record<string, unknown>).status).toBe('skipped'); // concluded row untouched
+    expect((rows.rows[1]!.rca as Record<string, unknown>).status).toBe('timeout'); // business row backfilled
+    expect(rows.rows[2]!.rca).toBeNull(); // login_prepare row untouched
   });
 });

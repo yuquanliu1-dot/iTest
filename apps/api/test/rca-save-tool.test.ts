@@ -21,8 +21,8 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** 造一条 failed 计划运行 + 失败用例行（plan_run_cases）。
- *  FK 全真：plan_runs.plan_id → execution_plans、plan_run_cases.case_id → test_cases。 */
+/** Seed a failed plan run + failed case row (plan_run_cases).
+ *  FKs fully real: plan_runs.plan_id → execution_plans, plan_run_cases.case_id → test_cases. */
 async function seedFailedRunCase(): Promise<{ planRunId: string; planRunCaseId: string }> {
   const { projectId, groupId, versionId } = await seedProject(pool);
   const plan = await pool.query(

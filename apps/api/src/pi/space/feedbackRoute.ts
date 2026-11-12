@@ -1,14 +1,17 @@
 /**
- * 版本空间助手「用户反馈」HTTP 端点（Phase 1：只收集，不消费）：
- *   POST /assistant/feedback   提交一条反馈（👍/👎 + 可选文字）
- *   GET  /assistant/feedback?threadId=  列出当前用户在该线程下的反馈（前端标「已提交」）
+ * Version-space assistant "user feedback" HTTP endpoints (Phase 1: collect only, no consumption):
+ *   POST /assistant/feedback   submit a piece of feedback (👍/👎 + optional text)
+ *   GET  /assistant/feedback?threadId=  list the current user's feedback on that thread (frontend marks "submitted")
  *
- * 为什么反馈要自带正文快照：消息全内存（SessionManager.inMemory），后端无法反查；
- * 且 pi 投影层的消息 id 只是位置索引（pi-msg:<index>），重启后无法复现。
- * 所以 excerpt 才是回溯的唯一可靠依据，anchor 仅作线索。
+ * Why feedback must carry its own body snapshot: messages live fully in memory
+ * (SessionManager.inMemory), so the backend cannot look them up retroactively; and the pi
+ * projection layer's message id is just a positional index (pi-msg:<index>), unreproducible
+ * after a restart.
+ * So excerpt is the only reliable basis for retrospection; anchor is a clue only.
  *
- * 权限：提交反馈是普通用户行为，**刻意不挂 requireManager**（与 stageRoute 同档），
- * 线程可见性由 assertSpaceThreadVisible 兜底，跨组织统一 404 防存在性探测。
+ * Permissions: submitting feedback is a normal user action, **deliberately without requireManager**
+ * (same tier as stageRoute); thread visibility is backed by assertSpaceThreadVisible, with a
+ * uniform cross-org 404 preventing existence probing.
  */
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { Router } from 'express';
@@ -22,7 +25,7 @@ import { assertSpaceThreadVisible } from './router.js';
 
 export const feedbackRoute = Router();
 
-/** 正文快照上限：够看清语境，又不至于让反馈表膨胀成聊天记录。 */
+/** Body snapshot cap: enough to see the context, without bloating the feedback table into a chat log. */
 const EXCERPT_LIMIT = 500;
 const COMMENT_LIMIT = 2000;
 
@@ -44,7 +47,7 @@ feedbackRoute.post('/feedback', async (req, res) => {
   if (body.sentiment !== 'positive' && body.sentiment !== 'negative') {
     throw new HttpError(400, 'bad_request', 'sentiment must be positive or negative');
   }
-  // 线程可见性（同时返回 versionId）；不可见/不存在统一 404。
+  // Thread visibility (also returns versionId); invisible/not-found both get a uniform 404.
   const versionId = await assertSpaceThreadVisible(threadId, req.user as AuthUser);
   const projectId = await resolveVersionProjectId(versionId);
   if (!projectId) throw new HttpError(500, 'invariant', 'version project missing');
@@ -72,9 +75,10 @@ feedbackRoute.get('/feedback', async (req, res) => {
   if (!threadId) { res.json([]); return; }
   await assertSpaceThreadVisible(threadId, req.user as AuthUser);
   const userId = (req.user as { userId?: string } | undefined)?.userId ?? null;
-  // 只返回当前用户自己提交的：气泡上的「已提交」标记是个人状态，不是协作状态。
-  // userId 为空（理论上不该发生，全局 requireAuth 已保证）时返回空列表，
-  // 而非把 userId IS NULL 当条件——那会把他人的匿名反馈算到自己头上。
+  // Return only what the current user submitted: the "submitted" marker on a bubble is personal
+  // state, not collaborative state. When userId is empty (should not happen — global requireAuth
+  // guarantees it) return an empty list, rather than using userId IS NULL as a condition — that
+  // would count others' anonymous feedback as one's own.
   if (!userId) { res.json([]); return; }
   const rows = await db
     .select({
@@ -96,10 +100,12 @@ feedbackRoute.get('/feedback', async (req, res) => {
 });
 
 /**
- * 管理端反馈列表（设置页用）。requireManager 挂在**单条路由**上而非整个 feedbackRoute ——
- * 上面 POST/GET 是普通用户行为，整个 router 挂 requireManager 会把提交反馈也挡在门外。
+ * Admin feedback list (for the settings page). requireManager is attached to the **individual
+ * route**, not the whole feedbackRoute — the POST/GET above are normal user actions, and putting
+ * requireManager on the whole router would lock out submitting feedback too.
  *
- * 跨组织隔离：只返回调用者可见项目下的反馈（visibleProjectIds 子查询），与 guidesRoute 同策略。
+ * Cross-org isolation: returns only feedback under projects visible to the caller
+ * (visibleProjectIds subquery), same policy as guidesRoute.
  */
 feedbackRoute.get('/feedback/all', requireManager, async (req, res) => {
   const sentiment = typeof req.query.sentiment === 'string' ? req.query.sentiment : '';
@@ -110,7 +116,7 @@ feedbackRoute.get('/feedback/all', requireManager, async (req, res) => {
   }
   if (projectId) conds.push(eq(aiAssistantFeedback.projectId, projectId));
 
-  // limit 上限 200：收集期全量也不该让管理页一次吞下万行。
+  // limit capped at 200: even a full collection-phase dump must not let the admin page swallow tens of thousands of rows at once.
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const offset = Math.max(Number(req.query.offset) || 0, 0);
 
@@ -137,7 +143,7 @@ feedbackRoute.get('/feedback/all', requireManager, async (req, res) => {
     .where(and(...conds));
   const total = Number(countRows[0]?.count ?? 0);
 
-  // 用户名一并带出：管理页要看「谁提的」，省得前端再发一轮查用户的请求。
+  // Bring the username along: the admin page needs "who submitted it", sparing the frontend another round of user lookups.
   const names = new Map<string, string>();
   const userIds = rows.map((r) => r.userId).filter((v): v is string => !!v);
   if (userIds.length) {
@@ -162,7 +168,7 @@ feedbackRoute.get('/feedback/all', requireManager, async (req, res) => {
   });
 });
 
-/** 管理端筛选用的候选项目（与列表同可见性口径）。 */
+/** Candidate projects for admin filtering (same visibility semantics as the list). */
 feedbackRoute.get('/feedback/projects', requireManager, async (req, res) => {
   const ids = await visibleProjectIds(req.user as AuthUser);
   if (!ids.length) { res.json([]); return; }

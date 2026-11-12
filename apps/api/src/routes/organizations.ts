@@ -15,7 +15,7 @@ export const organizationsRoute = Router();
 
 organizationsRoute.use(requireAuth);
 
-/** 可见组织列表：自己加入的 ∪ 管理的子树，附成员数与自己角色。 */
+/** Visible org list: orgs the user joined ∪ subtrees they manage, with member counts and the user's own role. */
 organizationsRoute.get('/', async (req, res) => {
   const user = req.user!;
   const visible = await visibleOrgIdsFor(user);
@@ -31,7 +31,7 @@ organizationsRoute.get('/', async (req, res) => {
     .where(inArray(organizationMembers.organizationId, [...visible]))
     .groupBy(organizationMembers.organizationId);
   const countByOrg = new Map(counts.map((c) => [c.organizationId, Number(c.memberCount)]));
-  // path 排序让树形列表天然有序（父在前、同层按字典序）
+  // path sorting makes the tree list naturally ordered (parents first, same level lexicographic)
   const items = orgRows
     .sort((a, b) => a.path.localeCompare(b.path))
     .map((o) => ({
@@ -52,8 +52,8 @@ const CreateOrgBody = z.object({
   parentId: z.string().uuid(),
 });
 
-// 仅允许创建子组织；根组织（租户）只由种子迁移创建。
-// 要求调用者是父组织（或其祖先）的管理员。
+// Only child orgs may be created; the root org (tenant) is created only by seed migrations.
+// Requires the caller to be a manager of the parent org (or one of its ancestors).
 organizationsRoute.post('/', async (req, res) => {
   const user = req.user!;
   const body = CreateOrgBody.parse(req.body);
@@ -62,18 +62,18 @@ organizationsRoute.post('/', async (req, res) => {
   if (!isManagerOfOrg(user, parentPath)) throw new HttpError(403, 'forbidden', '需要目标组织的管理员角色');
 
   const id = randomUUID();
-  // 物化路径 = 父路径 + 自身 id；组织不支持改父，路径不可变
+  // Materialized path = parent path + own id; orgs don't support reparenting, the path is immutable
   const path = `${parentPath}${id}/`;
   const inserted = await db
     .insert(organizations)
     .values({ id, name: body.name, parentId: body.parentId, path })
     .returning();
-  // 新建子组织影响所有 path/subtree 视图 + 子树成员的可见列表
+  // Creating a child org affects all path/subtree views + subtree members' visible lists
   await invalidateOrgTree();
   res.status(201).json(inserted[0]);
 });
 
-/** 组织管理守卫：组织存在且调用者是其（或其祖先）管理员；否则 404/403。 */
+/** Org management guard: the org exists and the caller is a manager of it (or an ancestor); otherwise 404/403. */
 async function requireOrgManager(orgId: string, reqUser: NonNullable<Express.Request['user']>): Promise<string> {
   const orgPath = await getOrgPath(orgId);
   if (!orgPath) throw new HttpError(404, 'not_found', 'organization not found');
@@ -81,8 +81,8 @@ async function requireOrgManager(orgId: string, reqUser: NonNullable<Express.Req
   return orgPath;
 }
 
-/** GET /managed-subtree：祖先链 manager 视角下的全部组织（含直接 membership），节点带 memberCount / projectCount。
- * 必须在 GET /:orgId 之前注册以便静态段优先匹配。 */
+/** GET /managed-subtree: all orgs from the ancestor-chain manager's perspective (direct membership included), nodes carry memberCount / projectCount.
+ * Must be registered before GET /:orgId so the static segment matches first. */
 organizationsRoute.get('/managed-subtree', requireManager, async (_req, res) => {
   try {
     const visible = await visibleOrgIdsFor(_req.user!);
@@ -98,7 +98,7 @@ organizationsRoute.get('/managed-subtree', requireManager, async (_req, res) => 
         .from(organizationMembers)
         .where(inArray(organizationMembers.organizationId, orgIds))
         .groupBy(organizationMembers.organizationId),
-      // 项目数按「项目所属产品线的组织」归集——项目已无自己的 organization_id 列。
+      // Project counts are grouped by the org of the project's product line — projects no longer have their own organization_id column.
       db
         .select({ organizationId: productLines.organizationId, count: count() })
         .from(projects)
@@ -126,7 +126,7 @@ organizationsRoute.get('/managed-subtree', requireManager, async (_req, res) => 
   }
 });
 
-/** GET /lookup-user?username=xxx：按 username 查用户（仅 manager）。 */
+/** GET /lookup-user?username=xxx: look up a user by username (managers only). */
 organizationsRoute.get('/lookup-user', requireManager, async (req, res) => {
   const username = req.query.username as string;
   if (!username) {
@@ -141,7 +141,7 @@ organizationsRoute.get('/lookup-user', requireManager, async (req, res) => {
   res.json(user);
 });
 
-/** GET /:orgId — 组织详情。直属成员或管理员可读。 */
+/** GET /:orgId — org detail. Readable by direct members or managers. */
 organizationsRoute.get('/:orgId', async (req, res) => {
   const user = req.user!;
   const orgId = req.params.orgId!;
@@ -163,7 +163,7 @@ const PatchOrgBody = z.object({
   description: z.string().max(1000).nullable().optional(),
 });
 
-/** PATCH /:orgId — 编辑组织（仅 manager）。path/parentId 不可改（避免搬成环）。 */
+/** PATCH /:orgId — edit org (managers only). path/parentId cannot be changed (avoids moving into a cycle). */
 organizationsRoute.patch('/:orgId', async (req, res) => {
   const user = req.user!;
   const orgId = req.params.orgId!;
@@ -177,7 +177,7 @@ organizationsRoute.patch('/:orgId', async (req, res) => {
   res.json(updated[0]);
 });
 
-/** DELETE /:orgId — 删除组织。仅 manager；非空（存在子组织或项目）拒删。 */
+/** DELETE /:orgId — delete org. Managers only; non-empty (child orgs or projects exist) refuses deletion. */
 organizationsRoute.delete('/:orgId', async (req, res) => {
   const user = req.user!;
   const orgId = req.params.orgId!;
@@ -187,7 +187,7 @@ organizationsRoute.delete('/:orgId', async (req, res) => {
     .from(organizations)
     .where(eq(organizations.parentId, orgId));
   if (Number(childCount[0]?.c ?? 0) > 0) throw new HttpError(409, 'not_empty', 'organization has child organizations');
-  // 「有项目」守卫：项目经产品线挂在组织下。
+  // "Has projects" guard: projects hang off orgs via product lines.
   const projectCount = await db
     .select({ c: count() })
     .from(projects)
@@ -199,7 +199,7 @@ organizationsRoute.delete('/:orgId', async (req, res) => {
   res.json({ ok: true });
 });
 
-/** GET /:orgId/projects?q=&includeSubtree=&page=&limit= — 组织项目分页 + 已分配人数。 */
+/** GET /:orgId/projects?q=&includeSubtree=&page=&limit= — org project pagination + assigned user counts. */
 organizationsRoute.get('/:orgId/projects', async (req, res) => {
   const user = req.user!;
   const orgId = req.params.orgId!;
@@ -229,7 +229,7 @@ organizationsRoute.get('/:orgId/projects', async (req, res) => {
         id: projects.id,
         name: projects.name,
         description: projects.description,
-        // 派生组织：响应仍带 organizationId，前端类型零改动。
+        // Derived org: the response still carries organizationId, zero changes to frontend types.
         organizationId: productLines.organizationId,
         repoUrl: projects.repoUrl,
       })
@@ -245,7 +245,7 @@ organizationsRoute.get('/:orgId/projects', async (req, res) => {
       .innerJoin(productLines, eq(productLines.id, projects.productLineId))
       .where(filter),
   ]);
-  // 单查 assignment 计数（按当前页 id 集合）
+  // Assignment counts queried separately (by the current page's id set)
   const pageIds = rows.map((r) => r.id);
   const assignmentCounts = pageIds.length
     ? await db
@@ -264,10 +264,11 @@ organizationsRoute.get('/:orgId/projects', async (req, res) => {
 });
 
 /**
- * GET /:orgId/product-lines?q=&includeSubtree=&page=&limit= — 组织下的产品线分页 + 线内项目数。
+ * GET /:orgId/product-lines?q=&includeSubtree=&page=&limit= — product-line pagination under the org + in-line project counts.
  *
- * 成员管理界面里产品线完全替代项目（项目不再直接挂组织），所以组织视图要给的是「这个组织下
- * 有哪些产品线」，而不是「这个组织下有哪些项目」。项目数取线内项目数，供列表直接展示归属规模。
+ * In the member management UI product lines fully replace projects (projects no longer hang off orgs directly), so the
+ * org view must show "which product lines are under this org" rather than "which projects are under this org".
+ * Project counts take the in-line project count so lists can directly show ownership size.
  */
 organizationsRoute.get('/:orgId/product-lines', async (req, res) => {
   const user = req.user!;
@@ -307,7 +308,7 @@ organizationsRoute.get('/:orgId/product-lines', async (req, res) => {
       .offset((page - 1) * limit),
     db.select({ count: count() }).from(productLines).where(filter),
   ]);
-  // 线内项目数：按当前页的线 id 集合单查，避免 N+1。
+  // In-line project counts: one query by the current page's line id set, avoiding N+1.
   const pageIds = rows.map((r) => r.id);
   const projectCounts = pageIds.length
     ? await db
@@ -325,13 +326,13 @@ organizationsRoute.get('/:orgId/product-lines', async (req, res) => {
   });
 });
 
-/** 列表版的成员查询：直接成员 ∨ 祖先链 manager；带分页 + 模糊搜索 username/displayName。 */
+/** List variant of the member query: direct members ∨ ancestor-chain managers; with pagination + fuzzy search on username/displayName. */
 organizationsRoute.get('/:orgId/members', async (req, res) => {
   const user = req.user!;
   const orgId = req.params.orgId!;
   const orgPath = await getOrgPath(orgId);
   if (!orgPath) throw new HttpError(404, 'not_found', 'organization not found');
-  // 直属成员或该组织的管理员可读
+  // Direct members or the org's managers may read
   const isMember = (await membershipsOf(user.userId)).some((m) => m.organizationId === orgId);
   if (!isMember && !isManagerOfOrg(user, orgPath)) throw new HttpError(404, 'not_found', 'organization not found');
 
@@ -375,7 +376,7 @@ organizationsRoute.get('/:orgId/members', async (req, res) => {
       .innerJoin(users, eq(organizationMembers.userId, users.id))
       .where(filter),
   ]);
-  // 带上组织名（子树口径下同一个人会在多个组织各出一条 membership）
+  // Attach org names (under the subtree criterion the same person gets one membership row per org)
   const orgNameRows = await db.select({ id: organizations.id, name: organizations.name }).from(organizations).where(inArray(organizations.id, orgIds));
   const nameByOrg = new Map(orgNameRows.map((o) => [o.id, o.name]));
   const items = rows.map((m) => ({
@@ -418,7 +419,7 @@ organizationsRoute.post('/:orgId/members', async (req, res) => {
     isManager: body.isManager,
     isUser: body.isUser,
   });
-  // 目标用户的可见组织列表 + 成员身份缓存失效
+  // Invalidate the target user's visible-org list + membership caches
   await invalidateMemberships(target.id);
   res.status(201).json({ ok: true });
 });
@@ -456,7 +457,7 @@ organizationsRoute.delete('/:orgId/members/:userId', async (req, res) => {
     .from(organizationMembers)
     .where(and(eq(organizationMembers.organizationId, orgId), eq(organizationMembers.userId, userId)));
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'member not found');
-  // 不能移除用户在所有组织中的最后一个成员资格（否则该账号无法登录）
+  // Must not remove the user's last membership across all orgs (otherwise the account cannot log in)
   const total = await db.select({ c: count() }).from(organizationMembers).where(eq(organizationMembers.userId, userId));
   if (Number(total[0]?.c ?? 0) <= 1) {
     throw new HttpError(409, 'last_membership', '不能移除用户的最后一个组织成员资格');

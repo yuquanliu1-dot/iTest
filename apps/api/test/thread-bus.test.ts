@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * threadBus（Assistant/RCA 线程跨副本桥）单元测试。
- * 仿 space-confirm.test.ts 的 vi.doMock('ioredis') + resetModules 法：
- * - 一个模块实例 = 一个副本；freshReplica 同时动态 import redisLock.js，
- *   取同 registry 周期的 ORIGIN_ID（顶层静态 import 在 doMock 后与 threadBus
- *   内部实例不同源，不能用来构造/断言信封 origin）。
- * - FakeRedis 不互连：发布侧用 callsOf 捕获 (chan, msg)，手动 emit 回订阅侧连接
- *   （= 模拟 Redis 把消息派发给订阅副本）。
- * 运行锁（itest:thread-run）的 SET NX / Lua 原语由 redis-lock.test.ts 兜底，
- * session 层（同副本 steer 重入 / 异副本拒绝）在 space-session.test.ts。
+ * Unit tests for threadBus (the Assistant/RCA thread cross-replica bridge).
+ * Follows space-confirm.test.ts's vi.doMock('ioredis') + resetModules approach:
+ * - One module instance = one replica; freshReplica dynamically imports redisLock.js at the same time,
+ *   taking an ORIGIN_ID from the same registry cycle (a top-level static import after doMock is a different
+ *   instance from threadBus's internal one, and must not be used to build/assert envelope origins).
+ * - FakeRedis instances aren't interconnected: the publishing side captures (chan, msg) via callsOf and manually
+ *   emits back to the subscribing side's connection (= simulating Redis dispatching a message to the subscribed replica).
+ * The run-lock (itest:thread-run) SET NX / Lua primitives are covered by redis-lock.test.ts;
+ * the session layer (same-replica steer re-entry / other-replica rejection) lives in space-session.test.ts.
  */
 
 type ThreadBus = typeof import('../src/pi/space/threadBus.js');
@@ -19,7 +19,7 @@ class FakeRedis {
   static all: FakeRedis[] = [];
   listeners: Record<string, Array<(...args: never[]) => void>> = {};
   calls: Record<string, unknown[][]> = {};
-  /** 按命令名覆写返回值（Error → reject）；缺省 0（exists→0 = 无锁，其余被 catch 吞）。 */
+  /** Override return values per command name (Error → reject); defaults to 0 (exists→0 = no lock; others swallowed by catch). */
   results: Record<string, unknown> = {};
   constructor() {
     FakeRedis.all.push(this);
@@ -50,7 +50,7 @@ class FakeRedis {
   }
 }
 
-/** 动态载入一对 (threadBus, redisLock)：同一次 reset 周期 → 共享同一 ORIGIN_ID。 */
+/** Dynamically load a (threadBus, redisLock) pair: same reset cycle → shared ORIGIN_ID. */
 async function freshReplica(): Promise<{ bus: ThreadBus; lock: RedisLock }> {
   vi.resetModules();
   FakeRedis.all = [];
@@ -77,7 +77,7 @@ describe('无 REDIS_URL（本地 dev / vitest）全 no-op', () => {
     expect(() => bus.startThreadCommandWatch(() => {})).not.toThrow();
     await expect(bus.threadRunRemote('t1')).resolves.toBe(false);
     expect(got).toHaveLength(0);
-    expect(FakeRedis.all).toHaveLength(0); // 全程零连接
+    expect(FakeRedis.all).toHaveLength(0); // zero connections the whole way
   });
 
   it('seq 分配/高水位:无 Redis 走进程内兜底计数,单调递增', async () => {
@@ -86,8 +86,8 @@ describe('无 REDIS_URL（本地 dev / vitest）全 no-op', () => {
     await expect(bus.allocateThreadSeq('t1')).resolves.toBe(2);
     await expect(bus.currentThreadSeq('t1')).resolves.toBe(2);
     await expect(bus.currentThreadSeq('t-none')).resolves.toBe(0);
-    expect(FakeRedis.all).toHaveLength(0); // 全程零连接
-    bus.deleteThreadSeq('t1'); // 本地兜底同步清
+    expect(FakeRedis.all).toHaveLength(0); // zero connections the whole way
+    bus.deleteThreadSeq('t1'); // local fallback cleared synchronously
     await expect(bus.currentThreadSeq('t1')).resolves.toBe(0);
   });
 });
@@ -104,11 +104,11 @@ describe('有 REDIS_URL（fake ioredis）', () => {
     const B = await freshReplica();
     const got: unknown[] = [];
     const unsub = B.bus.subscribeThreadMirror('t1', (e) => got.push(e));
-    // B 首订阅 → SUBSCRIBE 事件频道（B 的 sub 连接 = all[0]，B 的 freshReplica 刚清空 all）
+    // B's first subscription → SUBSCRIBE on the event channel (B's sub connection = all[0]; B's freshReplica just cleared all)
     const subB = FakeRedis.all[0]!;
     expect(subB.callsOf('subscribe')[0]).toEqual(['itest:thread-ev:t1']);
 
-    // A 发布 → 捕获信封（A 的 pub lazy 建 = all[1]）
+    // A publishes → capture the envelope (A's pub lazily built = all[1])
     A.bus.publishThreadEvent('t1', { type: 'verify_progress', seq: 1 });
     const pubA = FakeRedis.all[1]!;
     const [chan, msg] = pubA.callsOf('publish')[0]! as [string, string];
@@ -117,22 +117,22 @@ describe('有 REDIS_URL（fake ioredis）', () => {
     expect(env.o).toBe(A.lock.ORIGIN_ID);
     expect(env.e).toMatchObject({ type: 'verify_progress', seq: 1 });
 
-    // 手动派发给 B 的订阅连接 = 挂起副本收到异源事件 → 转发
+    // Manually dispatch to B's subscribed connection = the hanging replica receives a foreign-origin event → forward
     subB.emit('message', chan, msg);
     expect(got).toHaveLength(1);
     expect(got[0]).toMatchObject({ type: 'verify_progress', seq: 1 });
 
-    // 本副本回环:B 自己发布(信封 origin = B)→ 不转发(本地 listeners 已送达)
+    // Same-replica loopback: B published it itself (envelope origin = B) → not forwarded (local listeners already got it)
     B.bus.publishThreadEvent('t1', { type: 'x' });
     const pubB = FakeRedis.all[2]!;
     subB.emit('message', 'itest:thread-ev:t1', pubB.callsOf('publish')[0]![1] as string);
     expect(got).toHaveLength(1);
 
-    // 坏 JSON 静默忽略(不拖垮分发)
+    // Bad JSON silently ignored (doesn't drag down dispatch)
     subB.emit('message', 'itest:thread-ev:t1', '{broken');
     expect(got).toHaveLength(1);
 
-    // 退订 → UNSUBSCRIBE 记账
+    // Unsubscribe → UNSUBSCRIBE recorded
     unsub();
     expect(subB.callsOf('unsubscribe')[0]).toEqual(['itest:thread-ev:t1']);
   });
@@ -147,7 +147,7 @@ describe('有 REDIS_URL（fake ioredis）', () => {
     expect(sub.callsOf('unsubscribe')).toHaveLength(0);
     u2();
     expect(sub.callsOf('unsubscribe')).toHaveLength(1);
-    u2(); // 幂等:再调不重复退订
+    u2(); // idempotent: calling again doesn't unsubscribe twice
     expect(sub.callsOf('unsubscribe')).toHaveLength(1);
   });
 
@@ -159,7 +159,7 @@ describe('有 REDIS_URL（fake ioredis）', () => {
     const subB = FakeRedis.all[0]!;
     expect(subB.callsOf('psubscribe')[0]).toEqual(['itest:thread-cmd:*']);
 
-    // A 发起 cancel(值 = 发起副本 ORIGIN_ID)→ B 收到异源消息 → handler 执行
+    // A initiates cancel (value = initiating replica's ORIGIN_ID) → B receives a foreign-origin message → handler runs
     A.bus.publishThreadCancel('t9');
     const pubA = FakeRedis.all[1]!;
     const [chan, msg] = pubA.callsOf('publish')[0]! as [string, string];
@@ -168,13 +168,13 @@ describe('有 REDIS_URL（fake ioredis）', () => {
     subB.emit('pmessage', 'itest:thread-cmd:*', chan, msg);
     expect(aborted).toEqual(['t9']);
 
-    // B 自己广播的(回环;本地快路径已 abort)跳过
+    // What B itself broadcast (loopback; the local fast path already aborted) is skipped
     B.bus.publishThreadCancel('t8');
     const pubB = FakeRedis.all[2]!;
     subB.emit('pmessage', 'itest:thread-cmd:*', 'itest:thread-cmd:t8', pubB.callsOf('publish')[0]![1] as string);
     expect(aborted).toEqual(['t9']);
 
-    // 重复 watch:只替换 handler,不再 psubscribe;旧 handler 不再被调
+    // Repeat watch: only the handler is replaced, no extra psubscribe; the old handler is no longer called
     const second: string[] = [];
     B.bus.startThreadCommandWatch((id) => second.push(id));
     subB.emit('pmessage', 'itest:thread-cmd:*', 'itest:thread-cmd:t7', 'other');
@@ -185,8 +185,8 @@ describe('有 REDIS_URL（fake ioredis）', () => {
 
   it('threadRunRemote:EXISTS>0 → true;0 → false;探测报错 → false', async () => {
     const { bus } = await freshReplica();
-    await expect(bus.threadRunRemote('t1')).resolves.toBe(false); // 缺省 exists → 0
-    const redis = FakeRedis.all[0]!; // getPub lazy 建
+    await expect(bus.threadRunRemote('t1')).resolves.toBe(false); // default exists → 0
+    const redis = FakeRedis.all[0]!; // getPub lazily built
     expect(redis.callsOf('exists')[0]).toEqual(['itest:thread-run:t1']);
     redis.results.exists = 1;
     await expect(bus.threadRunRemote('t1')).resolves.toBe(true);
@@ -196,22 +196,22 @@ describe('有 REDIS_URL（fake ioredis）', () => {
 
   it('seq 分配/高水位:INCR 键名 itest:thread-seq:<id>;高水位 GET 同键;删除 DEL;报错落本地兜底', async () => {
     const { bus } = await freshReplica();
-    await expect(bus.allocateThreadSeq('t1')).resolves.toBe(0); // 首调 lazy 建;fake 缺省 incr → 0
+    await expect(bus.allocateThreadSeq('t1')).resolves.toBe(0); // first call lazily builds; fake default incr → 0
     const redis = FakeRedis.all[0]!;
-    // 真 INCR 的单调性由 Redis 保证,fake 只验键名与值透传(冷构建基线读同一键)
+    // Real INCR's monotonicity is guaranteed by Redis; the fake only verifies key name and value passthrough (the cold-build baseline reads the same key)
     redis.results.incr = 41;
     await expect(bus.allocateThreadSeq('t1')).resolves.toBe(41);
     expect(redis.callsOf('incr')[0]).toEqual(['itest:thread-seq:t1']);
     redis.results.get = 41;
     await expect(bus.currentThreadSeq('t1')).resolves.toBe(41);
     expect(redis.callsOf('get')[0]).toEqual(['itest:thread-seq:t1']);
-    redis.results.get = 0; // 键不存在/坏值 → 0
+    redis.results.get = 0; // missing key/bad value → 0
     await expect(bus.currentThreadSeq('t1')).resolves.toBe(0);
 
     bus.deleteThreadSeq('t1');
     expect(redis.callsOf('del')[0]).toEqual(['itest:thread-seq:t1']);
 
-    // Redis 故障降级:本地兜底计数接管(副本间一致性丢失,单进程语义不变)
+    // Redis failure degradation: the local fallback counter takes over (cross-replica consistency is lost; single-process semantics unchanged)
     redis.results.incr = new Error('down');
     redis.results.get = new Error('down');
     await expect(bus.allocateThreadSeq('t2')).resolves.toBe(1);

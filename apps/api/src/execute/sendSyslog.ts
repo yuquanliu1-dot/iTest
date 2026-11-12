@@ -13,12 +13,12 @@ export class SyslogSendTimeout extends Error {
 
 export type { SyslogStepResult };
 
-/** RFC3164 TAG 固定为 itest。 */
+/** RFC3164 TAG fixed to itest. */
 const TAG = 'itest';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** facility/severity code = 枚举下标（SyslogFacility 定义保证 kernel=0 ... local7=23）。 */
+/** facility/severity code = enum index (SyslogFacility's definition guarantees kernel=0 ... local7=23). */
 export function facilityCode(facility: string): number {
   const i = SyslogFacility.options.indexOf(facility as never);
   if (i < 0) throw new SyslogSendError(`未知 syslog facility: ${facility}`);
@@ -35,7 +35,7 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-/** RFC3164 时间戳：`Mmm dd hh:mm:ss`，日 <10 用前导空格（不是补零）。 */
+/** RFC3164 timestamp: `Mmm dd hh:mm:ss`; day <10 uses a leading space (not zero padding). */
 export function rfc3164Timestamp(date: Date): string {
   const day = date.getDate();
   const dayField = day < 10 ? ` ${day}` : String(day);
@@ -43,7 +43,7 @@ export function rfc3164Timestamp(date: Date): string {
   return `${MONTHS[date.getMonth()]} ${dayField} ${time}`;
 }
 
-/** 生成 RFC3164 报文：`<PRI>TIMESTAMP HOSTNAME TAG: MSG`（不含帧尾换行，TCP 分帧时另加）。 */
+/** Builds an RFC3164 packet: `<PRI>TIMESTAMP HOSTNAME TAG: MSG` (no trailing newline; TCP framing adds it separately). */
 export function buildRfc3164(opts: {
   facility: string;
   severity: string;
@@ -59,7 +59,7 @@ function sendUdp(host: string, port: number, packet: Buffer, timeoutMs: number):
   return new Promise((resolve, reject) => {
     const socket = dgram.createSocket('udp4');
     let settled = false;
-    const closeSocket = () => { try { socket.close(); } catch { /* 未 bind 即失败时 close 可能抛错，忽略 */ } };
+    const closeSocket = () => { try { socket.close(); } catch { /* close can throw when it failed before bind — ignore */ } };
     const settle = (err: Error | null) => {
       if (settled) return;
       settled = true;
@@ -91,7 +91,7 @@ function sendTcp(host: string, port: number, payload: Buffer, timeoutMs: number)
     }, timeoutMs);
     socket.on('error', (e) => settle(new SyslogSendError(`syslog TCP ${host}:${port} 失败: ${e.message}`)));
     socket.on('connect', () => {
-      // RFC6587 octet-sticking 之外的常见做法：每条报文以 \n 分帧
+      // A common approach besides RFC6587 octet-stuffing: each packet framed with \n
       socket.end(payload, () => settle(null));
     });
   });

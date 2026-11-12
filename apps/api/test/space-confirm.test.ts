@@ -18,7 +18,7 @@ describe('confirm gate', () => {
     resolveConfirmation(confirmId, true);
     await expect(p).resolves.toBe(true);
     expect(pendingCountForTesting()).toBe(0);
-    // 已消费的 confirmId 不可二次 resolve(重放点击 → 404 的契约基础)
+    // A consumed confirmId cannot be resolved twice (the contract basis for replayed clicks → 404)
     await expect(resolveConfirmation(confirmId, true)).resolves.toBe(false);
   });
 
@@ -55,13 +55,13 @@ describe('confirm gate', () => {
     resolveConfirmation(events[0]!.confirmId as string, true);
     await expect(pc).resolves.toBe(true);
     expect(pendingCountForTesting()).toBe(2);
-    // 其余两个用取消收尾,验证 id 各自独立(不误触发 pc 已验证)
+    // The other two wind down via cancel; verify ids are independent of each other (accidentally triggering pc is already ruled out)
     await expect(resolveConfirmation('bogus', true)).resolves.toBe(false);
     void pa; void pb;
   });
 });
 
-// ── 跨副本门(挂 FakeRedis;动态 import 取同一模块实例的 request/resolve 对)──────────
+// ── Cross-replica gate (with FakeRedis attached; dynamic import grabs the request/resolve pair from the same module instance) ──────────
 
 const KEY_PREFIX = 'itest:confirm:';
 const RES_PREFIX = 'itest:confirm-res:';
@@ -72,9 +72,9 @@ class FakeRedis {
   static all: FakeRedis[] = [];
   listeners: Record<string, Array<(...args: never[]) => void>> = {};
   calls: Array<{ cmd: string; args: unknown[] }> = [];
-  /** 按命令名固定返回值(缺省 null)。 */
+  /** Fixed return values by command name (default null). */
   results: Record<string, unknown> = {};
-  /** 数据面(static):模拟共享 Redis——不同模块实例(=不同副本)的连接必须看得见彼此的键。 */
+  /** Data plane (static): simulates a shared Redis — connections from different module instances (= different replicas) must see each other's keys. */
   static strings = new Map<string, string>();
   constructor() {
     FakeRedis.all.push(this);
@@ -115,7 +115,7 @@ class FakeRedis {
   }
 }
 
-/** 动态载入挂 FakeRedis 的 confirm 模块(挂起表随模块实例隔离)。 */
+/** Dynamically load the confirm module with FakeRedis attached (the pending table is isolated per module instance). */
 async function freshConfirm(): Promise<WsConfirm> {
   vi.resetModules();
   FakeRedis.all = [];
@@ -138,7 +138,7 @@ describe('confirm gate 跨副本(REDIS_URL)', () => {
     const events: Record<string, unknown>[] = [];
     const p = mod.requestConfirmation({ threadId: 't1', toolName: 'manage_cases', action: 'delete', summary: 'x', risk: 'delete' }, (e) => events.push(e));
     const cid = events[0]!.confirmId as string;
-    // 连接 lazily:getPub(SET)+ getSub(SUBSCRIBE) 各一条
+    // Connections are lazy: getPub (SET) + getSub (SUBSCRIBE), one each
     const pub = FakeRedis.all[0]!;
     const sub = FakeRedis.all[1]!;
     expect(pub.callsOf('set')[0]!.args[0]).toBe(`itest:confirm:${cid}`);
@@ -147,7 +147,7 @@ describe('confirm gate 跨副本(REDIS_URL)', () => {
     expect(JSON.parse(pub.callsOf('set')[0]!.args[1] as string)).toMatchObject({ type: 'confirm_request', confirmId: cid });
     expect(sub.callsOf('subscribe')[0]!.args).toEqual([`itest:confirm-res:${cid}`]);
 
-    // 本地快路径 resolve:答案不经 pub/sub 直接落地,且关门(退订 + 删认领键)
+    // Local fast-path resolve: the answer lands directly without pub/sub, and the gate closes (unsubscribe + delete claim key)
     await expect(mod.resolveConfirmation(cid, true)).resolves.toBe(true);
     await expect(p).resolves.toBe(true);
     expect(pub.callsOf('getdel')).toHaveLength(0);
@@ -156,23 +156,23 @@ describe('confirm gate 跨副本(REDIS_URL)', () => {
   });
 
   it('他副本 resolve:GETDEL 认领 + publish 答案;挂起副本经订阅收到后 resolve', async () => {
-    // 两个模块实例 = 两个副本:B 无 A 的挂起表,resolve 只能走跨副本门
+    // Two module instances = two replicas: B has none of A's pending table, so resolve can only go through the cross-replica gate
     const replicaA = await freshConfirm();
     const replicaB = await freshConfirm();
     const events: Record<string, unknown>[] = [];
     const p = replicaA.requestConfirmation({ threadId: 't1', toolName: 'manage_cases', action: 'delete', summary: 'x', risk: 'delete' }, (e) => events.push(e));
     const cid = events[0]!.confirmId as string;
-    // A 的 pub/sub = all[0]/all[1];B 的 pub lazy:首次 resolve 才建,须在 await 后取
+    // A's pub/sub = all[0]/all[1]; B's pub is lazy: created on first resolve, must be fetched after the await
     const subA = FakeRedis.all[1]!;
 
     await expect(replicaB.resolveConfirmation(cid, true)).resolves.toBe(true);
     const pubB = FakeRedis.all[2]!;
     expect(pubB.callsOf('getdel')[0]!.args).toEqual([`itest:confirm:${cid}`]);
     expect(pubB.callsOf('publish')[0]!.args).toEqual([`itest:confirm-res:${cid}`, '1']);
-    // FakeRedis 不互连:手动把发布派发回 A 的订阅连接(= 挂起副本收到答案)
+    // FakeRedis instances are not interconnected: manually dispatch the publish back to A's subscription connection (= the suspended replica receives the answer)
     subA.emit('message', `itest:confirm-res:${cid}`, '1');
     await expect(p).resolves.toBe(true);
-    // 答案消费后退订记账
+    // Unsubscribe accounting after the answer is consumed
     expect(subA.callsOf('unsubscribe')[0]!.args).toEqual([`itest:confirm-res:${cid}`]);
   });
 
@@ -188,11 +188,11 @@ describe('confirm gate 跨副本(REDIS_URL)', () => {
       subA.emit('message', `itest:confirm-res:${cid}`, '0');
       await expect(p).resolves.toBe(false);
 
-      // 伪造确认(他副本没有对应认领键):GETDEL miss → false(404 语义)
+      // Forge a confirmation (the other replica has no matching claim key): GETDEL miss → false (404 semantics)
       await expect(replicaB.resolveConfirmation(crypto.randomUUID(), true)).resolves.toBe(false);
-      // 超时路径:关门 + resolve(false),此后他副本同样 miss
+      // Timeout path: gate closes + resolve(false); afterwards the other replica misses the same way
       const p2 = replicaA.requestConfirmation({ threadId: 't1', toolName: 'manage_cases', action: 'delete', summary: 'y', risk: 'delete' }, () => {});
-      // A 的 pub 连接是模块级单例(all[0]):第二次挂起的 SET 是该连接第 2 次 set
+      // A's pub connection is a module-level singleton (all[0]): the second suspension's SET is that connection's 2nd set
       const cid2 = (FakeRedis.all[0]!.callsOf('set')[1]!.args[0] as string).slice(KEY_PREFIX.length);
       await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
       await expect(p2).resolves.toBe(false);

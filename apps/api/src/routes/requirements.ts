@@ -14,7 +14,7 @@ const CreateBody = z.object({
   projectId: z.string().uuid().optional(),
 });
 
-/** 双挂载：/projects/:projectId/requirements 与 /requirements。可见性从项目维度判定。 */
+/** Dual mount: /projects/:projectId/requirements and /requirements. Visibility judged from the project dimension. */
 requirementsRoute.get('/', async (req, res) => {
   const { projectId } = req.params as { projectId?: string };
   let rows;
@@ -22,7 +22,7 @@ requirementsRoute.get('/', async (req, res) => {
     await assertProjectVisible(projectId, req.user!);
     rows = await db.select().from(requirements).where(eq(requirements.projectId, projectId)).orderBy(asc(requirements.createdAt));
   } else {
-    // 直挂载：按可见项目过滤
+    // Direct mount: filter by visible projects
     const visiblePids = await visibleProjectIds(req.user!);
     rows = visiblePids.length
       ? await db.select().from(requirements).where(inArray(requirements.projectId, visiblePids)).orderBy(asc(requirements.createdAt))
@@ -47,7 +47,7 @@ requirementsRoute.post('/', async (req, res) => {
 requirementsRoute.get('/:id', async (req, res) => {
   const rows = await db.select().from(requirements).where(eq(requirements.id, req.params.id));
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'requirement not found');
-  // 经所属项目判定可见性（不依赖挂载参数，两种挂载统一）
+  // Visibility judged via the owning project (independent of mount params, unified across both mounts)
   await assertProjectVisible(rows[0]!.projectId, req.user!);
   res.json(rows[0]);
 });

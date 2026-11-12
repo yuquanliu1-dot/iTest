@@ -62,7 +62,7 @@ describe('environments CRUD', () => {
     expect(r.body.objects[0].objectType).toBe('db');
     expect(r.body.objects[0].payload.secret).toBe('••••••••');
     expect(r.body.objects[0].payload.password).toBeUndefined();
-    // 密文真实落库（AES 三元组 base64）
+    // ciphertext is really persisted (AES triple, base64)
     const row = await pool.query(`SELECT payload FROM environment_objects WHERE environment_id=$1`, [r.body.id]);
     const secret = readSecret(row.rows[0]!.payload);
     expect(secret?.c).toBeTruthy();
@@ -108,7 +108,7 @@ describe('environments CRUD', () => {
     expect(upd.status).toBe(200);
     expect(upd.body.payload.host).toBe('b.db');
     expect(upd.body.payload.secret).toBe('••••••••');
-    // 旧密文保留且可解出原密码
+    // old ciphertext kept and the original password still decrypts
     const row = await pool.query(`SELECT payload FROM environment_objects WHERE id=$1`, [obj.body.id]);
     const secret = readSecret(row.rows[0]!.payload)!;
     const { decrypt } = await import('../src/lib/secret-crypto.js');
@@ -205,7 +205,7 @@ describe('POST /environments/test-db gauss100（经 JDBC 桥）', () => {
     process.env.GAUSS_BRIDGE_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       const r = await request(app).post('/api/environments/test-db').send(gaussBody);
-      expect(r.status).toBe(200); // 200 + ok:false 是探测失败的既定约定
+      expect(r.status).toBe(200); // 200 + ok:false is the established convention for probe failure
       expect(r.body.ok).toBe(false);
       expect(r.body.error).toContain('GS-00329');
       expect(r.body.error).toContain('HTTP 400');

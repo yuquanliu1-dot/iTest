@@ -1,8 +1,8 @@
 /**
- * RCA worker:消费 rca 队列。每个 planRun 建一个 purpose='rca' 的助手线程,注入失败
- * 用例清单,AI 按 defect-rca skill 逐用例分类/取证,经 save_rca_result 落库。
- * 超时护栏:runWithTimeout 整体超时 → steer 收尾 → 宽限 → abort;finally 兜底写 timeout 行。
- * 崩溃恢复:进程死亡走不到 finally,启动时 sweepStaleRcaRuns 按线程年龄补标残留行。
+ * RCA worker: consumes the rca queue. Each planRun gets one purpose='rca' assistant thread, injected with the failed
+ * case list; the AI classifies/gathers evidence case by case per the defect-rca skill, persisting via save_rca_result.
+ * Timeout guard: runWithTimeout overall timeout → steer wrap-up → grace → abort; finally as fallback writes the timeout rows.
+ * Crash recovery: process death never reaches finally; at startup sweepStaleRcaRuns back-marks leftover rows by thread age.
  */
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull, lt } from 'drizzle-orm';
@@ -24,7 +24,7 @@ interface FailedCaseItem {
   failedSteps: Array<{ order: number; failureReason: string | null; humanMessage: string | null; error: string | null }>;
 }
 
-/** 任务清单 prompt：defect-rca skill 的工作流由 skill 侧承载,这里只给清单与硬性要求。 */
+/** Task-list prompt: the defect-rca skill's workflow lives on the skill side; here we only provide the list and hard requirements. */
 export function buildTaskPrompt(planName: string, runId: string, items: FailedCaseItem[]): string {
   const list = items.map((it, i) => {
     const steps = it.failedSteps.length
@@ -53,7 +53,7 @@ export function buildTaskPrompt(planName: string, runId: string, items: FailedCa
   ].join('\n');
 }
 
-/** 汇集本 run 全部失败业务用例 + 首个报告的失败步骤摘要（error 截 500 字防爆清单）。 */
+/** Collects all failed business cases of this run + the first report's failed-step summary (error truncated to 500 chars to keep the list from exploding). */
 async function collectFailedCases(planRunId: string): Promise<FailedCaseItem[]> {
   const rows = await db
     .select({
@@ -88,16 +88,16 @@ async function collectFailedCases(planRunId: string): Promise<FailedCaseItem[]> 
   return out;
 }
 
-/** 守卫顺序:run 开关 → plan.versionId(无版本=无助手空间) → 线程查重(幂等) → 失败清单非空。
- *  线程行先插入;会话创建/首发消息失败只记日志不删行,失败清单经 fillTimeoutRows 兜底标 timeout。 */
+/** Guard order: run switch → plan.versionId (no version = no assistant space) → thread dedup (idempotency) → failed list non-empty.
+ *  The thread row is inserted first; session creation / first-message failure only logs without deleting the row; the failed list gets back-marked timeout via fillTimeoutRows. */
 export async function processRcaJob(data: RcaJob): Promise<void> {
   const run = (await db.select().from(planRuns).where(eq(planRuns.id, data.planRunId)).limit(1))[0];
   if (!run || !run.rcaEnabled || (run.failedCases ?? 0) <= 0) return;
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, run.planId)).limit(1))[0];
-  if (!plan?.versionId) return; // 无版本 → 无助手空间
+  if (!plan?.versionId) return; // no version → no assistant space
   const dup = await db.select({ id: aiThreads.id }).from(aiThreads)
     .where(and(eq(aiThreads.purpose, 'rca'), eq(aiThreads.planRunId, run.id))).limit(1);
-  if (dup.length > 0) return; // 幂等：本 run 已有分析线程
+  if (dup.length > 0) return; // idempotency: this run already has an analysis thread
   const failed = await collectFailedCases(run.id);
   if (failed.length === 0) return;
 
@@ -110,7 +110,7 @@ export async function processRcaJob(data: RcaJob): Promise<void> {
     purpose: 'rca',
     planRunId: run.id,
     title: `根因分析 · ${plan.name} · run#${run.id.slice(0, 8)}`,
-    piThreadId: '', // 会话起好后 createSpaceSessionFactory 回填 sessionFile
+    piThreadId: '', // createSpaceSessionFactory backfills sessionFile once the session is up
     createdByUserId: run.triggeredByUserId,
   });
   try {
@@ -124,8 +124,8 @@ export async function processRcaJob(data: RcaJob): Promise<void> {
   }
 }
 
-/** 兜底标行为:本 run 仍未落 rca 的失败业务行批量写 status(isNull(rca) 保证不覆盖 AI 已落结论)。
- *  outcome 决定文案——done(会话正常结束但漏落)/timeout(超时)/error(会话异常中断)。 */
+/** Fallback marking: batch-writes status on this run's failed business rows that still have no rca (isNull(rca) guarantees not overwriting conclusions the AI already persisted).
+ *  outcome decides the wording — done (session ended normally but missed persisting) / timeout / error (session crashed mid-run). */
 async function fillTimeoutRows(
   planRunId: string,
   threadId: string,
@@ -142,14 +142,14 @@ async function fillTimeoutRows(
     isNull(planRunCases.rca),
   )).returning({ id: planRunCases.id });
   if (rows.length > 0) {
-    // 终态 run 详情缓存里有 cases[].rca,rca 落库后必须失效,否则前端最长 5min 看不到结论
+    // The terminal run-detail cache carries cases[].rca; it must be invalidated once rca is persisted, or the frontend won't see conclusions for up to 5min
     await cache.del(planRunDetailKey(planRunId));
   }
   return rows.length;
 }
 
-// 超时常量与 runWithTimeout:整体超时默认 30min,到点先 steer 收尾,宽限默认 3min 后 abort。
-// env 可调(RCA_TIMEOUT_MS / RCA_GRACE_MS),Task 6 的超时测试会设成 200ms 驱动。
+// Timeout constants and runWithTimeout: overall timeout defaults to 30min; on expiry steer wrap-up first, grace defaults to 3min then abort.
+// Tunable via env (RCA_TIMEOUT_MS / RCA_GRACE_MS); Task 6's timeout tests set them to 200ms to drive it.
 const RCA_TIMEOUT_MS = Number(process.env.RCA_TIMEOUT_MS) || 30 * 60_000;
 const RCA_GRACE_MS = Number(process.env.RCA_GRACE_MS) || 3 * 60_000;
 
@@ -165,19 +165,19 @@ async function runWithTimeout(threadId: string, fn: () => Promise<void>): Promis
         sendSpaceUserMessage(threadId, '整体分析已超时：立即停止取证，把已完成结论逐一 save_rca_result 落库并发一句结案总结；未分析的不用补。', 'steer'),
         new Promise((resolve) => { timer = setTimeout(resolve, RCA_GRACE_MS); }),
       ]);
-    } catch { /* steer 失败按超时处理 */ }
+    } catch { /* steer failure is treated as timeout */ }
     cancelThread(threadId);
     return 'timeout';
   } finally {
-    // 覆盖 fn 抛错/提前返回的路径,不留 30min 悬挂定时器
+    // Covers the fn-throws/early-return paths, leaving no 30min dangling timer
     if (timer) clearTimeout(timer);
   }
 }
 
 /**
- * 崩溃恢复扫补:进程死亡时 finally 不会执行,崩溃前的 run 失败行会永远悬着 rca=NULL。
- * 现场存活上限是 RCA_TIMEOUT_MS + RCA_GRACE_MS,再加 5min 余量仍早于该时刻的 rca 线程
- * 必然已死——补标 timeout。年轻线程可能是另一副本的活分析(生产多副本),绝不碰。
+ * Crash-recovery sweep: on process death finally never runs, so pre-crash run failure rows hang with rca=NULL forever.
+ * A session's max lifetime is RCA_TIMEOUT_MS + RCA_GRACE_MS; adding a 5min margin still lands before that moment, so such rca threads
+ * are necessarily dead — back-mark them timeout. Younger threads may be another replica's live analysis (multi-replica prod), never touch them.
  */
 export async function sweepStaleRcaRuns(): Promise<number> {
   const cutoff = new Date(Date.now() - (RCA_TIMEOUT_MS + RCA_GRACE_MS + 5 * 60_000));
@@ -194,7 +194,7 @@ export async function sweepStaleRcaRuns(): Promise<number> {
 
 let _worker: Worker<RcaJob> | null = null;
 
-/** API 进程启动时调用。先崩溃扫补(含无 redis 的 inline 模式),再视 REDIS_URL 决定是否建 worker。 */
+/** Called at API process startup. Runs the crash-recovery sweep first (including inline mode without redis), then decides whether to build a worker based on REDIS_URL. */
 export async function startRcaWorker(): Promise<void> {
   try {
     await sweepStaleRcaRuns();

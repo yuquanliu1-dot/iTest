@@ -1,34 +1,34 @@
 /**
- * 探索会话的预算口径（纯计算，不碰 DB）。
+ * Budget semantics of exploration sessions (pure computation, never touches the DB).
  *
- * 独立成模块的原因：explorationShared 拖着 db/client（模块加载时读 DATABASE_URL），
- * 预算口径必须能在不起库的情况下单测——静态 import explorationShared 会把 pool
- * 绑到默认库，导致用例假红（2026-11-12 踩过的坑）。
+ * Why this is a standalone module: explorationShared drags in db/client (which reads DATABASE_URL at module load),
+ * and budget semantics must be unit-testable without standing up a database — a static import of explorationShared binds
+ * the pool to the default database, making cases false-red (a gotcha hit on 2026-11-12).
  *
- * 为什么墙钟由轮次物化：固定墙钟会让「轮次预算」旋钮空转——配到 60 轮也撞
- * 15 分钟墙钟先停（轮次成了摆设）。轮次是深度的唯一旋钮，墙钟只是它的物化 + 兜底；
- * 单轮挂死另由空闲看门狗兜（EXPLORATION_IDLE_TIMEOUT_MS），不混在墙钟里。
+ * Why the wall clock is materialized from turns: a fixed wall clock would leave the "turn budget" knob spinning idle —
+ * even a 60-turn config stops at the 15-minute wall clock first (turns become decoration). Turns are the only depth knob; the wall clock is just its materialization + fallback;
+ * a single hung turn is caught separately by the idle watchdog (EXPLORATION_IDLE_TIMEOUT_MS), not mixed into the wall clock.
  */
 
-/** 轮次预算默认值（用户可在创建会话时覆盖，4~240；null=用这里）：超界优雅收尾
- *  （已发现的 findings 全保留）。runAiTask 硬闸 = 预算 +16 仅 runaway 兜底——硬闸随预算放大，
- *  否则用户配大轮次会被固定硬闸先拦，可配置形同虚设。 */
+/** Default turn budget (user-overridable at session creation, 4~240; null = use this): an out-of-budget exit wraps up gracefully
+ *  (all discovered findings are kept). The runAiTask hard gate = budget +16, purely a runaway fallback — the hard gate scales with the budget,
+ *  otherwise a user's large turn config would be blocked first by the fixed hard gate, making configurability moot. */
 export const EXPLORATION_MAX_TURNS = 60;
-/** 每轮预估耗时（一次 LLM 调用 + 浏览器动作 + 查库等待）——会话墙钟由轮次物化。 */
+/** Estimated per-turn duration (one LLM call + browser actions + DB waits) — the session wall clock is materialized from turns. */
 export const EXPLORATION_MS_PER_TURN = 60_000;
-/** 会话墙钟下限（预算很小时也给的最小跑动时间）。 */
+/** Session wall-clock floor (a minimum run time granted even for tiny budgets). */
 export const EXPLORATION_WALL_CLOCK_MIN_MS = 15 * 60_000;
-/** 会话墙钟上限（预算很大时也不无限跑）。须 ≥ 轮次上限 × 每轮预估——否则大轮次被
- *  墙钟先拦，「轮次是唯一旋钮」形同虚设（240 轮 × 60s/轮 = 240 分钟）。 */
+/** Session wall-clock ceiling (no unbounded runs even for huge budgets). Must be ≥ turn ceiling × per-turn estimate — otherwise large turn budgets get
+ *  blocked by the wall clock first, making "turns are the only knob" moot (240 turns × 60s/turn = 240 minutes). */
 export const EXPLORATION_WALL_CLOCK_MAX_MS = 240 * 60_000;
-/** 单次调用静默上限：这么久没有任何 pi 事件（message_update/tool_*）= 模型调用挂死。
- *  墙钟放大后必须由它兜挂死——否则一次挂死的 LLM 调用能占住整场会话。
- *  5 分钟而非更短：推理型网关可能在思考阶段长时间不出首字节，阈值太小会误杀正常调用。 */
+/** Per-call silence ceiling: this long with no pi events (message_update/tool_*) = the model call is hung.
+ *  After the wall clock was enlarged, this must be the hang catcher — otherwise a single hung LLM call can occupy the whole session.
+ *  5 minutes rather than shorter: reasoning-type gateways may go a long time without a first byte during the thinking phase; too small a threshold would false-kill normal calls. */
 export const EXPLORATION_IDLE_TIMEOUT_MS = 5 * 60_000;
 
 /**
- * 会话墙钟 = 轮次预算物化（钳在上下限之间）。
- * 轮次是深度的唯一旋钮；墙钟只是它的物化 + 兜底，不再是独立硬闸。
+ * Session wall clock = turn budget materialized (clamped between floor and ceiling).
+ * Turns are the only depth knob; the wall clock is just its materialization + fallback, no longer an independent hard gate.
  */
 export function explorationWallClockMs(maxTurns: number): number {
   const raw = maxTurns * EXPLORATION_MS_PER_TURN;

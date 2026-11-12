@@ -1,23 +1,23 @@
 /**
- * 探索会话看门狗：把「执行器已死、状态却还停在 running」的僵死会话判死。
+ * Exploration session watchdog: declares dead the stale sessions whose executor is gone but whose status is still running.
  *
- * 场景（2026-11-11 发版实证的问题）：发版重建 api 容器 → 执行器进程被杀 →
- * exec worker 的 catch 只写日志不写状态（execWorker.ts）→ 会话永远 running →
- * 删除永远 409（routes/explorations.ts），用户既删不掉也看不到原因。
+ * Scenario (proven by the 2026-11-11 release): rebuilding the api container killed the executor process →
+ * the exec worker's catch only logged, never wrote status (execWorker.ts) → the session stayed running forever →
+ * delete always 409'd (routes/explorations.ts); users could neither delete it nor see why.
  *
- * 判据 = 心跳超时。心跳由 runner 每轮对话前刷新（exploration.ts 的 heartbeat()），
- * 窗口必须宽于单轮最坏耗时（LLM 慢调用），否则会把活会话误判死。
- * 多副本同时扫无害：UPDATE 条件含 status='running'，判过的不再命中。
+ * Criterion = heartbeat timeout. The heartbeat is refreshed by the runner before each turn (heartbeat() in exploration.ts);
+ * the window must be wider than the worst per-turn latency (slow LLM calls), or live sessions get falsely killed.
+ * Concurrent sweeps across replicas are harmless: the UPDATE condition includes status='running', so already-judged rows no longer match.
  */
 import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { explorationSessions } from '../db/schema.js';
 import { logger } from '../logger.js';
 
-/** 心跳窗口：5 分钟无心跳判死（单轮 LLM 调用最坏 1~2 分钟，允许连续 2~3 轮慢调用不误杀）。 */
+/** Heartbeat window: no heartbeat for 5 minutes → declared dead (a single LLM call can take 1-2 minutes at worst; 2-3 consecutive slow turns are tolerated without false kills). */
 export const EXPLORATION_STALE_MS = 5 * 60_000;
 
-/** 判死僵死的 running 会话，返回被判死的条数。 */
+/** Declares dead the stale running sessions; returns how many were killed. */
 export async function sweepStaleExplorations(): Promise<number> {
   const cutoff = new Date(Date.now() - EXPLORATION_STALE_MS);
   const stale = await db
@@ -41,7 +41,7 @@ export async function sweepStaleExplorations(): Promise<number> {
   return stale.length;
 }
 
-/** 启动时扫一次 + 之后每分钟扫一次。unref：不拖住进程退出。 */
+/** Sweep once at startup + once per minute afterwards. unref: doesn't hold up process exit. */
 export async function startExplorationSweeper(): Promise<void> {
   try {
     await sweepStaleExplorations();

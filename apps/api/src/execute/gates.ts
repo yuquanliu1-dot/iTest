@@ -1,21 +1,21 @@
 /**
- * 平台机械闸门（执行链路的确定性约束，与模型无关）。
+ * Platform mechanical gates (deterministic constraints on the execution chain, model-independent).
  *
- * 抽自 aiTask.ts：探索执行核心从「每轮一个 JSON 大包」换成 pi 工具链后，这些闸门要
- * 在**工具层**再拦一次。闸门语义逐字保留、判定口径单一——两份实现一旦漂移，
- * 「AI 相链路拦住的东西探索链路会放行」是最难发现的一类回归。
+ * Extracted from aiTask.ts: after the exploration execution core switched from「每轮一个 JSON 大包」to the pi tool chain,
+ * these gates must intercept again at the **tool layer**. Gate semantics preserved verbatim, a single judging definition — once the two implementations drift,
+ * 「AI 相链路拦住的东西探索链路会放行」is the hardest class of regression to spot.
  */
 
 /**
- * 破坏性动作关键词表：命中即机械拒收（默认拒，用户在会话里显式授权才放行）。
+ * Destructive-action keyword table: a hit means mechanical rejection (default deny; passes only with the user's explicit in-session authorization).
  *
- * 判定对象 = **被点击元素的可见文本**（text + placeholder + value + selector 拼接），
- * 不是模型输出——闸必须确定性、可复现、可审计。charter 是自然语言，模型会拿它当借口
- * （2026-11-10 prod 实录：章程要求核查删除是否真落库 → 模型点了删除 → 资产真被删）。
+ * Judging target = **the clicked element's visible text** (text + placeholder + value + selector concatenated),
+ * not the model's output — the gate must be deterministic, reproducible, auditable. The charter is natural language, and the model will use it as an excuse
+ * (2026-11-10 prod record: the charter asked to verify whether deletes really land in the DB → the model clicked delete → the asset was really deleted).
  *
- * 刻意不收「清除 / 重置 / 取消 / 确认 / 保存 / 提交 / 导出 / 导入」：这些在探索里是正常
- * 观测动作（探索基底本就允许用测试语义内容提交表单观察校验行为）。误伤方向一律选
- * 「拦住而非执行」，会话级授权开关是兜底。
+ * Deliberately NOT covering「清除 / 重置 / 取消 / 确认 / 保存 / 提交 / 导出 / 导入」: these are normal observation actions in exploration
+ * (the exploration base already allows submitting forms with test-semantic content to observe validation behavior). For false positives always choose
+ * 「拦住而非执行」 (block rather than execute); the session-level authorization switch is the fallback.
  */
 export const DESTRUCTIVE_PATTERNS: Array<{ re: RegExp; why: string }> = [
   { re: /删除|销毁|格式化/, why: '删除/销毁' },
@@ -34,7 +34,7 @@ export const DESTRUCTIVE_PATTERNS: Array<{ re: RegExp; why: string }> = [
   { re: /factory reset|reset password|wipe data|clear all/i, why: 'factory reset' },
 ];
 
-/** 破坏性判定：目标可见文本命中关键词返回原因，null = 放行。 */
+/** Destructive verdict: returns the reason when the target's visible text hits a keyword; null = pass through. */
 export function destructiveActionReason(targetText: string): string | null {
   if (!targetText) return null;
   for (const p of DESTRUCTIVE_PATTERNS) {
@@ -43,11 +43,11 @@ export function destructiveActionReason(targetText: string): string | null {
   return null;
 }
 
-/** 脆弱 selector 硬闸（借 srbarrios agentic-test-explorer engine.py _BRITTLE_SELECTOR_PATTERNS）：
- *  XPath / :nth-child / :nth-of-type / 裸标签位置链在微小布局变化下即漂移，运行时事前拒收
- *  （提示词禁令的 enforcement；:has-text 另为子串匹配易歧义）。只作用于模型动作通道——
- *  平台自产 selector（SYNTH_SELECTOR_SRC，固化回放/上报链）不经此处，不受影响。
- *  抽自 aiTask.ts：pi 工具链的模型 selector 通道（screenshot/click/fill）同用这份口径。 */
+/** Brittle-selector hard gate (borrowed from srbarrios agentic-test-explorer engine.py _BRITTLE_SELECTOR_PATTERNS):
+ *  XPath / :nth-child / :nth-of-type / bare-tag position chains drift under tiny layout changes; reject up front at runtime
+ *  (the enforcement of the prompt ban; :has-text is additionally substring-matching and ambiguity-prone). Applies only to the model action channel —
+ *  platform-produced selectors (SYNTH_SELECTOR_SRC, the solidify replay/report chain) don't pass through here and are unaffected.
+ *  Extracted from aiTask.ts: the pi tool chain's model selector channel (screenshot/click/fill) uses this same definition. */
 const BRITTLE_SELECTOR_PATTERNS: Array<{ re: RegExp; why: string }> = [
   { re: /^\//, why: 'XPath 绝对路径' },
   { re: /\/\//, why: 'XPath（//）' },
@@ -57,7 +57,7 @@ const BRITTLE_SELECTOR_PATTERNS: Array<{ re: RegExp; why: string }> = [
   { re: /:has-text\s*\(/i, why: ':has-text()' },
 ];
 
-/** 脆弱 selector 检查：命中返回原因，null = 放行。 */
+/** Brittle-selector check: returns the reason on hit; null = pass through. */
 export function brittleSelectorReason(selector: string): string | null {
   for (const p of BRITTLE_SELECTOR_PATTERNS) {
     if (p.re.test(selector)) return p.why;
@@ -65,8 +65,8 @@ export function brittleSelectorReason(selector: string): string | null {
   return null;
 }
 
-/** 元素 → 破坏性判定用的可见文本（text+placeholder+value+selector 拼接）。
- *  元素找不到 → 返回 fallback（通常是 selector 本身）；都没有 → 空串 = 放行。 */
+/** Element → visible text for the destructive verdict (text+placeholder+value+selector concatenated).
+ *  Element not found → returns the fallback (usually the selector itself); none present → empty string = pass through. */
 export function destructiveTextOf(
   el: { text?: string; placeholder?: string; value?: string; selector?: string } | null | undefined,
   fallback = '',
@@ -75,15 +75,15 @@ export function destructiveTextOf(
   return [el.text, el.placeholder, el.value, el.selector].filter(Boolean).join(' ');
 }
 
-// —— 数据库取证（sql 动作）的结果回灌渲染 ——
-// 查回的行走的是模型的下一轮输入，必须封顶：行数 5、单元格 60、单行 160、整块 700。
+// —— DB evidence (sql action) result feed-back rendering ——
+// The queried rows go into the model's next-turn input and must be capped: rows 5, cell 60, line 160, whole block 700.
 
 export const SQL_ROW_PREVIEW_MAX = 5;
 const SQL_CELL_MAX = 60;
 const SQL_LINE_MAX = 160;
 const SQL_BLOCK_MAX = 700;
 
-/** 单元格取值 → 单行文本（换行压成空格，免得撑破行的结构；null → NULL）。 */
+/** Cell value → single-line text (newlines collapsed to spaces so the row's structure isn't broken; null → NULL). */
 function renderSqlCell(v: unknown): string {
   let s: string;
   if (v === null || v === undefined) s = 'NULL';
@@ -95,7 +95,7 @@ function renderSqlCell(v: unknown): string {
   return s.length > SQL_CELL_MAX ? `${s.slice(0, SQL_CELL_MAX)}…` : s;
 }
 
-/** 取证结果 → 回灌给模型的文本块（行数/单元格/单行/整块四级封顶）。 */
+/** Evidence result → the text block fed back to the model (four-level caps: rows/cell/line/block). */
 export function renderSqlProbeRows(
   rows: Array<Record<string, unknown>>,
   rowCount: number,
@@ -117,7 +117,7 @@ export function renderSqlProbeRows(
   return notes.length > 0 ? `${block}\n（${notes.join('；')}）` : block;
 }
 
-/** URL → origin（http/https 之外或解析失败 → null）。 */
+/** URL → origin (non-http/https or parse failure → null). */
 export function originOf(url: string): string | null {
   try {
     const u = new URL(url);
@@ -127,16 +127,16 @@ export function originOf(url: string): string | null {
   }
 }
 
-/** 探索范围闸：navigate 目标 origin 不在白名单 → 拒收原因，null = 放行。
- *  URL 解析不出 origin（理论上 parseAction 已滤成 http/https）也按越界处理。 */
+/** Exploration scope gate: navigate target origin not in the whitelist → rejection reason; null = pass through.
+ *  A URL with no parseable origin (theoretically already filtered to http/https by parseAction) is also treated as out of scope. */
 export function scopeViolationReason(url: string, allowedOrigins: string[]): string | null {
   const o = originOf(url);
   if (o && allowedOrigins.includes(o)) return null;
   return `越界（目标 origin ${o ?? '不可解析'} 不在允许范围 ${allowedOrigins.join('、')} 内）`;
 }
 
-/** 记一次同目标失败；连续 ≥3 次时返回自检注入行并清零（与既有 3 连错语义一致），否则 null。
- *  customMessage：非页面类目标（sql 取证）自检文案与页面自检不同，措辞错会把模型带偏。 */
+/** Records one same-target failure; on ≥3 consecutive failures returns the self-check injection line and resets (consistent with the existing 3-streak semantics), otherwise null.
+ *  customMessage: non-page targets (sql evidence) use a self-check text different from the page one — wrong wording would steer the model astray. */
 export function noteStreakFailure(errStreak: Map<string, number>, key: string | null, customMessage?: string): string | null {
   if (key == null) return null;
   const streak = (errStreak.get(key) ?? 0) + 1;

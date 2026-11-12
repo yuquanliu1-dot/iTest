@@ -1,7 +1,7 @@
 /**
- * 版本空间 AI 助手 HTTP+SSE 契约(react-pi 兼容子集),挂载于 /api/assistant。
- * 只服务 kind='version' 线程。
- * 事件通道与 session fanOut 同源(含 emitThreadEvent 的 confirm_request)。
+ * Version-space AI assistant HTTP+SSE contract (react-pi compatible subset), mounted at /api/assistant.
+ * Only serves kind='version' threads.
+ * Event channels share the same source as session fanOut (including confirm_request from emitThreadEvent).
  */
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
@@ -42,7 +42,7 @@ import type { ThreadSnapshot, SpacePromptImage } from './session.js';
 
 export const spaceRoute = Router();
 
-/** threadId → versionId;仅接受 kind='version'(requirement 线程归 /api/pi 管,这里一律 404)。 */
+/** threadId → versionId; only accepts kind='version' (requirement threads belong to /api/pi; always 404 here). */
 export async function assertSpaceThreadVisible(threadId: string, user: AuthUser): Promise<string> {
   const row = (await db
     .select({ kind: aiThreads.kind, versionId: aiThreads.versionId })
@@ -54,8 +54,8 @@ export async function assertSpaceThreadVisible(threadId: string, user: AuthUser)
   return row.versionId;
 }
 
-/** react-pi 契约:POST/GET threads 必须返回完整 PiThreadSnapshot;兜底空快照刻意无 seq(requirement 级 /api/pi 兜底带 legacy seq:0,勿同步)。
- *  异步:snapshotOfThread 内部要等 seq 泵排空,保证水位 ≥ 内容(毒快照会让前端双气泡)。 */
+/** react-pi contract: POST/GET threads must return a full PiThreadSnapshot; the fallback empty snapshot deliberately omits seq (the requirement-level /api/pi fallback carries legacy seq:0, do not sync them).
+ *  Async: snapshotOfThread internally waits for the seq pump to drain, guaranteeing watermark ≥ content (a poisoned snapshot gives the frontend double bubbles). */
 async function threadSnapshotResponse(threadId: string): Promise<ThreadSnapshot> {
   const live = await snapshotOfThread(threadId);
   return live ?? { metadata: { id: threadId, status: 'idle', messageCount: 0 }, messages: [] };
@@ -63,13 +63,13 @@ async function threadSnapshotResponse(threadId: string): Promise<ThreadSnapshot>
 
 spaceRoute.post('/threads', async (req, res) => {
   const body = req.body as { metadata?: { versionId?: string }; workspacePath?: string };
-  // react-pi 的 initialize 发 {workspacePath}(Pi 官方作用域通道),页面级旧调用发
-  // {metadata:{versionId}};两条都认,versionId ≡ workspacePath(UUID 串)。
+  // react-pi's initialize sends {workspacePath} (Pi's official scope channel), legacy page-level calls send
+  // {metadata:{versionId}}; accept both, versionId ≡ workspacePath (UUID string).
   const versionId = body.metadata?.versionId ?? body.workspacePath;
   if (!versionId) throw new HttpError(400, 'bad_request', 'metadata.versionId required');
   await assertVersionVisible(versionId, req.user as AuthUser);
-  // 每次调用新建一线程(一版本多线程)。初始化失败(LLM 未配置等)→ 删行并透出错误,
-  // 前端引导设置页;repo 不可用不阻断(session 照常建,原因经 lastError 透出)。
+  // Each call creates a new thread (one version, many threads). Init failure (LLM not configured etc.) → delete the row and surface the error,
+  // frontend redirects to the settings page; repo unavailability does not block (session is still created, reason surfaced via lastError).
   const threadId = randomUUID();
   await db.insert(aiThreads).values({ id: threadId, kind: 'version', versionId, piThreadId: '', createdByUserId: (req.user as AuthUser).userId });
   try {
@@ -86,7 +86,7 @@ spaceRoute.post('/threads', async (req, res) => {
   res.json(snap);
 });
 
-/** GET /threads 的行选取列(piThreadId 供 fs 探测)。 */
+/** Row selection columns for GET /threads (piThreadId for fs probing). */
 const threadListColumns = {
   id: aiThreads.id, title: aiThreads.title, createdAt: aiThreads.createdAt,
   updatedAt: aiThreads.updatedAt, piThreadId: aiThreads.piThreadId,
@@ -95,28 +95,29 @@ type ThreadListRow = {
   id: string; title: string | null; createdAt: Date | null; updatedAt: Date | null; piThreadId: string;
 };
 
-/** 「有会话」判据 = session 文件真实存在。不能用 piThreadId !== '':pi 在 persist=true 时
- *  立即分配 sessionFile 路径(仅落盘延迟),草稿线程也有非空 piThreadId,会把没发过消息的
- *  空会话全放进历史列表——正是本过滤原本要防的。 */
+/** "Has session" criterion = the session file actually exists. Cannot use piThreadId !== '': with persist=true pi
+ *  assigns the sessionFile path immediately (only the disk write is delayed), so draft threads also have a non-empty
+ *  piThreadId, which would put every session that never sent a message into the history list — exactly what this
+ *  filter was meant to prevent. */
 async function probeSessionFiles(rows: ThreadListRow[]): Promise<boolean[]> {
   return Promise.all(rows.map((r) =>
     fs.access(r.piThreadId)
       .then(() => true)
       .catch((e: NodeJS.ErrnoException) => {
-        // ENOENT 是常态(线程还没落盘);其余(EACCES/EIO/卷挂死)是环境故障,别静默吞掉。
+        // ENOENT is the norm (thread not written to disk yet); anything else (EACCES/EIO/dead volume) is an environment fault, don't swallow it silently.
         if (e.code !== 'ENOENT') logger.warn({ err: e, sessionFile: r.piThreadId }, 'session file probe failed');
         return false;
       })));
 }
 
-/** 序列化线程行(react-pi 校验兼容:title null 必须缺键;时间出 ISO)。status 走 async 版:
- *  本地无 record 时探他副本运行锁,轮询落在他副本时运行中的线程不被误标 idle。 */
+/** Serialize thread rows (react-pi validation compatible: title null must be a missing key; times emitted as ISO). status uses the async variant:
+ *  when there is no local record, probe the run lock on other replicas so threads running on the polled replica are not mislabeled idle. */
 async function serializeThreadRows(rows: ThreadListRow[]) {
   return Promise.all(rows.map(async (row) => ({
     id: row.id,
-    // react-pi 的 isThreadMetadata 用 isOptionalString 校验 title:null 会被拒 → 整个列表
-    // load 抛 Invalid Pi HTTP response。DB 无题线程(title NULL,首条消息落题前的窗口)
-    // 必须序列化出 undefined(JSON 里直接缺键)。
+    // react-pi's isThreadMetadata validates with isOptionalString, so title:null would be rejected → the whole list
+    // load throws Invalid Pi HTTP response. DB threads without a title (title NULL, the window before the first
+    // message sets it) must serialize as undefined (key simply missing in JSON).
     title: row.title ?? undefined,
     status: (await threadStatusAsync(row.id)) ?? 'idle',
     createdAt: row.createdAt?.toISOString(),
@@ -124,30 +125,30 @@ async function serializeThreadRows(rows: ThreadListRow[]) {
   })));
 }
 
-/** 列表查询的公共 where:草稿行(piThreadId='')过不了文件判据(fs.access('')必拒),
- *  下推进 SQL 让 LIMIT 窗口只留给可能有会话的线程,否则空行吃掉配额、挤掉够格的旧线程。 */
+/** Common where clause for list queries: draft rows (piThreadId='') cannot pass the file criterion (fs.access('') always rejects),
+ *  push it down into SQL so the LIMIT window is reserved for threads that may have a session; otherwise empty rows eat the quota and crowd out qualifying older threads. */
 function threadListWhere(versionId: string) {
   return and(eq(aiThreads.kind, 'version'), eq(aiThreads.versionId, versionId), sql`${aiThreads.piThreadId} <> ''`);
 }
 
 spaceRoute.get('/threads', async (req, res) => {
   const raw = req.query.versionId;
-  // react-pi 的 list 走 ?workspacePath=(官方作用域通道,值即 versionId);页面级旧调用走 ?versionId=。
+  // react-pi's list goes through ?workspacePath= (official scope channel, value is the versionId); legacy page-level calls go through ?versionId=.
   const rawWs = req.query.workspacePath;
   const versionId = (typeof raw === 'string' ? raw : '') || (typeof rawWs === 'string' ? rawWs : '');
-  // 两个参都没有 → 空列表(不越权返回跨版本数据)。
+  // Neither param present → empty list (never return cross-version data out of scope).
   if (!versionId) { res.json([]); return; }
   await assertVersionVisible(versionId, req.user as AuthUser);
 
-  // 带 ?limit= 走分页契约({threads, hasMore});不带保持旧契约(20 硬顶 + 裸数组),遗留消费方零感知。
+  // With ?limit= use the pagination contract ({threads, hasMore}); without it keep the legacy contract (hard cap 20 + bare array), zero awareness for legacy consumers.
   const limitRaw = Number(req.query.limit);
   if (!Number.isFinite(limitRaw) || limitRaw < 1) {
     const rows = (await db
       .select(threadListColumns)
       .from(aiThreads)
       .where(threadListWhere(versionId))
-      // 排序锚点=创建时间:updatedAt 会被改名/新消息落题等 UPDATE 顶起,旧会话上浮错位;
-      // id 决胜给出全序,同刻 tie 的展示顺序原本未定义,无行为差异。
+      // Sort anchor = creation time: updatedAt gets bumped by renames/new-message-title updates etc., floating old sessions into the wrong place;
+      // id as tiebreaker gives a total order. Display order for same-instant ties was previously undefined, no behavior change.
       .orderBy(desc(aiThreads.createdAt), desc(aiThreads.id))
       .limit(20)) as ThreadListRow[];
     const exists = await probeSessionFiles(rows);
@@ -156,15 +157,15 @@ spaceRoute.get('/threads', async (req, res) => {
   }
 
   const limit = Math.min(Math.floor(limitRaw), 200);
-  // 文件存在性只能逐行探测、无法下推进 SQL,过滤后可能不足页 ⇒ keyset 循环取数:
-  // 每轮按 (createdAt,id) 全序取一批原始行,凑满 limit 或原始行耗尽为止(20 轮封顶,
-  // 防全库草稿行把探测拖成全表扫)。游标 = 上一批最后一行的线程 id;比较值(createdAt,id)
-  // 经行值子查询让 DB 自己解析——timestamp 是微秒精度,经 ISO 字符串往返会毫秒截断,
-  // 同毫秒 tie 行会被跳过;子查询无此损耗。游标行被删 → 子查询 NULL → 整页空,接受
-  // (仅另一端恰好删掉游标行时发生)。createdAt 不可变 ⇒ 位置稳定,keyset 无漂移。
-  // 每轮多取 1 行作存在性判据 ⇒ hasMore 是精确值而非乐观猜测。乐观语义有实际害处:
-  // 客户端每次 reload 都新鲜拉第 1 页并回写 hasMore,乐观 true 会在「已滚到底 + 库已
-  // 耗尽」时把哨兵复活,触发一次注定为空的翻页请求;精确 false 让哨兵保持熄灭。
+  // File existence can only be probed row by row and cannot be pushed down into SQL, so after filtering there may be fewer than a page ⇒ keyset loop fetching:
+  // each round fetches a batch of raw rows in (createdAt,id) total order, until limit is met or raw rows run out (capped at 20 rounds,
+  // to prevent a table full of draft rows from turning probing into a full scan). Cursor = last row's thread id of the previous batch; the comparison (createdAt,id)
+  // goes through a row-value subquery so the DB resolves it itself — timestamp is microsecond precision; a round trip through ISO strings truncates to milliseconds,
+  // skipping same-millisecond tie rows; the subquery has no such loss. Cursor row deleted → subquery NULL → empty page, accepted
+  // (only happens when the other end happens to delete the cursor row). createdAt is immutable ⇒ position stable, keyset has no drift.
+  // Each round fetches 1 extra row as the existence criterion ⇒ hasMore is exact rather than optimistic. Optimistic semantics cause real harm:
+  // the client freshly pulls page 1 and writes back hasMore on every reload; optimistic true would revive the sentinel at "already scrolled to bottom + DB
+  // exhausted", triggering a paging request destined to be empty; exact false keeps the sentinel off.
   const kept: ThreadListRow[] = [];
   let cursorId: string | undefined =
     typeof req.query.cursor === 'string' && req.query.cursor !== '' ? req.query.cursor : undefined;
@@ -186,25 +187,25 @@ spaceRoute.get('/threads', async (req, res) => {
     const page = hasMore ? batch.slice(0, want) : batch;
     const exists = await probeSessionFiles(page);
     for (let i = 0; i < page.length; i++) if (exists[i]) kept.push(page[i]!);
-    if (kept.length >= limit) break; // 只能 ==:page ≤ want ⇒ kept ≤ limit;此时 hasMore 必为 true
-    if (!hasMore) break; // 原始行耗尽(本批不足 want+1)
-    cursorId = page[page.length - 1]!.id; // 被截掉的第 want+1 行下轮经 keyset 自然重取
+    if (kept.length >= limit) break; // can only be ==: page ≤ want ⇒ kept ≤ limit; hasMore must then be true
+    if (!hasMore) break; // raw rows exhausted (this batch has fewer than want+1)
+    cursorId = page[page.length - 1]!.id; // the truncated want+1-th row is naturally re-fetched next round via keyset
   }
   res.json({ threads: await serializeThreadRows(kept), hasMore });
 });
 
 spaceRoute.get('/threads/:id', async (req, res) => {
-  // assertSpaceThreadVisible 已保证 kind='version' 且行存在(否则 404)
+  // assertSpaceThreadVisible already guarantees kind='version' and the row exists (otherwise 404)
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
-  // 必须先 ensure(与下方 SSE 路由同款):snapshotOfThread 只读内存 records,发版重启后
-  // 历史线程在内存里是冷的 → 直接返回空快照,前端点开历史会话一片空白,必须再点一次
-  // (第二次 SSE 已把会话从 JSONL 重建好)。这里从磁盘重建会话(冷路径实测 ~20ms,
-  // 远小于用户感知阈值)让首击即出历史;ensure 幂等单飞,热线程零成本。
-  try { await ensureSpaceRecord(req.params.id!); } catch { /* 构建失败仍返回兜底快照,不 500 */ }
+  // Must ensure first (same as the SSE route below): snapshotOfThread only reads in-memory records; after a release restart
+  // historical threads are cold in memory → an empty snapshot would be returned directly, the frontend shows a blank history session and the user must click twice
+  // (the second SSE has rebuilt the session from JSONL). Here the session is rebuilt from disk (cold path measured ~20ms,
+  // far below the user perception threshold) so the first click shows history; ensure is idempotent single-flight, zero cost for hot threads.
+  try { await ensureSpaceRecord(req.params.id!); } catch { /* on build failure still return the fallback snapshot, no 500 */ }
   res.json(await threadSnapshotResponse(req.params.id!));
 });
 
-/** react-pi rename 契约:PATCH {title} → 204。空/非字符串 400;trim 后入库。 */
+/** react-pi rename contract: PATCH {title} → 204. Empty/non-string 400; trimmed before persisting. */
 spaceRoute.patch('/threads/:id', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   const body = req.body as { title?: unknown };
@@ -214,13 +215,13 @@ spaceRoute.patch('/threads/:id', async (req, res) => {
   res.status(204).end();
 });
 
-/** react-pi delete 契约:DELETE → 204(已不存在也 204,客户端对 404 同样容忍)。
- *  同事务清六张 ai_stage_* 暂存行(按 threadId,无 FK 级联)与线程行;内存会话
- *  经 dropSpaceRecord 释放(dispose + 退订),落盘的 session 文件另删,SSE 订阅者随后收到断连。 */
+/** react-pi delete contract: DELETE → 204 (204 even if already gone; the client tolerates 404 the same way).
+ *  In the same transaction, clear the six ai_stage_* staged rows (by threadId, no FK cascade) and the thread row; the in-memory session
+ *  is released via dropSpaceRecord (dispose + unsubscribe), the on-disk session file is deleted separately, and SSE subscribers receive the disconnect afterwards. */
 spaceRoute.delete('/threads/:id', async (req, res) => {
   const threadId = req.params.id!;
   await assertSpaceThreadVisible(threadId, req.user as AuthUser);
-  // 会话文件路径必须在事务前读出:事务删掉 aiThreads 行后无从恢复。
+  // The session file path must be read before the transaction: once the transaction deletes the aiThreads row there is no way to recover it.
   const row = (await db.select({ piThreadId: aiThreads.piThreadId }).from(aiThreads).where(eq(aiThreads.id, threadId)).limit(1))[0];
   await db.transaction(async (tx) => {
     await tx.delete(aiStageCases).where(eq(aiStageCases.threadId, threadId));
@@ -232,8 +233,8 @@ spaceRoute.delete('/threads/:id', async (req, res) => {
     await tx.delete(aiThreads).where(eq(aiThreads.id, threadId));
   });
   dropSpaceRecord(threadId);
-  // 事务外删会话文件:删除失败不该让 DB 回滚成「线程还在但文件没了」;
-  // 文件不存在(ENOENT)静默忽略,其余故障记 warn——否则孤儿文件不留任何痕迹。
+  // Delete the session file outside the transaction: a delete failure must not roll the DB back into "thread still there but file gone";
+  // missing file (ENOENT) is ignored silently, other faults are logged as warn — otherwise orphan files leave no trace.
   if (row?.piThreadId) await fs.unlink(row.piThreadId).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== 'ENOENT') logger.warn({ err: e, sessionFile: row.piThreadId }, 'session file delete failed; orphaned');
   });
@@ -244,38 +245,38 @@ spaceRoute.post('/threads/:id/messages', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   const body = req.body as { input?: { content?: string; streamingBehavior?: string; attachments?: unknown } };
   const content = body.input?.content ?? '';
-  // react-pi 的 ThreadController 按运行态派生出 streamingBehavior 并随 input 发来
-  // (ThreadController.js:265)。必须透传给 session,否则运行中发消息会被 Pi 拒收:
-  // 无参 prompt 在 isStreaming 时抛「Agent is already processing」。只认两个枚举值,
-  // 未知值按缺省处理,不把任意字符串透进 SDK。
+  // react-pi's ThreadController derives streamingBehavior from the run state and sends it with input
+  // (ThreadController.js:265). It must be passed through to the session, otherwise sending a message while running is rejected by Pi:
+  // a no-arg prompt throws "Agent is already processing" while isStreaming. Only the two enum values are accepted;
+  // unknown values fall back to default, never passing arbitrary strings into the SDK.
   const streamingBehavior = body.input?.streamingBehavior === 'steer' || body.input?.streamingBehavior === 'followUp'
     ? body.input.streamingBehavior
     : undefined;
-  // images: react-pi 把 composer 附件转成 pi 的 ImageContent（{type,mimeType,data 裸 base64}），
-  // 原样透进 prompt.images。不做校验直接透,会把 raw body 里的任意结构送进 SDK,
-  // 故只认三个字段齐全、mimeType 为 image/*、data 为纯 base64 的项。
+  // images: react-pi converts composer attachments into pi's ImageContent ({type,mimeType,data as raw base64});
+  // pass through into prompt.images as-is. Without validation, arbitrary structures from the raw body would reach the SDK,
+  // so only items with all three fields present, mimeType image/*, and pure-base64 data are accepted.
   const images = parsePromptImages(body.input?.attachments);
-  // 不阻塞响应:先回 204,后台 ensure + 派发(与 requirement 流一致;LLM 未配置时静默,前端经快照感知)
+  // Non-blocking response: reply 204 first, ensure + dispatch in the background (same as the requirement flow; silent when the LLM is not configured, the frontend learns via snapshot)
   void (async () => {
     try {
       await ensureSpaceRecord(req.params.id!);
       await sendSpaceUserMessage(req.params.id!, content, streamingBehavior, images);
     } catch (err) {
-      // 不能静默:sendSpaceUserMessage 内部已推 assistant_error 事件,这里兜底错误日志
-      // (ensure 失败/prompt 抛错统一归因)。无此行时用户消息入库但 AI 零响应,前端零反馈。
+      // Cannot be silent: sendSpaceUserMessage already emitted an assistant_error event internally; this is the fallback error log
+      // (unified attribution for ensure failure/prompt throw). Without this line the user message persists but the AI never responds, zero frontend feedback.
       logger.error({ threadId: req.params.id, err }, 'space message dispatch failed');
     }
   })();
   res.status(204).end();
 });
 
-/** 助手附件预上传：composer 选文件即传（草稿线程尚无 threadId → 作用域=版本）。
- *  raw octet-stream + X-Filename（全局 express.raw 已挂，与 /api/cases 附件同模式）。
- *  引用标签由前端 adapter 在 send() 拼进消息正文——本路由不碰任何消息文本。
- *  类型按 X-Filename 扩展名白名单分派（.docx/.xlsx）；.xls 是 OLE2 二进制不是 zip，
- *  改名混入也会被 zip 魔数拒，400 文案直接提示另存为 .xlsx。
- *  X-Filename 走 encodeURIComponent（中文文件名直塞 Headers 在部分浏览器抛 ByteString 错），
- *  服务端解码，失败保原值。缺省名仅是防御性兜底（前端始终带该头）。 */
+/** Assistant attachment pre-upload: uploaded as soon as the composer picks a file (draft thread has no threadId yet → scope = version).
+ *  raw octet-stream + X-Filename (global express.raw is mounted, same pattern as /api/cases attachments).
+ *  The reference tag is spliced into the message body by the frontend adapter in send() — this route never touches message text.
+ *  Type is dispatched by the X-Filename extension whitelist (.docx/.xlsx); .xls is OLE2 binary, not a zip,
+ *  so renamed files are still rejected by the zip magic number; the 400 message tells users to re-save as .xlsx.
+ *  X-Filename goes through encodeURIComponent (stuffing a non-ASCII filename directly into Headers throws a ByteString error in some browsers);
+ *  the server decodes it, keeping the original value on failure. The default name is only a defensive fallback (the frontend always sends the header). */
 spaceRoute.post('/versions/:versionId/attachments', async (req, res) => {
   const versionId = req.params.versionId!;
   await assertVersionVisible(versionId, req.user as AuthUser);
@@ -285,7 +286,7 @@ spaceRoute.post('/versions/:versionId/attachments', async (req, res) => {
   if (buf.length > MAX_ATTACHMENT_BYTES) throw new HttpError(413, 'too_large', 'file exceeds the 10MB limit');
   const rawName = req.header('x-filename') ?? 'document.docx';
   let name = rawName;
-  try { name = decodeURIComponent(rawName); } catch { /* 非编码值保原样 */ }
+  try { name = decodeURIComponent(rawName); } catch { /* keep non-encoded values as-is */ }
   const extName = path.extname(name).toLowerCase();
   const ext: AttachmentExt | null = extName === '.docx' ? 'docx' : extName === '.xlsx' ? 'xlsx' : null;
   if (!ext) throw new HttpError(400, 'bad_request', '仅支持 .docx / .xlsx 附件（.xls 请先另存为 .xlsx）');
@@ -307,17 +308,17 @@ spaceRoute.post('/versions/:versionId/attachments', async (req, res) => {
   });
 });
 
-/** 单张图片的字节上限。base64 编码膨胀约 4/3,单条消息最坏体积由这两个常量
- *  与 ASSISTANT_JSON_BODY_LIMIT 共同决定(见 index.ts 的挂载顺序说明)。 */
+/** Per-image byte cap. base64 encoding inflates by roughly 4/3; the worst-case size of a single message is decided by these two constants
+ *  together with ASSISTANT_JSON_BODY_LIMIT (see the mount-order note in index.ts). */
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-/** 单条消息的图片张数上限:对齐 Pi 侧能吃下的量,再多只是徒增 token 与延迟。 */
+/** Per-message image count cap: aligned with what the Pi side can ingest; more only adds tokens and latency. */
 const MAX_IMAGES = 4;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
-/** base64 长度 → 原字节数的上界。取整除会漏掉恰好等于上限的合法图,故向上取整。 */
+/** base64 length → upper bound of the original byte count. Integer division would miss a valid image exactly at the cap, hence ceiling. */
 const maxBase64Length = (bytes: number): number => Math.ceil(bytes / 3) * 4;
 
-/** 从 input.attachments 里挑出合法的图片项。非法项静默丢弃（不报错）——
- *  附件是增强项,一张坏图不该让整条消息发不出去。 */
+/** Pick valid image entries out of input.attachments. Invalid entries are dropped silently (no error) —
+ *  attachments are an enhancement; one bad image must not block the whole message. */
 function parsePromptImages(raw: unknown): SpacePromptImage[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: SpacePromptImage[] = [];
@@ -334,7 +335,7 @@ function parsePromptImages(raw: unknown): SpacePromptImage[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-/** 供 index.ts 计算该路由的 json body 上限:最坏图片体积 + 余量。 */
+/** For index.ts to compute this router's json body cap: worst-case image size + margin. */
 export const ASSISTANT_JSON_BODY_LIMIT = `${Math.ceil(maxBase64Length(MAX_IMAGE_BYTES) * MAX_IMAGES / 1024 / 1024) + 4}mb`;
 
 spaceRoute.post('/threads/:id/cancel', async (req, res) => {
@@ -343,23 +344,23 @@ spaceRoute.post('/threads/:id/cancel', async (req, res) => {
   res.status(204).end();
 });
 
-/** react-pi 契约的清排队路由(见 httpClient 的 wire contract)。返回被清内容,
- *  前端可把文字还原回输入框——用户取消排队时不该丢字。 */
+/** Clear-queue route of the react-pi contract (see httpClient's wire contract). Returns the cleared content
+ *  so the frontend can restore the text into the input box — a user canceling a queued message must not lose text. */
 spaceRoute.post('/threads/:id/queue/clear', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   res.json(clearThreadQueue(req.params.id!));
 });
 
-/** 推荐追问:AI 回答落定后由前端按需拉取(POST 而非 GET:触发了 LLM 调用,不该被缓存/预取)。
- *  转写取服务端 session.messages 全文;失败语义见 suggestions.ts(HttpError 透出/其余兜底 [])。
- *  跨副本:会话记录常驻运行副本,本地冷但 pi 会话文件在共享卷 → ensure 从 JSONL 重建转写,
- *  修掉「轮询落在他副本时固定 404」。piThreadId 为空的孤儿行没有可重建的会话,跳过 ensure
- *  (避免为从未有过会话的线程触发一次完整建会话的副作用),404 语义不变。 */
+/** Suggested follow-ups: pulled on demand by the frontend after an AI answer settles (POST rather than GET: it triggers an LLM call, must not be cached/prefetched).
+ *  The transcript comes from the server-side session.messages full text; failure semantics in suggestions.ts (HttpError surfaced / otherwise falls back to []).
+ *  Cross-replica: session records live on the running replica; when local is cold but the pi session file is on the shared volume → ensure rebuilds the transcript from JSONL,
+ *  fixing "polling lands on another replica and always 404s". Orphan rows with empty piThreadId have no session to rebuild; skip ensure
+ *  (avoiding the side effect of triggering a full session build for a thread that never had one), 404 semantics unchanged. */
 spaceRoute.post('/threads/:id/suggestions', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   const row = (await db.select({ piThreadId: aiThreads.piThreadId }).from(aiThreads).where(eq(aiThreads.id, req.params.id!)).limit(1))[0];
   if (row?.piThreadId) {
-    try { await ensureSpaceRecord(req.params.id!); } catch { /* 404/502 语义由 generate 兜底 */ }
+    try { await ensureSpaceRecord(req.params.id!); } catch { /* 404/502 semantics are handled by generate */ }
   }
   res.json(await generateSpaceSuggestionsOnce(req.params.id!));
 });
@@ -370,7 +371,7 @@ spaceRoute.post('/threads/:id/confirm', async (req, res) => {
   if (!body.confirmId || typeof body.approved !== 'boolean') {
     throw new HttpError(400, 'bad_request', 'confirmId and approved are required');
   }
-  // async:本地无挂起时走跨副本门(GETDEL 认领 + PUBLISH 答案回挂起副本),miss 仍 404。
+  // async: when no local pending confirmation, goes through the cross-replica gate (GETDEL claim + PUBLISH the answer back to the pending replica); miss still 404s.
   if (!(await resolveConfirmation(body.confirmId, body.approved))) {
     throw new HttpError(404, 'not_found', 'confirmation not found or expired');
   }
@@ -386,14 +387,14 @@ spaceRoute.get('/models', async (_req, res) => {
 spaceRoute.get('/threads/:id/events', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   sseHeaders(res);
-  // close 句柄先于 ensure 注册:建 session 可能耗时数十秒,期间客户端断开时
-  // close 事件已触发过、之后再注册的 unsub 永远不会执行 → 监听器泄漏。
+  // The close handle is registered before ensure: building a session can take tens of seconds; if the client disconnects during that window
+  // the close event has already fired, and an unsub registered afterwards would never run → listener leak.
   let closed = false;
   let unsub: (() => void) | null = null;
   let unsubMirror: (() => void) | null = null;
-  // 心跳:长任务(verify_case 单步 AI 相可静默 240s)期间保证字节流不中断,否则 nginx
-  // proxy_read_timeout(300s)会在读侧静默时段掐掉连接,react-pi 永不重连 = 前端永久冻结。
-  // 注释帧 `: ping` 被 EventSource 丢弃,只保活不产生事件。写失败/断连即清定时器收尾。
+  // Heartbeat: keeps the byte stream alive during long tasks (a verify_case single-step AI phase can be silent for 240s); otherwise nginx
+  // proxy_read_timeout (300s) kills the connection during silent read-side stretches, react-pi never reconnects = frontend frozen forever.
+  // The comment frame `: ping` is discarded by EventSource, only keeping the connection alive without producing events. On write failure/disconnect, clear the timer to finish up.
   const stopHeartbeat = startSseHeartbeat(res);
   const cleanup = (): void => {
     stopHeartbeat();
@@ -402,21 +403,20 @@ spaceRoute.get('/threads/:id/events', async (req, res) => {
   };
   res.on('error', cleanup);
   req.on('close', () => { closed = true; cleanup(); });
-  // 订阅前先确保 session 已构建:SSE 早于首条消息时若无 record,listener 会注册到
-  // noop 上,后续 confirm_request/stage 全丢;ensure 幂等单飞,已有缓存直接返回。
-  // 失败(LLM 未配置等)保留空快照语义,不中断连接。
-  try { await ensureSpaceRecord(req.params.id!); } catch { /* 线程无法活跃,仍可接收快照 */ }
+  // Ensure the session is built before subscribing: if SSE arrives before the first message with no record, the listener registers on
+  // noop and all subsequent confirm_request/stage events are lost; ensure is idempotent single-flight, returns immediately if cached.
+  // On failure (LLM not configured etc.) keep the empty-snapshot semantics without breaking the connection.
+  try { await ensureSpaceRecord(req.params.id!); } catch { /* thread cannot become active, snapshot still receivable */ }
   if (closed) { cleanup(); return; }
   try {
     const send = (e: unknown) => sseSend(res, e as unknown as Parameters<typeof sseSend>[1]);
-    // subscribeThread 自带 snapshot(无活跃 session 时发合法空快照),并在快照后按原序重放
-    // 断线期间缓冲的会话内自定义事件(verify_progress/announce/stage/…)与仍挂起的确认卡,
-    // 前端 store 按 seq 去重——重连不丢实时状态;confirm_request / 舞台事件经 emitThreadEvent
-    // 走同一 listeners 通道。
-    // subscribeThread 同步返回 unsub:自上方的 closed 检查到赋值之间无 await,无竞态窗口。
+    // subscribeThread carries its own snapshot (sends a legal empty snapshot when there is no active session), and after the snapshot replays in order
+    // the in-session custom events buffered during disconnection (verify_progress/announce/stage/…) plus still-pending confirmation cards;
+    // the frontend store dedupes by seq — reconnects lose no live state; confirm_request / stage events go through the same listeners channel via emitThreadEvent.
+    // subscribeThread returns unsub synchronously: between the closed check above and the assignment there is no await, no race window.
     unsub = subscribeThread(req.params.id!, send, { includeSnapshot: true });
-    // 跨副本镜像:线程常驻他副本时事件经 Redis 透传进同一响应(origin 过滤本副本回环,
-    // 避免本地已送达的事件被重复透传)。线程在本副本运行时本地 listeners 覆盖,镜像静默。
+    // Cross-replica mirror: when the thread lives on another replica, events are relayed via Redis into the same response (origin filters this replica's loopback,
+    // avoiding double-delivery of locally delivered events). When the thread runs on this replica, local listeners cover it and the mirror stays silent.
     unsubMirror = subscribeThreadMirror(req.params.id!, send);
   } catch {
     cleanup();
@@ -424,10 +424,10 @@ spaceRoute.get('/threads/:id/events', async (req, res) => {
   }
 });
 
-/** 助手 playground 实时画面：verify_case / solidify_case 执行期间的 MJPEG 流。
- *  鉴权与 SSE 一致（线程可见性）；key 由工具运行时随机生成且随 start 事件下发。
- *  ?replay=1 为本轮工具执行的录制回放（执行结束 30min 内）；&speed=N 为回放倍速；
- *  ?replay=meta 探测录制是否仍可回放（前端据此决定是否显示「回放」按钮）。 */
+/** Assistant playground live view: MJPEG stream during verify_case / solidify_case execution.
+ *  Auth identical to SSE (thread visibility); key is randomly generated by the tool runtime and delivered with the start event.
+ *  ?replay=1 is the recording replay of this tool execution (within 30min after execution ends); &speed=N is the replay speed;
+ *  ?replay=meta probes whether the recording can still be replayed (the frontend uses this to decide whether to show the "Replay" button). */
 spaceRoute.get('/threads/:id/live/:key', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   if (req.query.replay === 'meta') return handleLiveReplayMeta(res, req.params.key!);
@@ -435,18 +435,18 @@ spaceRoute.get('/threads/:id/live/:key', async (req, res) => {
   handleLiveView(req, res, req.params.key!);
 });
 
-/** 某线程的持久产物列表（skill 生成的文档等）。前端切换会话时拉取，把下载卡灌回界面——
- *  SSE artifact 事件只在运行态推送、且服务侧重放缓冲在进程内存里，刷新页面会丢下载卡。 */
+/** A thread's persisted artifacts list (documents generated by skills etc.). Pulled by the frontend when switching sessions, refilling download cards into the UI —
+ *  SSE artifact events are only pushed while running, and the server-side replay buffer lives in process memory, so refreshing the page loses download cards. */
 spaceRoute.get('/threads/:id/artifacts', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   const items = await listThreadArtifacts(req.params.id!);
   res.json(items);
 });
 
-/** AI 产出文件下载（artifact 事件携带的 token 换文件流）。
- *  鉴权 = 线程可见（与 SSE 同款）；过期/不存在 410；文件被清扫 404。
- *  Content-Type 按产物记录里的 mime 出——不能写死 application/zip，否则 docx/xlsx/png
- *  在浏览器里会被当成 zip 下载（扩展名对但类型错）。 */
+/** AI-generated file download (the token carried by artifact events is exchanged for the file stream).
+ *  Auth = thread visibility (same as SSE); expired/missing 410; file swept 404.
+ *  Content-Type comes from the artifact record's mime — cannot hardcode application/zip, otherwise docx/xlsx/png
+ *  would be downloaded as a zip in the browser (extension right, type wrong). */
 spaceRoute.get('/threads/:id/artifacts/:token', async (req, res) => {
   await assertSpaceThreadVisible(req.params.id!, req.user as AuthUser);
   const a = await getArtifact(req.params.token!);
@@ -465,12 +465,12 @@ spaceRoute.get('/threads/:id/artifacts/:token', async (req, res) => {
 
 spaceRoute.use(stageRoute);
 
-// 用户反馈（只收集不消费）。与 stage 同档：不挂 requireManager——提交反馈是普通用户
-// 行为，线程可见性由 feedbackRoute 内的 assertSpaceThreadVisible 兜底。
+// User feedback (collected only, not consumed). Same tier as stage: no requireManager — submitting feedback is ordinary user
+// behavior; thread visibility is enforced by assertSpaceThreadVisible inside feedbackRoute.
 spaceRoute.use(feedbackRoute);
 
-// 管理端 CRUD：requireManager 保护（member → 403）。挂在 /api/assistant 之下，
-// 全局 requireAuth 由更外层 index.ts 统一承担（router.ts 自身不重复鉴权）。
+// Admin-side CRUD: protected by requireManager (member → 403). Mounted under /api/assistant;
+// the global requireAuth is handled uniformly by the outer index.ts (router.ts does not re-auth itself).
 spaceRoute.use('/guides', requireManager, guidesRoute);
 spaceRoute.use('/mcp-servers', requireManager, mcpServersRoute);
 spaceRoute.use('/skills', requireManager, skillsRoute);

@@ -46,8 +46,8 @@ async function loadSdk(): Promise<any> {
   }
 }
 
-/** spawn 一个 daemon 并 acquire 设备。失败抛 EngineUnavailable。SDK 协议以 0.21.22 假定；
- *  实际形态可能不同，本封装做 lazy import + 形态转换，对外保持 AgentDeviceSession 接口稳定。 */
+/** Spawns a daemon and acquires a device. Failure throws EngineUnavailable. SDK protocol assumed per 0.21.22;
+ *  the actual shape may differ, so this wrapper does lazy import + shape adaptation, keeping the AgentDeviceSession interface stable externally. */
 export async function acquireDevice(opts: {
   mobileOs: 'ios' | 'android';
   deviceRef: string;
@@ -56,8 +56,8 @@ export async function acquireDevice(opts: {
   launchArgs?: string[];
 }): Promise<AgentDeviceSession> {
   const sdk = await loadSdk();
-  // 0.21.22 假定 sdk.acquireDevice 返回 { client, deviceId, viewerUrl, installApp, openApp, ... }
-  // 协议可能在版本间漂移;先把 SDK 返回值收下来再适配到 AgentDeviceSession 形态。
+  // 0.21.22 assumes sdk.acquireDevice returns { client, deviceId, viewerUrl, installApp, openApp, ... }
+  // The protocol may drift between versions; capture the SDK return value first, then adapt it to the AgentDeviceSession shape.
   const raw = await sdk.acquireDevice({
     platform: opts.mobileOs,
     device: opts.deviceRef,

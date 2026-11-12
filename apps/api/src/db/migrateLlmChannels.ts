@@ -1,14 +1,14 @@
 /**
- * 旧版单渠道 → 多渠道结构的一次性数据迁移（幂等，可在任何状态重跑）。
+ * One-time data migration from the legacy single channel → multi-channel structure (idempotent, safe to re-run in any state).
  *
- * 背景：早期 LLM 配置只有 settings 表里的 5 个单键（provider/apiKey/model/baseUrl/maxTokens）。
- * 现已改为 llm_channels 数组 + llm_default_channel / llm_vision_channel，旧路径不再保留，
- * 因此旧键必须折成新结构后删除，否则旧配置会变成没人读的孤儿。
+ * Background: early LLM config was just 5 single keys in the settings table (provider/apiKey/model/baseUrl/maxTokens).
+ * It is now the llm_channels array + llm_default_channel / llm_vision_channel; the legacy path is not kept,
+ * so the old keys must be folded into the new structure and then deleted, otherwise the old config becomes an orphan nobody reads.
  *
- * 执行时机：API 启动时（src/index.ts）——旧库（prod228 等）发版即自动迁移，用户无感。
+ * Timing: at API startup (src/index.ts) — deploying to an old DB (prod228 etc.) migrates automatically, invisible to users.
  *
- * 并发安全：整体在一个事务里，先取 pg_advisory_xact_lock 串行化多副本同时启动；
- * 迁移渠道用固定 id（不随机），重跑/并发都写同一份内容，不会分裂出第二条渠道。
+ * Concurrency safety: everything runs in one transaction, taking pg_advisory_xact_lock first to serialize simultaneous multi-replica startups;
+ * the migrated channel uses a fixed id (not random), so re-runs/concurrency write the same content and never fork a second channel.
  */
 import { inArray, sql } from 'drizzle-orm';
 import { db } from './client.js';
@@ -16,7 +16,7 @@ import { settings } from './schema.js';
 import { logger } from '../logger.js';
 import { CHANNEL_KEYS, parseChannels, parseMaxTokens, type LlmChannel } from '../agent/llmSettings.js';
 
-/** 旧版单渠道 5 键：迁移时被删除，且迁移后不再被任何代码读写（写路径已 400 拦截）。 */
+/** The 5 legacy single-channel keys: deleted during migration and never read/written again afterwards (writes already intercepted with 400). */
 export const LEGACY_LLM_KEYS = [
   'llm_provider',
   'llm_api_key',
@@ -33,23 +33,23 @@ const LEGACY_MAX_TOKENS_KEY = 'llm_max_tokens';
 
 const VALID_PROVIDERS = ['openai', 'anthropic', 'google'] as const;
 
-/** 迁移渠道的固定 id：重跑/并发都写同一个 id。 */
+/** Fixed id for the migrated channel: re-runs/concurrency always write the same id. */
 const MIGRATED_CHANNEL_ID = '00000000-0000-0000-0000-000000000090';
 
 const LOCK_ID = 0x4c4c4d43; // 'LLMC'
 
 export interface LlmMigrationResult {
-  /** 是否由旧 5 键折出了一个新渠道。 */
+  /** Whether a new channel was folded out of the 5 legacy keys. */
   migrated: boolean;
-  /** 迁移后（或原有）的渠道数。 */
+  /** Channel count after migration (or the pre-existing count). */
   channelCount: number;
-  /** 是否清掉了旧键。 */
+  /** Whether the legacy keys were removed. */
   legacyRemoved: boolean;
 }
 
 export async function migrateLegacyLlmChannels(): Promise<LlmMigrationResult> {
   return db.transaction(async (tx) => {
-    // 多副本同时启动时串行化；事务结束自动释放。
+    // Serialize simultaneous multi-replica startups; released automatically when the transaction ends.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(${LOCK_ID})`);
 
     const rows = await tx
@@ -99,7 +99,7 @@ export async function migrateLegacyLlmChannels(): Promise<LlmMigrationResult> {
       }
     }
 
-    // 默认渠道必须指向真实存在的渠道：失效时兜底到第一个
+    // The default channel must point to a channel that actually exists: fall back to the first one when stale
     const defaultId = String(map.get(CHANNEL_KEYS.defaultChannel) ?? '');
     if (channels.length > 0 && !channels.some((c) => c.id === defaultId)) {
       const fallbackId = channels[0]!.id;
@@ -109,7 +109,7 @@ export async function migrateLegacyLlmChannels(): Promise<LlmMigrationResult> {
         .onConflictDoUpdate({ target: settings.key, set: { value: fallbackId, updatedAt: new Date() } });
     }
 
-    // 旧键彻底清除：迁移后没有任何代码读它们
+    // Legacy keys fully removed: no code reads them after migration
     const deleted = await tx
       .delete(settings)
       .where(inArray(settings.key, [...LEGACY_LLM_KEYS]))

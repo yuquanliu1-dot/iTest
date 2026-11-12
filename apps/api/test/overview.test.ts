@@ -160,16 +160,16 @@ describe('overview', () => {
     );
     const r = await request(app).get(`/api/projects/${projectId}/overview`);
     expect(r.status).toBe(200);
-    // KPI/trend 只算 7d 窗口内
+    // KPI/trend only count the 7d window
     expect(r.body.kpi.totalRuns7d).toBe(1);
     expect(r.body.kpi.passRate).toBe(1);
     expect(r.body.trend[6].total).toBe(1);
     expect(r.body.trend[6].passed).toBe(1);
-    // healed 默认 false → 该通过即一次通过
+    // healed defaults to false → this pass counts as a first pass
     expect(r.body.trend[6].firstPassed).toBe(1);
-    // topFailures 窗口与 trend 对齐：30 天前的失败不计入
+    // topFailures window aligns with trend: failures from 30 days ago are not counted
     expect(r.body.topFailures).toEqual([]);
-    // recent 全时段：窗口外报告仍在最新列表（时间倒序，最新在前）
+    // recent covers all time: out-of-window reports still appear in the latest list (time-descending, newest first)
     expect(r.body.recentRuns).toHaveLength(2);
     expect((r.body.recentRuns as Array<{ status: string }>).map((x) => x.status)).toEqual(['passed', 'failed']);
   });
@@ -187,7 +187,7 @@ describe('overview', () => {
     );
     const groupId = g.rows[0]!.id;
 
-    // 需求 ×2，req1 关联 caseA；caseB 用手填编号关联
+    // 2 requirements, req1 linked to caseA; caseB linked via a hand-filled number
     const reqs = await pool.query(
       `INSERT INTO requirements(project_id, title, content) VALUES
         ($1, '登录需求', '登录校验'), ($1, '越权需求', '越权拦截') RETURNING id`,
@@ -205,7 +205,7 @@ describe('overview', () => {
     const caseA = cs.rows[0]!.id;
     const caseB = cs.rows[1]!.id;
 
-    // caseA：2 一次通过 + 1 失败；caseB：2 失败 + 1 自愈通过（flaky）
+    // caseA: 2 first passes + 1 failure; caseB: 2 failures + 1 healed pass (flaky)
     await pool.query(
       `INSERT INTO reports(case_id, status, duration_ms, healed, step_results, created_at) VALUES
         ($1, 'passed', 1000, false, '[{"aiUsage":{"calls":2}}]'::jsonb, now()),
@@ -217,7 +217,7 @@ describe('overview', () => {
       [caseA, caseB],
     );
 
-    // 固化：1 已编译 + 1 未编译带 instruction（pending aiTask）+ 1 空白步骤
+    // Solidification: 1 compiled + 1 uncompiled with instruction (pending aiTask) + 1 blank step
     await pool.query(
       `INSERT INTO test_steps(case_id, "order", source, instruction, compiled) VALUES
         ($1, 0, 'recorder', '点击登录', '[{"kind":"click"}]'::jsonb),
@@ -226,7 +226,7 @@ describe('overview', () => {
       [caseA],
     );
 
-    // 计划 + 两次运行（run1 手动带 RCA 环境，run2 定时带 skipped + RCA 用例）
+    // Plan + two runs (run1 manual with RCA environment; run2 scheduled with skipped + RCA case)
     const plan = await pool.query(
       `INSERT INTO execution_plans(project_id, name) VALUES ($1, '回归计划') RETURNING id`,
       [projectId],
@@ -270,36 +270,36 @@ describe('overview', () => {
     const r = await request(app).get(`/api/projects/${projectId}/overview`);
     expect(r.status).toBe(200);
 
-    // KPI：6 runs = 3 passed / 3 failed；一次通过 2；自愈挽回 1；AI 调用 2+3=5
+    // KPI: 6 runs = 3 passed / 3 failed; first passes 2; healed saves 1; AI calls 2+3=5
     expect(r.body.kpi.totalCases).toBe(2);
     expect(r.body.kpi.totalRuns7d).toBe(6);
     expect(r.body.kpi.passRate).toBeCloseTo(0.5, 5);
     expect(r.body.kpi.firstPassRate).toBeCloseTo(2 / 6, 5);
     expect(r.body.kpi.aiCalls7d).toBe(5);
     expect(r.body.kpi.aiHealedReports7d).toBe(1);
-    // p95：sorted [500,1000,2000,30000,40000,60000] → 0.95 分位线性插值 = 55000
+    // p95: sorted [500,1000,2000,30000,40000,60000] → 0.95 quantile linear interpolation = 55000
     expect(r.body.kpi.p95DurationMs).toBe(55000);
-    // 固化：3 步中 1 步已编译；pending aiTask = 未编译且带 instruction = 1
+    // Solidification: 1 of 3 steps compiled; pending aiTask = uncompiled with instruction = 1
     expect(r.body.kpi.solidifyRate).toBeCloseTo(1 / 3, 5);
     expect(r.body.kpi.solidifyPendingSteps).toBe(2);
     expect(r.body.kpi.solidifyPendingAiTasks).toBe(1);
 
-    // trend 今日桶：total 6 / passed 3 / firstPassed 2 / failed 3
+    // trend today bucket: total 6 / passed 3 / firstPassed 2 / failed 3
     expect(r.body.trend[6]).toMatchObject({ total: 6, passed: 3, firstPassed: 2, failed: 3 });
-    // AI 用量今日桶：calls 5 / healedSteps 1
+    // AI usage today bucket: calls 5 / healedSteps 1
     expect(r.body.aiUsage[6]).toMatchObject({ calls: 5, healedSteps: 1 });
 
-    // 执行概览 meters：passed/failed/blocked(skipped)/healed
+    // Execution overview meters: passed/failed/blocked(skipped)/healed
     expect(r.body.executions).toEqual({ passed: 3, failed: 3, blocked: 1, healed: 1 });
 
-    // RCA 分布：environment(high) + case_issue(low)
+    // RCA distribution: environment(high) + case_issue(low)
     expect(r.body.rca).toEqual({
       analyzed: 2,
       highConfidence: 1,
       byCategory: { case_issue: 1, environment: 1, system_defect: 0, other: 0 },
     });
 
-    // 覆盖：2 需求 1 关联；2 用例全关联（FK + 手填编号）；coverageTypes 计数
+    // Coverage: 2 requirements, 1 linked; 2 cases both linked (FK + hand-filled number); coverageTypes counts
     expect(r.body.coverage).toEqual({
       totalRequirements: 2,
       linkedRequirements: 1,
@@ -309,7 +309,7 @@ describe('overview', () => {
       byCoverageType: { functional: 2, boundary: 1 },
     });
 
-    // topFailures：caseB 2 败/3 跑（flaky）> caseA 1 败/3 跑
+    // topFailures: caseB 2 fails/3 runs (flaky) > caseA 1 fail/3 runs
     expect(r.body.topFailures).toHaveLength(2);
     expect(r.body.topFailures[0]).toMatchObject({
       caseId: caseB,
@@ -324,7 +324,7 @@ describe('overview', () => {
       flakySuspected: false,
     });
 
-    // 计划表：最近运行 = run2（schedule）；最近 RCA = run2 的 case_issue；30d 通过率 0/2
+    // Plan table: latest run = run2 (schedule); latest RCA = run2's case_issue; 30d pass rate 0/2
     expect(r.body.plans).toHaveLength(1);
     expect(r.body.plans[0]).toMatchObject({
       id: planId,

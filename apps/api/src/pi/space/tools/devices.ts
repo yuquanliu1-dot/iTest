@@ -1,7 +1,7 @@
 /**
- * manage_devices:项目设备目标(移动用例绑定)读/建/改/删。
- * 新建实时写;更新走阻塞确认卡(diff 摘要);删除确认卡带绑定用例数(FK set null 自动解绑)。
- * deviceRef 为设备寻址标识(如 udid / 设备名),appBundleId/appPath/launchArgs 为可选 App 装载参数。
+ * manage_devices: project device targets (bound by mobile cases) read/create/update/delete.
+ * Create writes in real time; update goes through a blocking confirmation card (diff summary); the delete confirmation card includes the bound-case count (FK set null unbinds automatically).
+ * deviceRef is the device addressing identifier (udid / device name etc.); appBundleId/appPath/launchArgs are optional App launch parameters.
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';

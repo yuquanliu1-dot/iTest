@@ -15,7 +15,7 @@ describe('llm-client', () => {
   });
 });
 
-/** 按序回放预置响应的 fake client。 */
+/** Fake client that replays preset responses in order. */
 function fakeClient(responses: Array<Partial<LLMResult>>): LLMClient & { requests: LLMRequest[] } {
   let i = 0;
   const requests: LLMRequest[] = [];
@@ -58,7 +58,7 @@ describe('completeJson 语义重试', () => {
     expect(r.retries).toBe(1);
     expect(r.usage).toEqual({ promptTokens: 30, completionTokens: 13, cacheReadTokens: 0, cacheCreationTokens: 0 });
     expect(r.durationMs).toBe(200);
-    // 重试请求携带上次错误反馈
+    // The retry request carries the previous error as feedback
     expect(c.requests[1]!.userMessage).toContain('不是合法 JSON');
     expect(c.requests[1]!.userMessage).toContain('not json at all');
   });
@@ -79,8 +79,8 @@ describe('completeJson 语义重试', () => {
   });
 
   it('多轮形态的语义重试：提示追加为新 user 消息，而不是被 messages 忽略', async () => {
-    // 回归动机：clients 优先读 req.messages，早期实现只改 userMessage 会让重试提示
-    // 在多轮形态下静默丢失 —— 模型收到完全相同的请求，重复返回同样的非法 JSON。
+    // Regression motivation: clients read req.messages first; an early implementation only touched userMessage, so the retry hint
+    // was silently lost in multi-turn form — the model received the exact same request and returned the same invalid JSON again.
     const multiReq: LLMRequest = {
       systemPrompt: 'sys',
       userMessage: '当轮',
@@ -94,7 +94,7 @@ describe('completeJson 语义重试', () => {
     expect(r.value).toEqual({ ok: 3 });
     expect(r.retries).toBe(1);
     const retry = c.requests[1]!;
-    // 历史保留 + 追加承载提示的新消息
+    // History preserved + a new message carrying the hint appended
     expect(retry.messages).toHaveLength(2);
     expect(retry.messages![0]!.content[0]).toEqual({ type: 'text', text: '第1轮' });
     const hintText = retry.messages![1]!.content[0]!;

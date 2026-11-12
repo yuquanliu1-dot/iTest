@@ -6,10 +6,10 @@ const DEFAULT_KEYWORDS = ['请先登录', '未登录', '未授权', '登录后']
 interface CaseRowLite { url?: string | null; title: string }
 
 export interface PreflightOptions {
-  /** 调用方（init-goto）已导航到目标页时置 true：跳过本函数的二次 goto。同 URL 的 page.goto
-   *  等于整页重载，会把慢 SPA 打回启动初期、且此处只等 domcontentloaded——prod228 报告
-   *  02c812ea 第 1 步冲进空白页（LocatorAllFailed count=0）即此。跳过时 urlReachable 直接
-   *  true：init-goto 的 goto 若抛错在调用点就传播了，到不了这里。 */
+  /** True when the caller (init-goto) has already navigated to the target page: skip this function's second goto. A same-URL page.goto
+   *  equals a full page reload — it knocks a slow SPA back to its startup phase, and here we only wait for domcontentloaded — the prod228
+   *  report 02c812ea's step 1 rushing into a blank page (LocatorAllFailed count=0) was exactly this. When skipped, urlReachable is
+   *  directly true: if init-goto's goto throws, it propagates at the call site and never reaches here. */
   skipNavigate?: boolean;
 }
 

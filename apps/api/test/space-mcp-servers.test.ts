@@ -53,18 +53,18 @@ describe('S3 mcp-servers：CRUD + 配置期守卫 + 鉴权 + 跨组织隔离', (
     expect(http.status).toBe(201);
     expect(http.body).toMatchObject({ kind: 'http', url: 'https://mcp.example.com/sse' });
 
-    // 配置期守卫（spec §MCP）：oauth/未知 exposure 一律 400
+    // Config-time guards (spec §MCP): oauth/unknown exposure always 400
     expect((await request(managerApp).post('/api/assistant/mcp-servers')
       .send({ name: 'x', kind: 'stdio', command: 'node', exposure: 'oauth' })).status).toBe(400);
     expect((await request(managerApp).post('/api/assistant/mcp-servers')
       .send({ name: 'x', kind: 'stdio', command: 'node', exposure: 'nope' })).status).toBe(400);
-    // stido 必须 command；http 必须 http(s):// url（防 file:// 本地读取）
+    // stido requires command; http requires an http(s):// url (guards against file:// local reads)
     expect((await request(managerApp).post('/api/assistant/mcp-servers')
       .send({ name: 'x', kind: 'stdio' })).status).toBe(400);
     expect((await request(managerApp).post('/api/assistant/mcp-servers')
       .send({ name: 'x', kind: 'http', url: 'file:///etc/passwd' })).status).toBe(400);
     expect((await request(managerApp).post('/api/assistant/mcp-servers')
-      .send({ kind: 'stdio', command: 'node' })).status).toBe(400); // 缺 name
+      .send({ kind: 'stdio', command: 'node' })).status).toBe(400); // missing name
   });
 
   it('GET：kind/enabled 过滤；默认全量按 name 排序', async () => {
@@ -84,20 +84,20 @@ describe('S3 mcp-servers：CRUD + 配置期守卫 + 鉴权 + 跨组织隔离', (
     const created = await request(managerApp).post('/api/assistant/mcp-servers')
       .send({ name: 'switcher', kind: 'stdio', command: 'node' });
     const id = created.body.id as string;
-    // stdio → http：url 落库、command 清空
+    // stdio → http: url persisted, command cleared
     const toHttp = await request(managerApp).patch(`/api/assistant/mcp-servers/${id}`)
       .send({ kind: 'http', url: 'https://mcp.example.com/sse' });
     expect(toHttp.status).toBe(200);
     expect(toHttp.body).toMatchObject({ kind: 'http', url: 'https://mcp.example.com/sse', command: null });
-    // http → stdio：command 落库、url 清空
+    // http → stdio: command persisted, url cleared
     const toStdio = await request(managerApp).patch(`/api/assistant/mcp-servers/${id}`)
       .send({ kind: 'stdio', command: 'node' });
     expect(toStdio.status).toBe(200);
     expect(toStdio.body).toMatchObject({ kind: 'stdio', command: 'node', url: null });
-    // 改 kind 但缺必需字段 → 400
+    // Change kind but miss required fields → 400
     expect((await request(managerApp).patch(`/api/assistant/mcp-servers/${id}`)
       .send({ kind: 'http' })).status).toBe(400);
-    // 单改 command（不动 kind）合法
+    // Changing command only (kind untouched) is legal
     const cmdOnly = await request(managerApp).patch(`/api/assistant/mcp-servers/${id}`).send({ command: 'node --version' });
     expect(cmdOnly.status).toBe(200);
     expect(cmdOnly.body.command).toBe('node --version');
@@ -120,7 +120,7 @@ describe('S3 mcp-servers：CRUD + 配置期守卫 + 鉴权 + 跨组织隔离', (
     expect((await request(memberApp).get('/api/assistant/mcp-servers')).status).toBe(403);
     expect((await request(memberApp).patch('/api/assistant/mcp-servers/x').send({ enabled: true })).status).toBe(403);
     expect((await request(memberApp).delete('/api/assistant/mcp-servers/x')).status).toBe(403);
-    // scope=project/version 需要对应 id，引用可见项目 → 201
+    // scope=project/version requires the matching id; referencing a visible project → 201
     const scoped = await request(managerApp).post('/api/assistant/mcp-servers')
       .send({ name: 'scoped', kind: 'stdio', command: 'node', scope: 'project', projectId });
     expect(scoped.status).toBe(201);
@@ -146,14 +146,14 @@ describe('S3 mcp-servers：CRUD + 配置期守卫 + 鉴权 + 跨组织隔离', (
       [rowProj, projB, rowVer, verB]);
     await pool.query(`INSERT INTO assistant_mcp_servers (id, name, kind, command, scope) VALUES
       ($1,'SHARED','stdio','node','global')`, [randomUUID()]);
-    // GET：B 组织 scoped 行不可见，global 仍返回
+    // GET: B org scoped rows invisible, global still returned
     const listed = await request(managerApp).get('/api/assistant/mcp-servers');
     expect(listed.status).toBe(200);
     const names = listed.body.map((s: { name: string }) => s.name);
     expect(names).toContain('SHARED');
     expect(names).not.toContain('B-PROJ');
     expect(names).not.toContain('B-VER');
-    // PATCH/DELETE：跨组织 scoped 行一律 404；POST 引用 B 组织项目/版本同样 404
+    // PATCH/DELETE: cross-org scoped rows all 404; POST referencing B org project/version also 404
     expect((await request(managerApp).patch(`/api/assistant/mcp-servers/${rowProj}`).send({ command: 'x' })).status).toBe(404);
     expect((await request(managerApp).delete(`/api/assistant/mcp-servers/${rowVer}`)).status).toBe(404);
     expect((await request(managerApp).post('/api/assistant/mcp-servers')

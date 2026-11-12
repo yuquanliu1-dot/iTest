@@ -22,7 +22,7 @@ describe('confinedPath', () => {
     const base = await mkdtemp(path.join(tmpdir(), 'conf-'));
     const f = path.join(base, 'a.docx');
     await writeFile(f, 'x');
-    // macOS 上 /var 是 /private/var 的软链，断言必须与 realpath 同源
+    // On macOS /var is a symlink to /private/var; the assertion must share the same source as realpath
     expect(await confinedPath(base, f)).toBe(await confinedPath(base, f));
     await rm(base, { recursive: true, force: true });
   });
@@ -53,7 +53,7 @@ describe('confinedPath', () => {
   });
 });
 
-/** 现场构造 workbook → xlsx 字节。 */
+/** Build a workbook on the spot → xlsx bytes. */
 async function buildXlsx(build: (wb: ExcelJS.Workbook) => void): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   build(wb);
@@ -87,7 +87,7 @@ describe('xlsxToText', () => {
         true,
         { error: '#DIV/0!' },
       ]);
-      // 空结果公式：放第二行单独断言 [formula]
+      // Empty-result formula: placed on the second row and asserted separately as [formula]
       ws.addRow([{ formula: 'A1', result: null }]);
       void r;
     });
@@ -108,10 +108,10 @@ describe('xlsxToText', () => {
     const buf = await buildXlsx((wb) => {
       const ws = wb.addWorksheet('S');
       ws.getCell('A1').value = 'a';
-      ws.getCell('C1').value = 'c'; // B1 空洞
+      ws.getCell('C1').value = 'c'; // hole at B1
       ws.getCell('A2').value = 'only';
-      ws.getCell('E2').value = null; // 尾随空 cell（exceljs 物化但值为空）
-      ws.addRow([]); // 全空行
+      ws.getCell('E2').value = null; // trailing empty cell (materialized by exceljs but with an empty value)
+      ws.addRow([]); // entirely empty row
       ws.getCell('A4').value = 'next';
     });
     const text = await xlsxToText(buf);
@@ -141,7 +141,7 @@ describe('xlsxToText', () => {
     const text = await xlsxToText(buf);
     expect(text).toContain('## Sheet: Big (rows=2050,cols=1)');
     expect(text).toContain('[已截断：共 2050 行，仅提取前 2000 行]');
-    expect(text).toContain('\n2000'); // 末行是第 2000 行（2050 之后不再输出）
+    expect(text).toContain('\n2000'); // the last line is row 2000 (nothing is output past 2050)
     expect(text).not.toContain('\n2050');
   });
 

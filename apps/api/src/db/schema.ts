@@ -39,11 +39,11 @@ export const testCases = pgTable('test_cases', {
   groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
   versionId: uuid('version_id').notNull().references(() => projectVersions.id, { onDelete: 'restrict' }),
   url: text('url'),
-  /** 用例绑定的 web 服务对象标识(environment_objects objectType='web' 的 payload.name);
-   *  空=用环境默认 web 服务。执行时与相对 url 拼绝对地址。 */
+  /** Web service object identity bound to the case (environment_objects objectType='web' payload.name);
+   *  empty = use the environment's default web service. At execution time it is joined with the relative url into an absolute address. */
   webServiceRef: varchar('web_service_ref', { length: 64 }),
-  /** 需求编号（外部编号自由文本，非 requirements FK——用户编号体系在外部系统）。
-   *  用户在用例详情手填/清空；AI 生成时由 stage_case.requirementNo 从提示词原样带下。 */
+  /** Requirement number (free-text external number, not a requirements FK — the user numbering system lives in an external system).
+   *  Filled/cleared manually in the case detail; during AI generation it is carried down verbatim from the prompt via stage_case.requirementNo. */
   requirementNo: varchar('requirement_no', { length: 64 }),
   title: varchar('title', { length: 200 }).notNull(),
   description: text('description'),
@@ -55,24 +55,24 @@ export const testCases = pgTable('test_cases', {
   incognito: boolean('incognito').notNull().default(false),
   defaultEnvId: uuid('default_env_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
   datasetId: uuid('dataset_id').references(() => datasets.id, { onDelete: 'set null' }),
-  /** 数据集行选择：启用行下标数组（0 基，剔除 disabled 行后重新编号，与 loadDatasetForRun 同空间）。
-   *  [] = 所有启用行（= 旧行为，无需回填数据）。非空 = 只跑这些行。
-   *  换数据集 / 解绑 / 数据集删除时清空（见 updateCase / deleteDataset）。 */
+  /** Dataset row selection: array of enabled-row indexes (0-based, renumbered after disabled rows are removed, same space as loadDatasetForRun).
+   *  [] = all enabled rows (= old behavior, no data backfill needed). Non-empty = run only these rows.
+   *  Cleared on dataset switch / unbind / dataset deletion (see updateCase / deleteDataset). */
   datasetRowIndexes: integer('dataset_row_indexes').array().notNull().default([]),
   scenarioId: uuid('scenario_id').references(() => scenarios.id, { onDelete: 'set null' }),
-  /** 用例级预期描述（自然语言）。回放阶段结束时由 vision LLM 拿最终截图 + 此字段判终态；
-   * 为空/null 时跳过用例级断言（仅按 step.action 是否全部成功判定 pass/fail）。 */
+  /** Case-level expected description (natural language). At the end of the replay phase, the vision LLM judges the final state from the final screenshot + this field;
+   *  when empty/null, the case-level assertion is skipped (pass/fail judged only by whether all step.action succeed). */
   expectedOutcome: text('expected_outcome'),
-  /** 本条覆盖的测试类型（COVERAGE_TYPE_KEYS 子集）。AI 生成时由 stage_case.coverageTypes 带下来：
-   *  落库后覆盖度才可查询/可统计,不再只是提示词里的一句话。 */
+  /** Coverage types of this case (subset of COVERAGE_TYPE_KEYS). Carried down from stage_case.coverageTypes during AI generation:
+   *  once persisted, coverage becomes queryable/countable instead of just a sentence in the prompt. */
   coverageTypes: jsonb('coverage_types').default([]),
-  // 移动端元数据：platform='web' 表示存量 web 用例;'android'|'ios' 表示走 Appium driver。
-  // 复用 test_cases.dataset_id / default_env_id 的「nullable FK + set null」约定：删除 device_targets 不应牵连用例。
+  // Mobile metadata: platform='web' means legacy web cases; 'android'|'ios' means the Appium driver.
+  // Reuses the test_cases dataset_id / default_env_id "nullable FK + set null" convention: deleting device_targets must not cascade into cases.
   platform: varchar('platform', { length: 16 }).notNull().default('web'),
   mobileOs: varchar('mobile_os', { length: 16 }),
   mobileDeviceTargetId: uuid('mobile_device_target_id').references(() => deviceTargets.id, { onDelete: 'set null' }),
   appRef: jsonb('app_ref').$type<AppRef | null>(),
-  /** 创建人（对齐 plan_schedules.created_by_user_id 约定）；用户删除后置 NULL，不牵连用例 */
+  /** Creator (aligned with the plan_schedules.created_by_user_id convention); set to NULL on user deletion, cases unaffected */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -92,22 +92,22 @@ export const scenarios = pgTable('scenarios', {
 
 export const aiThreads = pgTable('ai_threads', {
   id: uuid('id').primaryKey().defaultRandom(),
-  /** 2026-10-15 起只有 'version' 在用：需求级线程（kind='requirement'）与其配套的
-   *  ai_workspace_state / ai_scenarios / ai_cases 三张表已随死代码清理移除（生产库均为空表）。
-   *  保留默认值 'requirement' 而非改 'version'——改默认值对存量 version 行没有收益，
-   *  却要让每个读代码的人重新确认一次「现在到底哪种线程活着」。
-   *  新建线程一律显式传 kind: 'version'（见 session.ts ensureSpaceRecord）。 */
+  /** Since 2026-10-15 only 'version' is in use: requirement-level threads (kind='requirement') and their companion
+   *  ai_workspace_state / ai_scenarios / ai_cases tables were removed with the dead-code cleanup (all empty tables in production).
+   *  The default stays 'requirement' rather than changing to 'version' — changing the default brings no benefit to existing version rows,
+   *  while forcing every code reader to re-confirm "which thread kind is actually alive".
+   *  New threads always pass kind: 'version' explicitly (see session.ts ensureSpaceRecord). */
   kind: varchar('kind', { length: 20 }).notNull().default('requirement'),
-  // requirement 线程 1:1 需求;version 线程此列为 NULL(Postgres 唯一索引不约束 NULL,多条 version 线程合法)
+  // requirement threads are 1:1 with requirements; NULL for version threads (Postgres unique index doesn't constrain NULL, multiple version threads are legal)
   requirementId: uuid('requirement_id').references(() => requirements.id, { onDelete: 'cascade' }),
   versionId: uuid('version_id').references(() => projectVersions.id, { onDelete: 'cascade' }),
   title: text('title'),
   piThreadId: text('pi_thread_id').notNull(),
-  /** 线程用途：'chat' 用户对话（默认）；'rca' 计划运行失败根因分析后台线程 */
+  /** Thread purpose: 'chat' user conversation (default); 'rca' background thread for plan-run failure root-cause analysis */
   purpose: varchar('purpose', { length: 20 }).notNull().default('chat'),
-  /** purpose='rca' 时关联的 plan_run；chat 线程为 NULL（无 FK，同 schedule_id 先例） */
+  /** The plan_run associated when purpose='rca'; NULL for chat threads (no FK, same precedent as schedule_id) */
   planRunId: uuid('plan_run_id'),
-  /** 线程创建人：AI 代建对象（env/plan/...）以它为归属 */
+  /** Thread creator: AI-created objects (env/plan/...) use it as their owner */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -116,8 +116,8 @@ export const aiThreads = pgTable('ai_threads', {
   versionIdx: index('ai_threads_version_idx').on(t.versionId),
 }));
 
-// 按 version 线程作用域：AI 在 stage_* 工具里写这里，前端 StagePanel 勾选 → /stage/save 落正式表。
-// 空间助手无 requirementId（需求由用户在弹窗/助手里直接输入，不落 requirements 表），localId 由 LLM 自生成。
+// Scoped by version thread: the AI writes here via stage_* tools, the frontend StagePanel checks rows → /stage/save persists to the real tables.
+// The space assistant has no requirementId (requirements are typed by the user directly in dialogs/assistant, not stored in the requirements table); localId is generated by the LLM.
 export const aiStageCases = pgTable(
   'ai_stage_cases',
   {
@@ -128,16 +128,16 @@ export const aiStageCases = pgTable(
     description: text('description'),
     priority: varchar('priority', { length: 20 }),
     url: text('url'),
-    /** AI 从用户提示词里原样提取的需求编号（如 REQ-2024-001）；save 时随用例落到 test_cases.requirement_no */
+    /** Requirement number extracted verbatim from the user prompt by the AI (e.g. REQ-2024-001); saved to test_cases.requirement_no along with the case */
     requirementNo: varchar('requirement_no', { length: 64 }),
     steps: jsonb('steps').notNull().default([]),
     defaultEnvId: uuid('default_env_id'),
     expectedOutcome: text('expected_outcome'),
-    /** 配套绑定：同批暂存数据集的 localId（stage_dataset 生成）；save 时数据集先落库回填真实 datasetId。 */
+    /** Companion binding: localId of the dataset staged in the same batch (generated by stage_dataset); at save time the dataset is persisted first, then the real datasetId is backfilled. */
     datasetLocalId: text('dataset_local_id'),
-    /** 本条用例覆盖的测试类型（functional/exception/boundary/security/uiux）。
-     *  弹窗勾选的覆盖要求此前只是拼进 prompt 的一句话，工具层收不到、生成后无从核对；
-     *  落到这列后覆盖意图成为可查询数据，暂存区可展示、后续可做覆盖矩阵。 */
+    /** Coverage types of this case (functional/exception/boundary/security/uiux).
+     *  Coverage requirements checked in the dialog used to be just a sentence concatenated into the prompt — invisible to the tool layer, unverifiable after generation;
+     *  landing in this column turns the coverage intent into queryable data: the staging area can display it and a coverage matrix can be built later. */
     coverageTypes: jsonb('coverage_types').default([]),
     stagedAt: timestamp('staged_at').defaultNow().notNull(),
   },
@@ -147,13 +147,13 @@ export const aiStageCases = pgTable(
   }),
 );
 
-/** 版本空间助手「修改已有用例/步骤」暂存表。
- *  对应 stage_case_op 工具（单工具多 action）。PK = (threadId, localId)，与 stage_cases 风格一致。
+/** Version space assistant "modify existing case/step" staging table.
+ *  Backs the stage_case_op tool (single tool, multiple actions). PK = (threadId, localId), same style as stage_cases.
  *  - op:update_case/delete_case/move_case/update_step/insert_step/delete_step/move_step
- *  - payload:zod 校验后的具体 op 输入（patch、targetGroupId、stepId、order、compiled、instruction…）
- *  - summary:前端 StagePanel 渲染的行级一句话描述
- *  - diff:与原值的对比（update_case/move_case/update_step/move_step 填；delete_* 不填）
- *  用户在 StagePanel 勾选 → POST /threads/:id/stage/save 一次性落库（顺序：cases→scenarios→environments→plans→caseOps）。
+ *  - payload:zod-validated concrete op input (patch, targetGroupId, stepId, order, compiled, instruction…)
+ *  - summary: one-line row description rendered by the frontend StagePanel
+ *  - diff: comparison with the original value (filled for update_case/move_case/update_step/move_step; not filled for delete_*)
+ *  The user checks rows in StagePanel → POST /threads/:id/stage/save persists everything in one shot (order: cases→scenarios→environments→plans→caseOps).
  */
 export const aiStageCaseOps = pgTable(
   'ai_stage_case_ops',
@@ -227,9 +227,9 @@ export const aiStagePlans = pgTable(
   }),
 );
 
-/** 版本空间助手「数据集暂存表」。对应 stage_dataset 工具；PK = (threadId, localId)。
- *  rows 为明文草稿（AI 生成、StagePanel 预览可见）；敏感格仅在 /stage/save 走
- *  createDataset(normalizeDataset) 时加密，stage 表不存密文。 */
+/** Version space assistant "dataset staging table". Backs the stage_dataset tool; PK = (threadId, localId).
+ *  rows are plaintext drafts (AI-generated, visible in the StagePanel preview); sensitive cells are encrypted only when
+ *  /stage/save runs createDataset(normalizeDataset); the stage table never stores ciphertext. */
 export const aiStageDatasets = pgTable(
   'ai_stage_datasets',
   {
@@ -252,8 +252,8 @@ export const testSteps = pgTable('test_steps', {
   id: uuid('id').primaryKey().defaultRandom(),
   caseId: uuid('case_id').references(() => testCases.id, { onDelete: 'cascade' }).notNull(),
   order: integer('order').notNull(),
-  // 2026-10-06 起彻底移除:name 列(老 UI 短标题)与 action 列同款作废,
-  //   短标题+行级自然语言全部由 instruction 列承担。DB 列已 DROP,schema 同步删除。
+  // Fully removed since 2026-10-06: the name column (old UI short title) was retired like the action column;
+  //   short titles + row-level natural language are both carried by the instruction column. DB columns dropped, schema synced accordingly.
   delayMs: integer('delay_ms'),
   source: varchar('source', { length: 20 }).notNull(),
   tabRef: varchar('tab_ref', { length: 64 }),
@@ -262,26 +262,26 @@ export const testSteps = pgTable('test_steps', {
   secretCiphertext: text('secret_ciphertext'),
   secretIv: text('secret_iv'),
   secretTag: text('secret_tag'),
-  /** 行级自然语言描述（人看 / 给 LLM 起手）。回放阶段不读；UI 摘要优先取 compiled[0]。
-   *  2026-10-07 起替代旧 name 列,自然语言完整说明都落这里。 */
+  /** Row-level natural language description (for humans / as the LLM's starting point). Not read during replay; the UI summary prefers compiled[0].
+   *  Replaces the old name column since 2026-10-07; the full natural language description lands here. */
   instruction: text('instruction'),
-  /** 可执行 DSL 数组;回放唯一依据。
-   *  空数组/null = 未编译,dispatcher 抛 `compile-missing`,UI 阻塞执行并提示「AI 编译」。
-   *  类型记为 unknown[]:route 层 zod 解析后单条已是 StepAction;此处保持宽口避免 route 入参 narrow。 */
+  /** Executable DSL array; the sole basis for replay.
+   *  Empty array/null = not compiled; the dispatcher throws `compile-missing` and the UI blocks execution, prompting "AI compile".
+   *  Typed as unknown[]: after zod parsing at the route layer each entry is already a StepAction; kept wide here to avoid narrowing the route input. */
   compiled: jsonb('compiled').$type<unknown[]>(),
   assertion: jsonb('assertion'),
-  // 移动端专属：步骤覆盖 mobile_os 时（与用例 platform 一致），回放期按 android/ios dispatch。
-  // 缺省 = 跟随用例 platform（web 用例的 steps 永远 null）。
+  // Mobile-only: when a step overrides mobile_os (consistent with the case's platform), replay dispatches by android/ios.
+  // Default = follow the case's platform (steps of web cases are always null).
   mobileOs: varchar('mobile_os', { length: 16 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
   caseIdIdx: index('idx_test_steps_case').on(t.caseId),
 }));
 
-/** aiTask 视觉步骤的运行时动作缓存（"自动挡固化"）：首次回放成功后把 AI 实际执行
- *  的动作序列缓存，后续回放先机械执行缓存，失败静默回退 AI 并覆写（自愈协议）。
- *  与 solidify_case 互补：缓存对用例定义零侵入（test_steps.compiled 不变）。
- *  key = (stepId, instruction 精确匹配)——指令一改即过期；步骤删除级联清缓存。 */
+/** Runtime action cache for aiTask vision steps ("automatic solidification"): after the first successful replay, the action sequence
+ *  the AI actually executed is cached; subsequent replays execute the cache mechanically first, silently falling back to AI and overwriting on failure (self-heal protocol).
+ *  Complements solidify_case: the cache is zero-intrusion to the case definition (test_steps.compiled unchanged).
+ *  key = (stepId, exact instruction match) — any instruction change invalidates it; step deletion cascades the cache clear. */
 export const stepActionCache = pgTable('step_action_cache', {
   stepId: uuid('step_id').primaryKey().references(() => testSteps.id, { onDelete: 'cascade' }),
   instruction: text('instruction').notNull(),
@@ -291,11 +291,11 @@ export const stepActionCache = pgTable('step_action_cache', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-/** 机械步骤 locator 修复记忆：AI 降级（ai_fallback_locator_failed）整步重做成功后，
- *  把 AI 动作解析回的稳定 selector（经 mapSelectorStrict 净化）按 step_id 缓存；
- *  后续回放把缓存 locator 追加进候选链末位参与探测——零 LLM 命中即过；
- *  缓存也失灵 → 照旧 AI 降级 → 覆写缓存（自愈协议）。对 test_steps.compiled 零侵入。
- *  key = stepId（action_kind 区分步内多动作）；步骤删除级联清缓存。 */
+/** Mechanical step locator repair memory: after an AI fallback (ai_fallback_locator_failed) full-step redo succeeds,
+ *  the stable selector resolved back from the AI actions (sanitized via mapSelectorStrict) is cached by step_id;
+ *  subsequent replays append the cached locator at the end of the candidate chain to join probing — passing with zero LLM hits;
+ *  if the cache also fails → AI fallback as before → overwrite the cache (self-heal protocol). Zero intrusion into test_steps.compiled.
+ *  key = stepId (action_kind distinguishes multiple actions within a step); step deletion cascades the cache clear. */
 export const stepLocatorCache = pgTable('step_locator_cache', {
   stepId: uuid('step_id').primaryKey().references(() => testSteps.id, { onDelete: 'cascade' }),
   actionKind: varchar('action_kind', { length: 16 }).notNull(),
@@ -315,23 +315,23 @@ export const reports = pgTable('reports', {
   summary: text('summary'),
   datasetRowIndex: integer('dataset_row_index'),
   datasetSnapshot: jsonb('dataset_snapshot'),
-  // 同一次数据集执行的批次 id：runCase 一次调用的所有行共用（无 FK，纯分组键）。
-  // 报告详情页据此拉「同批兄弟行」渲染行切换器；老报告为 null（切换器不渲染）。
+  // Batch id of one dataset execution: shared by all rows of a single runCase call (no FK, pure grouping key).
+  // The report detail page uses it to fetch "sibling rows of the same batch" for the row switcher; null on old reports (switcher not rendered).
   datasetBatchId: uuid('dataset_batch_id'),
-  // 移动端快照：执行期 device_target 解析后的最终值入报表，便于历史追溯。
-  // deviceName 取 device_target.name 当时值（device_target 改名不联动历史 report）。
+  // Mobile snapshot: the final resolved device_target value at execution time goes into the report for historical traceability.
+  // deviceName takes device_target.name's value at that moment (renaming a device_target does not retroactively affect historical reports).
   platform: varchar('platform', { length: 16 }).notNull().default('web'),
   mobileOs: varchar('mobile_os', { length: 16 }),
   deviceName: varchar('device_name', { length: 128 }),
   deviceTargetId: uuid('device_target_id').references(() => deviceTargets.id, { onDelete: 'set null' }),
-  // 双通过率口径：passed 且 healed=true = 自愈通过（aiTask 缓存分叉后 AI 兜底成功）；
-  // passed 且 healed=false = 一次通过；failed 恒 false。
+  // Double pass-rate convention: passed with healed=true = passed via self-heal (aiTask cache diverged and the AI fallback succeeded);
+  // passed with healed=false = passed on first attempt; failed is always false.
   healed: boolean('healed').notNull().default(false),
-  /** 创建人 = 触发执行的人（单用例=请求用户；计划运行沿用 plan_runs.triggered_by_user_id） */
+  /** Creator = the person who triggered execution (single case = requesting user; plan runs reuse plan_runs.triggered_by_user_id) */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
-  // 真实执行阶段起止时刻：started_at = 开始跑步骤的时刻（环境/URL 解析之后，与 duration_ms 同基线）；
-  // finished_at = 终态落库时刻。老报告两列均为 null（可空，不回填）。
-  // 注意与 created_at 区分：created_at 是报告行插入时刻，含排队 + 环境解析 + 数据集解密耗时。
+  // Real execution phase start/end moments: started_at = when steps began running (after environment/URL resolution, same baseline as duration_ms);
+  // finished_at = when the terminal state was persisted. Both columns are null on old reports (nullable, not backfilled).
+  // Distinguish from created_at: created_at is when the report row was inserted, including queueing + environment resolution + dataset decryption time.
   startedAt: timestamp('started_at'),
   finishedAt: timestamp('finished_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -345,31 +345,31 @@ export const users = pgTable('users', {
   username: varchar('username', { length: 50 }).notNull().unique(),
   passwordHash: text('password_hash').notNull(),
   displayName: varchar('display_name', { length: 100 }).notNull(),
-  // null 表示从未改过密码（配合 must_change_password 强制首登改密）
+  // null means the password has never been changed (works with must_change_password to force a change on first login)
   passwordUpdatedAt: timestamp('password_updated_at'),
   mustChangePassword: boolean('must_change_password').notNull().default(false),
-  // 服务端吊销版本号：登出/改密 +1，auth 中间件回查 DB 与 JWT payload 比对
+  // Server-side revision counter: +1 on logout/password change; the auth middleware re-checks the DB and compares with the JWT payload
   tokenVersion: integer('token_version').notNull().default(1),
-  // 邮箱（PG 唯一但 NULL 不参与判定；与 iDO 同源，便于「撞邮箱」409 而非用户内重复）
+  // Email (unique in PG but NULL excluded from the check; same-origin with iDO so "email collision" yields 409 rather than intra-user duplication)
   email: varchar('email', { length: 255 }),
-  // UI 语言偏好：'zh-CN' | 'en-US'
+  // UI language preference: 'zh-CN' | 'en-US'
   languagePreference: varchar('language_preference', { length: 16 }).notNull().default('zh-CN'),
-  // 软删除时间戳：非 null 即账号已停用——禁止登录、不出现在用户目录中。
-  // 硬删会被 automations/sprints/pipeline* 的 NOT NULL created_by FK 拒掉。
+  // Soft-delete timestamp: non-null means the account is deactivated — login forbidden and excluded from the user directory.
+  // Hard delete would be rejected by the NOT NULL created_by FKs of automations/sprints/pipeline*.
   disabledAt: timestamp('disabled_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  // 与 drizzle/0017 中「email 唯一」声明同源；drizzle-kit migrate 同步建索引
+  // Same origin as the "email unique" declaration in drizzle/0017; drizzle-kit migrate creates the index in sync
   emailUq: uniqueIndex('users_email_uq').on(t.email).where(sql`${t.email} IS NOT NULL`),
 }));
 
 export const organizations = pgTable('organizations', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 200 }).notNull().unique(),
-  // 自引用 FK：null = 根组织（租户根仅由种子迁移创建）
+  // Self-referencing FK: null = root organization (tenant roots are created only by seed migrations)
   parentId: uuid('parent_id').references((): AnyPgColumn => organizations.id, { onDelete: 'set null' }),
-  // 物化路径 /orgId/orgId/（含自身，首尾都是 /）
+  // Materialized path /orgId/orgId/ (includes itself, leading and trailing /)
   path: text('path').notNull().unique(),
   description: text('description'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -392,10 +392,10 @@ export const organizationMembers = pgTable('organization_members', {
 }));
 
 /**
- * 产品线：组织下的一层容器，把「基线项目」与「多个局点项目」圈在一起。
- * 用途是跨项目共享用例——同产品线内的项目之间，执行计划可以互相引用对方的用例。
+ * Product line: a container layer under an organization grouping a "baseline project" together with "multiple site projects".
+ * Its purpose is cross-project case sharing — within the same product line, execution plans can reference each other's cases.
  *
- * 可见性不另设成员表：产品线挂在组织下，随组织的 visibleOrgIdsFor 口径自动可见。
+ * No separate membership table for visibility: a product line hangs under the organization and is automatically visible per the organization's visibleOrgIdsFor convention.
  */
 export const productLines = pgTable('product_lines', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -404,7 +404,7 @@ export const productLines = pgTable('product_lines', {
     .references(() => organizations.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 200 }).notNull(),
   description: text('description'),
-  /** 创建人（对齐 projects.created_by_user_id 约定） */
+  /** Creator (aligned with the projects.created_by_user_id convention) */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -414,32 +414,32 @@ export const productLines = pgTable('product_lines', {
 
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
-  // 项目没有自己的组织列：所属组织恒等于其产品线的组织（结构不变式，不靠应用层同步）。
-  // 所以移动一条产品线只需 UPDATE product_lines.organization_id，线下项目自动跟着换组织。
-  // notNull + onDelete restrict：删线时若仍有项目，D1 语义由应用层的 409 line_not_empty 先拦，
-  // FK 是兜底——不允许删线把线内项目悄悄打成「无组织无产品线」的孤儿。
+  // Projects have no organization column of their own: the owning organization always equals its product line's organization (a structural invariant, not app-layer sync).
+  // So moving a product line only needs UPDATE product_lines.organization_id and its projects switch organizations automatically.
+  // notNull + onDelete restrict: when deleting a line that still has projects, the D1 semantics are intercepted first by the app layer's 409 line_not_empty;
+  // the FK is the fallback — deleting a line must not silently orphan its projects into "no organization, no product line".
   productLineId: uuid('product_line_id').notNull().references(() => productLines.id, { onDelete: 'restrict' }),
   name: varchar('name', { length: 200 }).notNull(),
   description: text('description'),
-  // 仓库元数据：与 iDO 同源（AI 生成用例步骤需要看代码）。当前只存元数据 + 验证可达性，
-  // 后续接入 dispatch-gateway 的 github.service.ts 后才会有 clone / file read。
+  // Repo metadata: same origin as iDO (AI case-step generation needs to see code). Currently stores metadata + verified reachability only;
+  // clone / file read will only exist after wiring in dispatch-gateway's github.service.ts.
   repoUrl: text('repo_url'),
   defaultBranch: varchar('default_branch', { length: 200 }).notNull().default('main'),
   provider: varchar('provider', { length: 16 }).notNull().default('github'),
   gitlabUrlOverride: text('gitlab_url_override'),
-  // 仓库 PAT：明文存盘仅为最小迁移代价；后续接 dispatch 时应改 encrypted column。
-  // 现 read 路径全部 mask（projectsRoute / ProjectDetailPanel 都不得回传）。
+  // Repo PAT: plaintext storage is only the minimal migration cost; should become an encrypted column when dispatch is wired in.
+  // All read paths currently mask it (projectsRoute / ProjectDetailPanel must never return it).
   patOverride: text('pat_override'),
-  /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
+  /** Creator (aligned with the plan_schedules.created_by_user_id convention) */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// 项目分配：user ⇄ project 多对多。
-// organizationId 是「分配发生时」的组织快照，纯审计用途：项目本身已无组织列，
-// 可见性一律经 project → product_lines.organization_id 推导，不再读这一列做闸门。
-// （R2 前它是可见性闸门之一，故移动/挂载时会被同步改写；R2 后该同步已无必要。）
+// Project assignment: user ⇄ project many-to-many.
+// organizationId is the organization snapshot "at assignment time", purely for audit: projects themselves no longer have an organization column,
+// visibility is always derived via project → product_lines.organization_id; this column is no longer read as a gate.
+// (Before R2 it was one of the visibility gates, so it was rewritten in sync on move/mount; after R2 that sync is unnecessary.)
 export const projectAssignments = pgTable('project_assignments', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
@@ -460,8 +460,8 @@ export const groups = pgTable('groups', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// 项目版本：测试环境 / 用例 / 执行计划全部按版本工作；前端操作一律显式携带 versionId，无默认版本。
-// ref / refKind 指向项目仓库的具体 git ref（branch 或 tag），给 AI 工作台 checkout 时精确定位。
+// Project versions: environments / cases / execution plans all work per version; frontend operations always carry versionId explicitly, no default version.
+// ref / refKind point to a concrete git ref (branch or tag) of the project repo, giving the AI workbench a precise checkout target.
 export const projectVersions = pgTable('project_versions', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
@@ -469,7 +469,7 @@ export const projectVersions = pgTable('project_versions', {
   description: text('description'),
   ref: varchar('ref', { length: 200 }),
   refKind: varchar('ref_kind', { length: 16 }),
-  // 版本关联环境：空 → 执行期回退项目默认环境（test_environments.is_default）
+  // Version-linked environment: empty → fall back to the project default environment at execution time (test_environments.is_default)
   environmentId: uuid('environment_id').references(() => testEnvironments.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -484,9 +484,9 @@ export const executionPlans = pgTable('execution_plans', {
   versionId: uuid('version_id').references(() => projectVersions.id, { onDelete: 'set null' }),
   name: varchar('name', { length: 200 }).notNull(),
   strategy: varchar('strategy', { length: 20 }).notNull().default('run_all'),
-  /** 运行结束后对失败用例自动做 AI 根因分析（快照进 planRuns） */
+  /** Automatically run AI root-cause analysis on failed cases after the run (snapshotted into planRuns) */
   rcaEnabled: boolean('rca_enabled').notNull().default(false),
-  /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
+  /** Creator (aligned with the plan_schedules.created_by_user_id convention) */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -494,8 +494,8 @@ export const executionPlans = pgTable('execution_plans', {
   versionIdIdx: index('execution_plans_version_idx').on(t.versionId),
 }));
 
-/** 执行分组：计划内用例的有序分组，每组独立配置环境/登录准备/组内 fail_fast/设备与浏览器上下文。
- *  组间串行按 order 执行；计划级 strategy 管组间失败传导（fail_fast=前组失败取消后续组）。 */
+/** Execution groups: ordered grouping of a plan's cases, each group independently configured with environment/login preparation/in-group fail_fast/device and browser context.
+ *  Groups run serially by order; the plan-level strategy governs inter-group failure propagation (fail_fast = a failed group cancels subsequent groups). */
 export const planCaseGroups = pgTable('plan_case_groups', {
   id: uuid('id').primaryKey().defaultRandom(),
   planId: uuid('plan_id').notNull().references(() => executionPlans.id, { onDelete: 'cascade' }),
@@ -507,12 +507,12 @@ export const planCaseGroups = pgTable('plan_case_groups', {
   detectionUrl: text('detection_url'),
   loginSuccessSelector: text('login_success_selector'),
   loginUnauthorizedKeywords: jsonb('login_unauthorized_keywords'),
-  /** 组内策略：首例失败后跳过本组剩余用例（计划级 strategy 管组间） */
+  /** In-group policy: skip the group's remaining cases after the first failure (plan-level strategy governs between groups) */
   failFast: boolean('fail_fast').notNull().default(false),
-  /** 登录用例数据行覆盖（三态，与 plan_cases.dataset_row_indexes 同语义）：
-   *  null = 跟随用例级；[] = 全部启用行；非空 = 子集。仅在 login_case_id 指向绑数据集的用例时生效。 */
+  /** Login-case dataset row override (three states, same semantics as plan_cases.dataset_row_indexes):
+   *  null = follow the case-level setting; [] = all enabled rows; non-empty = subset. Only effective when login_case_id points to a case bound to a dataset. */
   loginDatasetRowIndexes: integer('login_dataset_row_indexes').array(),
-  /** 组级统一生效：deviceTargetId / 浏览器上下文（与 plan_cases.target_override 同形状） */
+  /** Effective uniformly at group level: deviceTargetId / browser context (same shape as plan_cases.target_override) */
   targetConfig: jsonb('target_config').$type<{ deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null>(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -526,11 +526,11 @@ export const planCases = pgTable('plan_cases', {
   caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
   groupId: uuid('group_id').notNull().references(() => planCaseGroups.id, { onDelete: 'cascade' }),
   order: integer('order').notNull(),
-  // 计划级覆盖：用例默认 device_target / 浏览器上下文可在「加进计划」时改写，
-  // 不动用例本体，仅本次计划执行时按覆盖解析。null = 沿用例自带值。
+  // Plan-level override: the case's default device_target / browser context can be rewritten when "adding to the plan",
+  // without touching the case itself; resolved per the override only for this plan execution. null = use the case's own value.
   targetOverride: jsonb('target_override').$type<{ deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null>(),
-  // 计划级数据集行选择（三态覆盖）：null = 跟随用例级配置（执行回落 test_cases.dataset_row_indexes）；
-  // [] = 全部启用行；非空 = 启用行下标子集（与用例级同一编号空间）。同用例跨组=多行，各行独立。
+  // Plan-level dataset row selection (three-state override): null = follow the case-level config (execution falls back to test_cases.dataset_row_indexes);
+  // [] = all enabled rows; non-empty = subset of enabled-row indexes (same numbering space as the case level). Same case across groups = multiple rows, each independent.
   datasetRowIndexes: integer('dataset_row_indexes').array(),
 }, (t) => ({
   planOrderIdx: index('idx_plan_cases_plan_order').on(t.planId, t.order),
@@ -542,8 +542,8 @@ export const planRuns = pgTable('plan_runs', {
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   status: varchar('status', { length: 20 }).notNull(),
   strategy: varchar('strategy', { length: 20 }).notNull(),
-  /** 组结构快照（enqueue 时写入）：[{id,name,order,environmentId,loginPrepareEnabled,loginCaseId,detectionUrl,loginSuccessSelector,loginUnauthorizedKeywords,failFast,targetConfig}]。
-   *  老运行为 null（引擎兜底合成为单组）。标量 login_* 列保留给老运行 + 新运行写 OR 兼容旧 UI。 */
+  /** Group structure snapshot (written at enqueue time): [{id,name,order,environmentId,loginPrepareEnabled,loginCaseId,detectionUrl,loginSuccessSelector,loginUnauthorizedKeywords,failFast,targetConfig}].
+   *  null on old runs (the engine falls back to synthesizing a single group). Scalar login_* columns kept for old runs; new runs also write them, OR'd for old-UI compatibility. */
   groups: jsonb('groups'),
   loginPrepareEnabled: boolean('login_prepare_enabled').notNull().default(false),
   loginCaseId: uuid('login_case_id').references(() => testCases.id, { onDelete: 'set null' }),
@@ -560,11 +560,11 @@ export const planRuns = pgTable('plan_runs', {
   failedCases: integer('failed_cases'),
   skippedCases: integer('skipped_cases'),
   cancelRequested: boolean('cancel_requested').notNull().default(false),
-  /** 触发来源：`manual` 一键执行 / `schedule` 调度器触发 */
+  /** Trigger source: `manual` one-click execution / `schedule` scheduler trigger */
   triggeredBy: varchar('triggered_by', { length: 20 }).notNull().default('manual'),
-  /** scheduled run 的 actor（创建 schedule 的用户）；手动时为发起人 */
+  /** Actor of a scheduled run (the user who created the schedule); the initiator for manual runs */
   triggeredByUserId: uuid('triggered_by_user_id').references(() => users.id, { onDelete: 'set null' }),
-  /** 关联调度记录；manual 为 null */
+  /** Associated schedule record; null for manual */
   scheduleId: uuid('schedule_id'),
 }, (t) => ({
   projectStartedIdx: index('idx_plan_runs_project_started').on(t.projectId, t.startedAt),
@@ -576,7 +576,7 @@ export const planRunCases = pgTable('plan_run_cases', {
   planRunId: uuid('plan_run_id').notNull().references(() => planRuns.id, { onDelete: 'cascade' }),
   caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
   reportId: uuid('report_id').references(() => reports.id, { onDelete: 'set null' }),
-  /** 数据集迭代：该用例全部数据行产生的 report id 列表（首元素与 reportId 一致，兼容旧读取）。 */
+  /** Dataset iterations: list of report ids produced by all data rows of this case (first element matches reportId, for legacy reads). */
   reportIds: jsonb('report_ids').$type<string[]>(),
   groupId: uuid('group_id'),
   groupName: varchar('group_name', { length: 200 }),
@@ -588,7 +588,7 @@ export const planRunCases = pgTable('plan_run_cases', {
   finishedAt: timestamp('finished_at'),
   durationMs: integer('duration_ms'),
   error: text('error'),
-  /** AI 根因分析结果（save_rca_result 工具写入；worker 超时兜底写 timeout） */
+  /** AI root-cause analysis result (written by the save_rca_result tool; the worker's timeout fallback writes timeout) */
   rca: jsonb('rca'),
 }, (t) => ({
   runOrderIdx: index('idx_plan_run_cases_run_order').on(t.planRunId, t.order),
@@ -597,26 +597,26 @@ export const planRunCases = pgTable('plan_run_cases', {
 }));
 
 /**
- * 执行计划调度：cron 表达式按固定时刻重复执行。
- * 「立即执行」沿用现有「一键执行」按钮；只保留 cron 一种触发模式（与 iDO Automation 对齐）。
+ * Execution plan scheduling: cron expressions repeat execution at fixed times.
+ * "Run now" reuses the existing "one-click execution" button; only cron remains as a trigger mode (aligned with iDO Automation).
  *
- * BullMQ 在进程启动时 reconcileAllSchedules() 把 enabled=true 的全部入队；
- * 这里持久化 cron + 下次执行时间，UI 列表读这里的 next_run_at。
+ * At process startup BullMQ's reconcileAllSchedules() enqueues everything with enabled=true;
+ * cron + next execution time are persisted here, and the UI list reads next_run_at from here.
  */
 export const planSchedules = pgTable('plan_schedules', {
   id: uuid('id').primaryKey().defaultRandom(),
   planId: uuid('plan_id').notNull().references(() => executionPlans.id, { onDelete: 'cascade' }),
-  /** 用户可临时停用（不需要删除调度）；worker / 路由读 enabled 决定是否入队 */
+  /** Can be temporarily disabled by the user (no need to delete the schedule); worker / routes read enabled to decide whether to enqueue */
   enabled: boolean('enabled').notNull().default(true),
-  /** cron 表达式（如 '0 9 * * 1-5'） */
+  /** cron expression (e.g. '0 9 * * 1-5') */
   cronExpr: varchar('cron_expr', { length: 120 }).notNull(),
-  /** IANA 时区名，默认 Asia/Shanghai */
+  /** IANA timezone name, default Asia/Shanghai */
   timezone: varchar('timezone', { length: 64 }).notNull().default('Asia/Shanghai'),
-  /** 最近一次实际触发时间（worker 写） */
+  /** Most recent actual trigger time (written by the worker) */
   lastRunAt: timestamp('last_run_at'),
-  /** 下次触发时间（worker 写，列表页"下次执行"读此列） */
+  /** Next trigger time (written by the worker; the list page's "next execution" reads this column) */
   nextRunAt: timestamp('next_run_at'),
-  /** 创建人；scheduled run 的 triggered_by_user_id 沿用此值 */
+  /** Creator; a scheduled run's triggered_by_user_id reuses this value */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -649,12 +649,12 @@ export const testSessions = pgTable('test_sessions', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-// 组织级标签：用例可贴/摘多个；同组织内 name 唯一，组织内全部项目共享可见。
+// Organization-level tags: cases can attach/remove multiple; name is unique within an organization, shared and visible across all projects in it.
 export const tags = pgTable('tags', {
   id: uuid('id').primaryKey().defaultRandom(),
   organizationId: uuid('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 80 }).notNull(),
-  // hex 颜色不含 `#`，例如 '34c759'
+  // hex color without `#`, e.g. '34c759'
   color: varchar('color', { length: 16 }).notNull(),
   description: text('description'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -663,7 +663,7 @@ export const tags = pgTable('tags', {
   orgNameUq: unique('tags_org_name_uq').on(t.organizationId, t.name),
 }));
 
-// 用例 ↔ 标签 关联（case 删除或 tag 删除时 cascade 解除）
+// case ↔ tag association (cascade-removed when the case or tag is deleted)
 export const caseTags = pgTable('case_tags', {
   caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
   tagId: uuid('tag_id').notNull().references(() => tags.id, { onDelete: 'cascade' }),
@@ -675,9 +675,9 @@ export const testEnvironments = pgTable('test_environments', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 120 }).notNull(),
-  // 项目默认环境：未被 case/plan/version 显式指定环境时的兜底；项目内至多一个
+  // Project default environment: the fallback when no environment is explicitly specified by case/plan/version; at most one per project
   isDefault: boolean('is_default').notNull().default(false),
-  /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
+  /** Creator (aligned with the plan_schedules.created_by_user_id convention) */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -685,28 +685,28 @@ export const testEnvironments = pgTable('test_environments', {
   projectNameUq: unique('test_environments_project_name_uq').on(t.projectId, t.name),
 }));
 
-/** 数据集列定义：name 即回放变量名（{{name}}），sensitive 标记整列加密。 */
+/** Dataset column definition: name is the replay variable name ({{name}}); sensitive marks the whole column as encrypted. */
 export interface DatasetColumn {
   name: string;
   sensitive: boolean;
 }
-/** 敏感格密文：AES-256-GCM 三元组（与 environment_objects payload.secret 同构）。 */
+/** Sensitive-cell ciphertext: AES-256-GCM triple (isomorphic to environment_objects payload.secret). */
 export interface DatasetEncCell { c: string; i: string; t: string }
 export interface DatasetRow {
   disabled: boolean;
   cells: Record<string, string | DatasetEncCell>;
 }
 
-/** 移动端 App 引用：bundleId / 本地 app 路径 / 启动参数。
- *  落到 test_cases.app_ref；回放时 driver 用它启动 app + 上传派生能力（activity / package）。 */
+/** Mobile app reference: bundleId / local app path / launch args.
+ *  Lands in test_cases.app_ref; at replay the driver uses it to launch the app + upload derived capabilities (activity / package). */
 export interface AppRef {
   bundleId: string;
   appPath?: string;
   launchArgs?: string[];
 }
 
-// 设备目标：每条记录代表一个具体真机/模拟器，挂在 project 下；用例与执行计划都按 device_target 解析。
-// 与 test_environments 平级但用途不同：环境管 baseUrl；device_target 管 mobile_os + device_ref + app_ref。
+// Device target: each record represents a concrete real device/emulator, hung under a project; both cases and execution plans resolve via device_target.
+// Peer of test_environments but with a different purpose: environments manage baseUrl; device_target manages mobile_os + device_ref + app_ref.
 export const deviceTargets = pgTable('device_targets', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
@@ -729,7 +729,7 @@ export const datasets = pgTable('datasets', {
   description: text('description'),
   columns: jsonb('columns').$type<DatasetColumn[]>().notNull().default([]),
   rows: jsonb('rows').$type<DatasetRow[]>().notNull().default([]),
-  /** 创建人（对齐 plan_schedules.created_by_user_id 约定） */
+  /** Creator (aligned with the plan_schedules.created_by_user_id convention) */
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -737,8 +737,8 @@ export const datasets = pgTable('datasets', {
   projectNameUq: unique('datasets_project_name_uq').on(t.projectId, t.name),
 }));
 
-// 环境对象：一个环境下的多类资源（db / syslog，未来可扩展），每类可多条、有唯一默认。
-// 秘密（db 密码 / syslog SSH 私钥）以 { c, i, t } base64 三元组存于 payload.secret，AES-256-GCM。
+// Environment objects: multiple resource kinds under one environment (db / syslog, extensible later), each kind can have multiple entries with a unique default.
+// Secrets (db password / syslog SSH private key) are stored in payload.secret as the { c, i, t } base64 triple, AES-256-GCM.
 export const environmentObjects = pgTable('environment_objects', {
   id: uuid('id').primaryKey().defaultRandom(),
   environmentId: uuid('environment_id').notNull().references(() => testEnvironments.id, { onDelete: 'cascade' }),
@@ -752,8 +752,8 @@ export const environmentObjects = pgTable('environment_objects', {
   envIdx: index('environment_objects_env_idx').on(t.environmentId),
 }));
 
-// ── AI 助手 Skills S1：常驻流程/知识指令（DB 驱动，热生效于新线程）──
-// scope 覆盖：version > project > global（加载期排序，见 pi/space/guides.ts loadActiveGuides）。
+// ── AI assistant Skills S1: resident process/knowledge guides (DB-driven, hot-effective for new threads) ──
+// scope precedence: version > project > global (ordered at load time, see pi/space/guides.ts loadActiveGuides).
 export const assistantGuides = pgTable('assistant_guides', {
   id: uuid('id').primaryKey().defaultRandom(),
   scope: varchar('scope', { length: 16 }).notNull(),
@@ -770,7 +770,7 @@ export const assistantGuides = pgTable('assistant_guides', {
   enabledIdx: index('assistant_guides_enabled_idx').on(t.scope, t.enabled),
 }));
 
-// ── AI 助手 MCP 通用通道（DB 配置；会话创建时 registerMcpServer 加载）──
+// ── AI assistant MCP general channel (DB config; loaded by registerMcpServer at session creation) ──
 export const assistantMcpServers = pgTable('assistant_mcp_servers', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 120 }).notNull(),
@@ -791,10 +791,10 @@ export const assistantMcpServers = pgTable('assistant_mcp_servers', {
   enabledIdx: index('assistant_mcp_servers_enabled_idx').on(t.enabled),
 }));
 
-// ── AI 助手 Skills 全局共享存储（所有空间线程加载全量启用 skills；在系统设置页管理）──
-// name 即技能 slug，用作 .data/skills/<name>/ 目录名与 read_skill/run_skill_script 入参。
-// 本表只存元数据：技能正文与全部目录树在磁盘 SKILLS_ROOT/<name>/ 下（.data 卷跨 api 副本共享），
-// 故没有 body/scripts 列——2026-10-19 存储翻转时已随 drizzle-kit push 落地删除。
+// ── AI assistant Skills global shared store (all space threads load all enabled skills; managed on the system settings page) ──
+// name is the skill slug, used as the .data/skills/<name>/ directory name and as read_skill/run_skill_script input.
+// This table stores metadata only: the skill body and the whole directory tree live on disk under SKILLS_ROOT/<name>/ (the .data volume is shared across api replicas),
+// hence no body/scripts columns — dropped in sync via drizzle-kit push during the 2026-10-19 storage flip.
 export const assistantSkills = pgTable('assistant_skills', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 120 }).notNull(),
@@ -807,10 +807,10 @@ export const assistantSkills = pgTable('assistant_skills', {
   enabledIdx: index('assistant_skills_enabled_idx').on(t.enabled),
 }));
 
-// ── AI 助手短期记忆（产品线级，仿 Claude Code auto-memory：索引常驻 + 正文按需读）──
-// 写入 = 模型 save_memory 工具（upsert 同 title 的 active 行）；读取 = system prompt
-// 索引段 + read_memory 工具。status 软删/退役保审计，所有读路径只取 active。
-// R3 预留：retired_by_batch（固化批次）；R5 预留：hit_count/last_hit_at（read_memory 埋点）。
+// ── AI assistant short-term memory (product-line level, modeled on Claude Code auto-memory: index resident + body read on demand) ──
+// Write = the model's save_memory tool (upserts the active row with the same title); read = system prompt
+// index section + read_memory tool. status keeps soft-delete/retirement auditable; all read paths only take active.
+// Reserved for R3: retired_by_batch (solidification batch); reserved for R5: hit_count/last_hit_at (read_memory instrumentation).
 export const assistantMemories = pgTable('assistant_memories', {
   id: uuid('id').primaryKey().defaultRandom(),
   scope: varchar('scope', { length: 16 }).notNull(),
@@ -831,12 +831,12 @@ export const assistantMemories = pgTable('assistant_memories', {
   activeIdx: index('assistant_memories_active_idx').on(t.scope, t.productLineId, t.status),
 }));
 
-// ── AI 助手轨迹库（产品线级，R2：成功用例生成轨迹的程序性记忆 exemplar）──
-// 写入 = stage/save 落库钩子 → worker 读 pi-sessions JSONL 判据核实（verify_case
-// toolResult isError=false）后 LLM 蒸馏入库；读取 = system prompt 索引段 +
-// search_trajectories 工具。无 global 档：轨迹含锚点/URL 线特有细节，跨线泄漏
-// 即事故。partial unique：一 case 一 active 轨迹，DB 层防重复蒸馏（R1 竞态教训）。
-// R3 预留：retired_by_batch；R5 预留：hit_count/last_hit_at（search 埋点）。
+// ── AI assistant trajectory store (product-line level, R2: procedural-memory exemplars of successful case-generation trajectories) ──
+// Write = stage/save persistence hook → worker reads the pi-sessions JSONL to verify the criteria (verify_case
+// toolResult isError=false), then an LLM distills it into the store; read = system prompt index section +
+// search_trajectories tool. No global tier: trajectories contain anchor/URL details specific to a line — cross-line leakage
+// is an incident. partial unique: one active trajectory per case, DB-level guard against duplicate distillation (R1 race lesson).
+// Reserved for R3: retired_by_batch; reserved for R5: hit_count/last_hit_at (search instrumentation).
 export const assistantTrajectories = pgTable('assistant_trajectories', {
   id: uuid('id').primaryKey().defaultRandom(),
   productLineId: uuid('product_line_id').notNull().references(() => productLines.id, { onDelete: 'cascade' }),
@@ -861,20 +861,20 @@ export const assistantTrajectories = pgTable('assistant_trajectories', {
   caseUq: uniqueIndex('assistant_trajectories_case_uq').on(t.sourceCaseId).where(sql`status = 'active'`),
 }));
 
-// ── R3 prompt 可编辑化：模块值存储（append-only 版本链）──
-// 代码是模块注册表（promptModules.ts），DB 是值存储：无行=代码默认（清库回出厂）；
-// value=NULL=「跟随代码默认」（显式恢复默认，值随发版演进）；当前值=每 module_key
-// 取 seq 最大行；回滚=把历史行 value 复制追加为新行（回滚也留痕，可再回滚）。
-// partial unique：同一固化提案重复应用只落一行（幂等锚）；NULL 手工行不受限。
+// ── R3 prompt editability: module value store (append-only version chain) ──
+// Code is the module registry (promptModules.ts), DB is the value store: no row = code default (clearing the DB resets to factory);
+// value=NULL = "follow the code default" (an explicit restore-to-default; values evolve with releases); current value = per module_key
+// take the row with max seq; rollback = copy-append a historical row's value as a new row (rollback also leaves a trail and can be rolled back again).
+// partial unique: repeated application of the same solidification proposal lands only one row (idempotency anchor); NULL manual rows are unconstrained.
 export const assistantPromptModuleVersions = pgTable('assistant_prompt_module_versions', {
   seq: bigserial('seq', { mode: 'number' }).primaryKey(),
   moduleKey: varchar('module_key', { length: 100 }).notNull(),
   value: text('value'),
   source: varchar('source', { length: 20 }).notNull(),
   sourceRef: uuid('source_ref'),
-  // 写入该行时「代码默认基线」的指纹（sha256）：覆盖值基于哪一版基线写的。
-  // 与当前代码默认指纹不等 = 基线已变更、覆盖值未同步（drift 告警的判据）。
-  // NULL = 旧版本写入的行，无指纹 → 状态 unknown（不可判漂移，但不隐藏）。
+  // Fingerprint (sha256) of the "code default baseline" when the row was written: which baseline version the override was based on.
+  // Not equal to the current code default fingerprint = the baseline has changed and the override is out of sync (the criterion for drift alerts).
+  // NULL = a row written by an older version, no fingerprint → status unknown (drift can't be judged, but it isn't hidden).
   baseHash: text('base_hash'),
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -883,9 +883,9 @@ export const assistantPromptModuleVersions = pgTable('assistant_prompt_module_ve
   sourceRefUq: uniqueIndex('assistant_prompt_module_versions_source_ref_uq').on(t.sourceRef).where(sql`${t.sourceRef} is not null`),
 }));
 
-// ── R3 固化管线：盘点批次 ──
-// 人工低频动作：inline fire-and-forget（R2 trajectoryQueue 同款），不引 BullMQ。
-// status=running 时再发起 → 409 防重入。
+// ── R3 solidification pipeline: inventory batches ──
+// Low-frequency manual action: inline fire-and-forget (same as R2 trajectoryQueue), no BullMQ.
+// Re-triggering while status=running → 409 re-entry guard.
 export const assistantSolidifyBatches = pgTable('assistant_solidify_batches', {
   id: uuid('id').primaryKey().defaultRandom(),
   status: varchar('status', { length: 16 }).notNull(),
@@ -896,19 +896,19 @@ export const assistantSolidifyBatches = pgTable('assistant_solidify_batches', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// ── R3 固化管线：固化提案 ──
-// LLM 只产提案不碰资产；应用一律经人工批准。prompt_amendment 的 body=追加进模块值
-// 的增量文案；skill_revision 的 body=修订后的完整正文（不含 frontmatter）。
-// 部分失败：apply_error 记原因 + status 回 pending 可重试（幂等三件套保证重试安全）。
+// ── R3 solidification pipeline: solidification proposals ──
+// The LLM only produces proposals and never touches assets; application always goes through human approval. prompt_amendment's body = incremental text
+// appended into the module value; skill_revision's body = the revised full body (without frontmatter).
+// Partial failure: apply_error records the reason + status returns to pending and can be retried (the idempotency trio makes retries safe).
 export interface AssistantSolidifyProposalSource {
   type: 'memory' | 'trajectory' | 'lesson';
   id: string;
   title: string;
-  /** 来源线名（创建时定格，'global'=全局记忆）。lesson 来源为空串（UI 渲染 attribution 徽标代替）。 */
+  /** Source line name (fixed at creation, 'global'=global memory). Lesson sources use an empty string (the UI renders an attribution badge instead). */
   lineName: string;
-  /** 服务端定值（不信任 LLM 输出）：memory=true / trajectory=false / lesson=false（lesson 应用即自动 resolved，不走退役勾选）。 */
+  /** Server-determined value (LLM output not trusted): memory=true / trajectory=false / lesson=false (a lesson auto-resolves on apply, no retirement checkbox). */
   retireRecommended: boolean;
-  /** 仅 lesson：归因与信号数快照（审批详情展示）。 */
+  /** lesson only: attribution and signal count snapshot (shown in the approval detail). */
   attribution?: 'prompt' | 'step_description';
   signalCount?: number;
 }
@@ -927,7 +927,7 @@ export const assistantSolidifyProposals = pgTable('assistant_solidify_proposals'
   reviewedAt: timestamp('reviewed_at'),
   appliedAt: timestamp('applied_at'),
   applyError: text('apply_error'),
-  /** 仅 prompt_correction 用：盘点时定格 target 模块当前 max(seq)。apply 时检测人工修改（防静默 clobber）。 */
+  /** prompt_correction only: fixes the target module's current max(seq) at inventory time. Detects manual edits at apply time (guards against silent clobber). */
   baseSeq: integer('base_seq'),
   distillModel: varchar('distill_model', { length: 64 }).notNull(),
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
@@ -936,45 +936,45 @@ export const assistantSolidifyProposals = pgTable('assistant_solidify_proposals'
   batchIdx: index('assistant_solidify_proposals_batch_idx').on(t.batchId, t.status),
 }));
 
-// ── R3.5 失败教训蒸馏：原始失败信号（采集层，零 LLM）──
-// verify nlAiFail 分流等结构化失败证据在此落行；教训蒸馏（盘点时）只消费未被引用的信号。
-// threadId 无 FK：审计数据惯例（同 ai_assistant_feedback），不随 version 删除 cascade 消失。
+// ── R3.5 failure lesson distillation: raw failure signals (collection layer, zero LLM) ──
+// Structured failure evidence such as the verify nlAiFail triage lands rows here; lesson distillation (at inventory time) consumes only unreferenced signals.
+// threadId has no FK: audit-data convention (same as ai_assistant_feedback) — must not cascade away when a version is deleted.
 export const assistantFailureSignals = pgTable('assistant_failure_signals', {
   id: uuid('id').primaryKey().defaultRandom(),
-  /** v1 仅 'nl_ai_fail'（verify 自然语言步 AI 相失败分流）；后续信号类型同表扩展。 */
+  /** v1 only 'nl_ai_fail' (verify natural-language step AI-phase failure triage); later signal types extend this same table. */
   type: varchar('type', { length: 20 }).notNull(),
   threadId: uuid('thread_id').notNull(),
-  /** verify 的 caseId 可能是 staged 草稿 localId（非 uuid），按 varchar 64 对齐。 */
+  /** verify's caseId may be a staged draft localId (not a uuid), hence varchar 64. */
   caseId: varchar('case_id', { length: 64 }).notNull(),
   stepOrder: integer('step_order').notNull(),
-  /** 信号来源线（教训层不做线隔离，审批展示/排查需要来源）。 */
+  /** Source line of the signal (the lesson layer does not isolate by line; approval display/troubleshooting needs the source). */
   productLineId: uuid('product_line_id').references(() => productLines.id, { onDelete: 'set null' }),
-  /** {caseTitle, stepInstruction, failureReason, targetUrl, pageUrl}——快照自包含，线程不可溯仍可读。 */
+  /** {caseTitle, stepInstruction, failureReason, targetUrl, pageUrl} — the snapshot is self-contained, still readable when the thread is untraceable. */
   payload: jsonb('payload').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
-  // 同一 (线程, 用例, 步) 只落一条：同轮重跑同一步失败不重复（写入侧 onConflictDoNothing）
+  // Only one row per (thread, case, step): re-running the same failing step in the same round doesn't duplicate (writer-side onConflictDoNothing)
   stepUq: uniqueIndex('assistant_failure_signals_step_uq').on(t.threadId, t.caseId, t.stepOrder)
     .where(sql`${t.type} = 'nl_ai_fail'`),
   createdIdx: index('assistant_failure_signals_created_idx').on(t.createdAt),
 }));
 
-// ── R3.5 失败教训蒸馏：教训（蒸馏层，盘点时 LLM call#1 产物）──
-// platform/sut 归因的教训只入库（R5 平台/SUT 改进素材），严禁变成提示词补丁；
-// 仅 prompt/step_description 归因进入资产蒸馏输入。
+// ── R3.5 failure lesson distillation: lessons (distillation layer, produced by LLM call#1 at inventory time) ──
+// Lessons attributed to platform/sut are only stored (R5 platform/SUT improvement material) and must never become prompt patches;
+// only prompt/step_description attributions enter asset distillation input.
 export const assistantFailureLessons = pgTable('assistant_failure_lessons', {
   id: uuid('id').primaryKey().defaultRandom(),
-  /** active | resolved（correction 提案应用后自动置）| retired（人工驳回：误报/过时/不修）。 */
+  /** active | resolved (auto-set after a correction proposal is applied) | retired (manually rejected: false positive/outdated/won't fix). */
   status: varchar('status', { length: 16 }).notNull().default('active'),
-  /** prompt | step_description | platform | sut——LLM 蒸馏判定，误判由人工审批兜底。 */
+  /** prompt | step_description | platform | sut — judged by LLM distillation, misjudgments covered by human approval. */
   attribution: varchar('attribution', { length: 20 }).notNull(),
-  /** 人话教训名（「guide 断言未限定实测范围导致泛化出自动登录」级颗粒度）。 */
+  /** Human-readable lesson name (granularity like "guide assertion didn't scope the tested path, generalizing into auto-login"). */
   title: varchar('title', { length: 200 }).notNull(),
-  /** 结构化正文：现象 → 根因 → 影响面 → 建议修正方向（蒸馏 prompt 规定段落）。 */
+  /** Structured body: symptom → root cause → impact → suggested fix direction (sections mandated by the distillation prompt). */
   lesson: text('lesson').notNull(),
-  /** [{type, refId, excerpt}]——证据溯源 + 信号消费幂等的记账依据。 */
+  /** [{type, refId, excerpt}] — evidence traceability + the ledger basis for idempotent signal consumption. */
   signals: jsonb('signals').notNull(),
-  /** 置 resolved 时记录是哪个修正提案。 */
+  /** Records which correction proposal set it to resolved. */
   resolvedByProposal: uuid('resolved_by_proposal'),
   distillModel: varchar('distill_model', { length: 64 }).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -983,29 +983,29 @@ export const assistantFailureLessons = pgTable('assistant_failure_lessons', {
   statusIdx: index('assistant_failure_lessons_status_idx').on(t.status, t.createdAt),
 }));
 
-// ── AI 助手用户反馈（Phase 1：只收集，不消费）──
-// 用户在对话中对 AI 回复提出的建议/质疑/诉求，落库供后续沉淀为优化依据。
-// 刻意不存指向消息的外键：消息全内存（SessionManager.inMemory），没有可外键的表，
-// 且 pi 投影层的消息 id 只是位置索引（pi-msg:<index>），进程重启后无法复现。
-// 因此本表自带内容快照——messageExcerpt 才是回溯的真正依据，messageAnchor 仅作线索。
-// threadId/versionId/projectId 同样是裸 uuid 无 FK：反馈是审计数据，不应随 version
-// 删除而 cascade 消失（对比 aiStageCases.threadId 无 FK，那是暂存数据，语义不同）。
+// ── AI assistant user feedback (Phase 1: collect only, no consumption) ──
+// Suggestions/questions/demands users raise about AI replies in conversation, persisted as input for later optimization.
+// Deliberately no FK to messages: messages are fully in-memory (SessionManager.inMemory), there is no table to FK to,
+// and the pi projection layer's message ids are just positional indexes (pi-msg:<index>), unreproducible after process restart.
+// So this table carries its own content snapshot — messageExcerpt is the real basis for retrospection; messageAnchor is only a clue.
+// threadId/versionId/projectId are likewise bare uuids without FK: feedback is audit data and must not cascade away
+// when a version is deleted (contrast aiStageCases.threadId with no FK — that's staging data, different semantics).
 export const aiAssistantFeedback = pgTable('ai_assistant_feedback', {
   id: uuid('id').primaryKey().defaultRandom(),
   threadId: uuid('thread_id').notNull(),
   versionId: uuid('version_id').notNull(),
   projectId: uuid('project_id').notNull(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
-  /** 反馈挂载的消息角色。2026-10 起前端只给 AI 回复挂按钮，恒为 'assistant'；保留列以备将来挂用户消息。 */
+  /** Message role the feedback attaches to. Since 2026-10 the frontend only puts buttons on AI replies, always 'assistant'; column kept for attaching to user messages later. */
   role: varchar('role', { length: 16 }).notNull().default('assistant'),
-  /** 前端投影层消息 id（如 'pi-msg:7'）。位置索引会随流式漂移，仅作线索，不是主键。 */
+  /** Frontend projection-layer message id (e.g. 'pi-msg:7'). Positional indexes drift with streaming; a clue only, not a key. */
   messageAnchor: varchar('message_anchor', { length: 64 }),
   messageIndex: integer('message_index'),
-  /** 消息正文前 500 字符快照——thread 从 UI 消失后，管理员靠这段仍能读懂语境。 */
+  /** Snapshot of the first 500 chars of the message body — after the thread disappears from the UI, admins can still understand the context from this. */
   messageExcerpt: text('message_excerpt'),
   messageAt: timestamp('message_at'),
   sentiment: varchar('sentiment', { length: 16 }).notNull(),
-  /** 用户补充说明，可空（点 👎 不填文字也算一条有效反馈）。 */
+  /** User-added comment, nullable (a 👎 without text still counts as valid feedback). */
   comment: text('comment'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
@@ -1014,30 +1014,30 @@ export const aiAssistantFeedback = pgTable('ai_assistant_feedback', {
   userIdx: index('ai_assistant_feedback_user_idx').on(t.userId),
 }));
 
-// ── AI 助手产物文件（skill 脚本生成的可下载文档）──
-// skill 脚本产出文件 → 工具层 registerPersistentArtifact 落盘 + 落库 → 前端下载卡。
-// 与 ai_assistant_feedback 同惯例：threadId/versionId/projectId 是裸 uuid 无 FK——产物是
-// 已交付给用户的材料，不应随 version 删除而 cascade 消失（文件本体在卷上也不随之清理）。
-// token 复用 UUID 形态：下载路由的 TOKEN_RE 校验对两类产物（短 TTL / 永久）一视同仁。
+// ── AI assistant artifact files (downloadable documents generated by skill scripts) ──
+// Skill script produces a file → tool layer registerPersistentArtifact persists to disk + DB → frontend download card.
+// Same convention as ai_assistant_feedback: threadId/versionId/projectId are bare uuids without FK — artifacts are
+// material already delivered to the user and must not cascade away with version deletion (the file itself on the volume is not cleaned up either).
+// Token reuses the UUID form: the download route's TOKEN_RE validation treats both artifact kinds (short TTL / permanent) the same.
 export const aiThreadArtifacts = pgTable('ai_thread_artifacts', {
   id: uuid('id').primaryKey().defaultRandom(),
   threadId: uuid('thread_id').notNull(),
   versionId: uuid('version_id').notNull(),
   projectId: uuid('project_id').notNull(),
-  /** 下载令牌：GET /threads/:id/artifacts/:token 的路径段。唯一约束防同 token 指向多文件。 */
+  /** Download token: the path segment of GET /threads/:id/artifacts/:token. The unique constraint prevents one token from pointing at multiple files. */
   token: text('token').notNull().unique(),
-  /** 原始文件名（含扩展名，可中文）。浏览器落盘名 = 此列经 contentDispositionUtf8 编码。 */
+  /** Original file name (with extension, may be Chinese). Browser save name = this column encoded via contentDispositionUtf8. */
   name: text('name').notNull(),
-  /** Content-Type：按扩展名推断（MIME_TABLE），也可由 skill 清单显式指定覆盖。 */
+  /** Content-Type: inferred from the extension (MIME_TABLE), or explicitly overridden by the skill manifest. */
   mime: text('mime'),
   size: integer('size').notNull(),
-  /** 可选条目数（沿用 xmind 导出的语义：文件内含多少条用例/用例行）。 */
+  /** Optional entry count (carries the xmind export semantics: how many cases/case rows the file contains). */
   count: integer('count'),
-  /** 卷上文件的绝对路径；多副本共享 itest-data 卷，任一副本都能服务下载。 */
+  /** Absolute path of the file on the volume; replicas share the itest-data volume, so any replica can serve the download. */
   storedPath: text('stored_path').notNull(),
-  /** 产出该文件的 skill 名（可空：原生工具产出而非 skill 脚本）。 */
+  /** Name of the skill that produced the file (nullable: produced by a native tool rather than a skill script). */
   skillName: text('skill_name'),
-  /** null = 永久有效。skill 产物走永久（用户要隔天再下载）；旧 xmind 导出仍走内存态短 TTL，不落此表。 */
+  /** null = valid forever. Skill artifacts are permanent (users may download the next day); legacy xmind exports still use in-memory short TTL and don't land in this table. */
   expiresAt: timestamp('expires_at'),
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -1046,38 +1046,38 @@ export const aiThreadArtifacts = pgTable('ai_thread_artifacts', {
   versionIdx: index('ai_thread_artifacts_version_idx').on(t.versionId),
 }));
 
-// ── 助手附件（版本级预上传，.docx/.xlsx）──
-// 选文件即上传（react-pi 草稿线程发首条消息前没有 threadId，作用域只能取版本）。
-// 引用标签由前端 adapter 在 send() 拼进消息正文（自闭合 <uploaded-file …/>），
-// 后端不改写消息文本——react-pi 乐观消息按纯文本 key 对账，任何后端改写都会造成重复气泡。
+// ── Assistant attachments (version-level pre-upload, .docx/.xlsx) ──
+// Uploading happens at file selection (a react-pi draft thread has no threadId before its first message, so scope can only be the version).
+// The reference tag is spliced into the message body by the frontend adapter in send() (self-closing <uploaded-file …/>);
+// the backend never rewrites message text — react-pi reconciles optimistic messages by plaintext key, so any backend rewrite would create duplicate bubbles.
 export const aiAssistantAttachments = pgTable('ai_assistant_attachments', {
   id: uuid('id').primaryKey().defaultRandom(),
-  /** 作用域：同版本各线程可用；read_thread_attachment 以它做路径+行双重约束。 */
+  /** Scope: usable by all threads of the same version; read_thread_attachment uses it for a path+row double constraint. */
   versionId: uuid('version_id').notNull(),
-  /** 用户原始文件名（含扩展名，可中文）；引用标签与 chip 展示用。 */
+  /** User's original file name (with extension, may be Chinese); used for reference tags and chip display. */
   name: text('name').notNull(),
-  /** docx/xlsx 对应 mime（端点按 X-Filename 扩展名白名单分派）。 */
+  /** Corresponding mime for docx/xlsx (the endpoint dispatches by the X-Filename extension whitelist). */
   mime: text('mime').notNull(),
   sizeBytes: integer('size_bytes').notNull(),
-  /** 去重键：同版本同内容只存一份文件与一行记录。 */
+  /** Dedup key: one file copy and one row per identical content within a version. */
   sha256: text('sha256').notNull(),
-  /** 原件绝对路径（<UPLOAD_DIR>/assistant/<versionId>/<sha>.docx|.xlsx）。 */
+  /** Absolute path of the original (<UPLOAD_DIR>/assistant/<versionId>/<sha>.docx|.xlsx). */
   storagePath: text('storage_path').notNull(),
-  /** 提取文本 sidecar（<sha>.txt；docx=mammoth、xlsx=exceljs）；提取失败（损坏/加密）为 null。 */
+  /** Extracted-text sidecar (<sha>.txt; docx=mammoth, xlsx=exceljs); null when extraction fails (corrupted/encrypted). */
   extractedPath: text('extracted_path'),
-  /** 提取文本字符数（引用标签的 chars 属性）；失败为 null。 */
+  /** Extracted-text char count (the reference tag's chars attribute); null on failure. */
   extractedChars: integer('extracted_chars'),
   createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
   versionIdx: index('ai_assistant_attachments_version_idx').on(t.versionId),
-  // 去重唯一：并发上传同文件靠 onConflictDoNothing + 回读兜底。
+  // Dedup uniqueness: concurrent uploads of the same file rely on onConflictDoNothing + read-back fallback.
   uniq: uniqueIndex('ai_assistant_attachments_version_sha_unq').on(t.versionId, t.sha256),
 }));
 
-// ── 批量固化（全未固化用例 NL→DSL 后台任务）──
-// 一次触发一批：批次行只做归属/审计；逐用例行由 worker 独占更新（BullMQ 每 job 只碰自己那行，
-// 批次进度读时按行 status 派生，天然免并发写冲突）。失败语义 = 保留已落库 DSL + 标记失败原因。
+// ── Batch solidification (background task solidifying all non-solidified cases NL→DSL) ──
+// One trigger = one batch: the batch row only does ownership/audit; per-case rows are updated exclusively by the worker (each BullMQ job touches only its own row,
+// batch progress is derived from row statuses at read time, naturally free of concurrent write conflicts). Failure semantics = keep already-persisted DSL + mark the failure reason.
 export const solidifyBatches = pgTable('solidify_batches', {
   id: uuid('id').primaryKey().defaultRandom(),
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
@@ -1093,9 +1093,9 @@ export const solidifyBatchCases = pgTable('solidify_batch_cases', {
   caseId: uuid('case_id').notNull().references(() => testCases.id, { onDelete: 'cascade' }),
   /** queued → solidifying → solidify_failed | materialize_failed | verifying → passed | verify_failed */
   status: varchar('status', { length: 30 }).notNull().default('queued'),
-  /** solidify 工具返回的 steps 摘要（status/reason/compiled），报告展示用 */
+  /** steps summary returned by the solidify tool (status/reason/compiled), for report display */
   solidifyResult: jsonb('solidify_result'),
-  /** verify(mode=mechanical) 完整返回 JSON（失败诊断证据保留） */
+  /** Full verify(mode=mechanical) return JSON (failure diagnostic evidence preserved) */
   verifyResult: jsonb('verify_result'),
   error: text('error'),
   startedAt: timestamp('started_at'),
@@ -1105,14 +1105,14 @@ export const solidifyBatchCases = pgTable('solidify_batch_cases', {
   caseIdx: index('solidify_batch_cases_case_idx').on(t.caseId),
 }));
 
-// ── 探索式测试会话（charter 驱动的 AI 找茬，产出 findings 缺陷候选）──
-// 与用例执行（reports）不同：会话不绑定 case/步骤，产物是"发现"而非 pass/fail。
-// 确认后的 finding 经 promote 升格为用例草稿（test_cases），会话本身是一次性审计产物。
+// ── Exploratory testing sessions (charter-driven AI fault-finding, producing findings as defect candidates) ──
+// Unlike case execution (reports): a session binds to no case/step, and its output is "discoveries" rather than pass/fail.
+// A confirmed finding is promoted into a case draft (test_cases); the session itself is a one-shot audit artifact.
 export const explorationSessions = pgTable('exploration_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
-  // projectId 冗余列 = plan_runs 同款：列表/鉴权直查，免 groups→cases join 链。
+  // projectId redundant column = same as plan_runs: list/auth query directly, avoiding the groups→cases join chain.
   projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  // cascade（非 restrict）：会话是探索产物非核心资产，不阻塞版本删除（判据同 ai_threads）。
+  // cascade (not restrict): a session is an exploration artifact, not a core asset, so it doesn't block version deletion (same criterion as ai_threads).
   versionId: uuid('version_id').notNull().references(() => projectVersions.id, { onDelete: 'cascade' }),
   title: varchar('title', { length: 200 }).notNull(),
   charter: text('charter').notNull(),
@@ -1120,79 +1120,79 @@ export const explorationSessions = pgTable('exploration_sessions', {
   startUrl: text('start_url'),
   /** pending → running → completed | failed | cancelled */
   status: varchar('status', { length: 20 }).notNull().default('pending'),
-  /** 取消通道：纯 DB 列跨副本天然正确，worker 每轮轮询一次；终态后置位无效果（幂等）。 */
+  /** Cancel channel: a pure DB column is naturally correct across replicas, polled by the worker each turn; setting it after a terminal state has no effect (idempotent). */
   cancelRequested: boolean('cancel_requested').notNull().default(false),
   /**
-   * 破坏性操作授权位（默认拒）：用户在建会话时显式勾选，才允许探索点击删除/支付/发送这类
-   * 不可逆入口。charter 是自然语言、模型会拿它当借口（2026-11-10 prod 实录真删了一条资产），
-   * 机械闸在 aiTask 侧按可见文本关键词拒收，授权只来自这个显式开关。
+   * Destructive-action authorization bit (default deny): only when the user explicitly checks it at session creation may exploration
+   * click irreversible entries like delete/pay/send. The charter is natural language and the model will use it as an excuse
+   * (a 2026-11-10 prod log shows an asset actually deleted); the mechanical gate on the aiTask side rejects by visible-text keywords, and authorization comes only from this explicit switch.
    */
   allowDestructive: boolean('allow_destructive').notNull().default(false),
   /**
-   * 故障注入授权位（默认拒）：勾了才允许探索注入断网/慢网/CPU 节流去验证错误处理与降级路径。
-   * 与 allow_destructive 同款口径——charter 说辞不算授权，机械闸只认这个显式开关。
-   * 理由：故障会污染被测系统会话状态（SUT 自身轮询/心跳被打断），必须由人点头。
+   * Fault-injection authorization bit (default deny): checked before exploration may inject network loss/slow network/CPU throttling to verify error handling and degradation paths.
+   * Same convention as allow_destructive — charter wording doesn't count as authorization; the mechanical gate only honors this explicit switch.
+   * Rationale: faults pollute the SUT's session state (its own polling/heartbeat gets interrupted), so a human must sign off.
    */
   allowFaultInjection: boolean('allow_fault_injection').notNull().default(false),
   /**
-   * 轮次预算（null=代码默认 EXPLORATION_MAX_TURNS）：软预算，超界 shouldAbort 优雅收尾
-   * （已发现的 findings 全保留）。runaway 硬闸随它放大（+16），否则用户配大轮次会被
-   * 固定硬闸先拦，可配置形同虚设。会话墙钟由轮次物化（每轮 60s，钳在 15~240 分钟）——
-   * 轮次是深度的唯一旋钮；单轮挂死另由空闲看门狗兜（EXPLORATION_IDLE_TIMEOUT_MS）。
+   * Turn budget (null = code default EXPLORATION_MAX_TURNS): a soft budget; past it shouldAbort winds down gracefully
+   * (all discovered findings are kept). The runaway hard gate scales with it (+16), otherwise a user-configured large turn count would be
+   * intercepted first by the fixed hard gate, making the configuration pointless. Session wall clock is materialized from turns (60s per turn, clamped to 15~240 minutes) —
+   * turns are the only depth knob; a hung single turn is covered separately by the idle watchdog (EXPLORATION_IDLE_TIMEOUT_MS).
    */
   budgetTurns: integer('budget_turns'),
   /**
-   * 浏览器视口宽高（两态：null=默认 1280×800，同用例「默认最大化」headless 近似值；
-   * 同给才生效=自定义）。语义对齐 cases.window_strategy，但不设 strategy 列——
-   * 探索是 headless，用例的「当前窗口」态没有对应物。
+   * Browser viewport width/height (two states: null = default 1280×800, the headless approximation of a case's "default maximize";
+   * effective only when both are given = custom). Semantics align with cases.window_strategy but there is no strategy column —
+   * exploration is headless, and the case's "current window" state has no counterpart here.
    */
   windowWidth: integer('window_width'),
   windowHeight: integer('window_height'),
   /**
-   * 执行器心跳：每轮对话前刷新一次。看门狗据此判死僵死会话（发版重建容器 → 进程被杀 →
-   * status 永远 running → 删除永远 409）。5 分钟无心跳即判死。
+   * Executor heartbeat: refreshed before each turn of conversation. The watchdog uses it to declare hung sessions dead
+   * (release rebuilds the container → process killed → status stays running forever → deletion always 409). 5 minutes without a heartbeat = dead.
    *
-   * 用 timestamptz（带时区）：这一列要被「与 cutoff 比较」，必须是无歧义的绝对时刻。
-   * 普通 timestamp 存的是「墙钟」——drizzle 写入按 UTC 墙钟、原生 SQL 按本地墙钟，
-   * 两者混写会让比较结果偏掉整个时区差（11-11 本地实测：判死条件永不成立）。
+   * Uses timestamptz (with timezone): this column is compared "against a cutoff", so it must be an unambiguous absolute moment.
+   * Plain timestamp stores "wall clock" — drizzle writes UTC wall clock, native SQL writes local wall clock;
+   * mixing them shifts the comparison by a whole timezone offset (measured locally 11-11: the dead-session condition never held).
    */
   heartbeatAt: timestamp('heartbeat_at', { withTimezone: true }),
   /**
-   * 负面结果账本（外化记忆最小切片）：模型申报的「已排除的假设 + 依据」。
-   * 只存排除项、不存信念——黑板存信念会把观察冻成结论、自我印证。
+   * Exclusion ledger (minimal slice of externalized memory): the model's declared "excluded hypotheses + evidence".
+   * Stores only exclusions, never beliefs — a blackboard holding beliefs freezes observations into conclusions and self-confirms.
    */
   excludedLedger: jsonb('excluded_ledger').$type<Array<{ claim: string; evidence: string }>>(),
   /**
-   * 覆盖账本（pi 链路 C1）：{paths[], interactions[], updatedAt}——已走路径与交互计数机械累计，
-   * 随 observe 回灌「已覆盖、别重复」，终态留快照供人工评估覆盖度。
+   * Coverage ledger (pi chain C1): {paths[], interactions[], updatedAt} — visited paths and interaction counts accumulated mechanically,
+   * fed back via observe as "already covered, don't repeat"; a snapshot is kept at terminal state for humans to assess coverage.
    */
   coverageLedger: jsonb('coverage_ledger').$type<{
     paths: string[];
     interactions: Array<{ kind: string; count: number }>;
-    /** 子目标进度（P4 章程分解后填充；此前恒为空数组）。 */
+    /** Sub-goal progress (filled after P4 charter decomposition; previously always an empty array). */
     goals: Array<{ id: string; text: string; done: boolean }>;
     updatedAt: string;
   }>(),
   /**
-   * 错误信号（pi 链路 D3）：console error / pageerror / HTTP 4xx-5xx 采集，封顶 200 条。
-   * observe 增量回灌给模型（drain），这里是全量留档——「模型没报但页面在报错」可据此审计。
+   * Error signals (pi chain D3): console error / pageerror / HTTP 4xx-5xx collection, capped at 200 entries.
+   * observe feeds increments back to the model (drain); this keeps the full archive — "the model didn't report it but the page is erroring" can be audited from here.
    */
   errorSignals: jsonb('error_signals').$type<Array<{ at: string; kind: string; text: string; url?: string }>>(),
   /**
-   * 人格矩阵分组（C3）：同一 matrix_id 的会话 = 同一章程的多个视角并行探索。
-   * 不新建表——分组键 + 展示名 + 角色三列足够（矩阵视图按 matrix_id 聚合）。
-   * 单会话（非矩阵）三列均为 null。
+   * Persona matrix grouping (C3): sessions sharing a matrix_id = multiple perspectives exploring the same charter in parallel.
+   * No new table — three columns (group key + display name + role) suffice (the matrix view aggregates by matrix_id).
+   * For a single session (non-matrix), all three columns are null.
    */
   matrixId: uuid('matrix_id'),
   matrixLabel: text('matrix_label'),
-  /** 该会话在矩阵中的角色 = persona key（EXPLORATION_PERSONA_KEYS 之一）。 */
+  /** This session's role in the matrix = persona key (one of EXPLORATION_PERSONA_KEYS). */
   matrixRole: varchar('matrix_role', { length: 32 }),
   /**
-   * 独立评审（A3）状态：pending（未评审）| done（评审完成）| failed（评审失败）| skipped（无 findings）。
-   * 评审是标注不是裁决——findings.status 永远由人工审阅决定。
+   * Independent review (A3) status: pending (not reviewed) | done (review complete) | failed (review failed) | skipped (no findings).
+   * The review annotates rather than adjudicates — findings.status is always decided by human review.
    */
   judgeStatus: varchar('judge_status', { length: 16 }).notNull().default('pending'),
-  /** 评审汇总：{model, channelName, judgedAt, summary, findings:[{id, verdict, reason, confidence}]}。 */
+  /** Review summary: {model, channelName, judgedAt, summary, findings:[{id, verdict, reason, confidence}]}. */
   judgeResult: jsonb('judge_result').$type<{
     model?: string;
     channelName?: string;
@@ -1202,27 +1202,27 @@ export const explorationSessions = pgTable('exploration_sessions', {
     findings: Array<{ id: string; verdict: string; reason: string; confidence: number }>;
   }>(),
   /**
-   * 代码提交范围（charter 自然语言解析产物）：提交窗口 + 改动文件 + 候选起点。
-   * 范围是焦点信号不是围栏——探索照常全站跑，范围只用于定向（增量回归/新功能探索）。
-   * 解析在 runner 后台做（LLM + git fetch 可能数十秒），结果落库后前端轮询可见。
+   * Code commit scope (parsed from the charter's natural language): commit window + changed files + candidate entry points.
+   * Scope is a focus signal, not a fence — exploration still runs the whole site; scope is only used for targeting (incremental regression/new-feature exploration).
+   * Parsing happens in the runner background (LLM + git fetch can take tens of seconds); results become visible to the frontend via polling once persisted.
    */
   codeScope: jsonb('code_scope'),
-  /** pending → resolved | none | failed：none=charter 无提交语义（不碰 git）；failed=解析失败（不掀翻会话）。 */
+  /** pending → resolved | none | failed: none=charter has no commit semantics (no git involved); failed=parsing failed (doesn't topple the session). */
   codeScopeStatus: varchar('code_scope_status', { length: 16 }),
   summary: text('summary'),
   error: text('error'),
   turnsUsed: integer('turns_used').notNull().default(0),
-  /** LLM 用量累计（calls/promptTokens/completionTokens/durationMs/model），onUsage 累加。 */
+  /** Cumulative LLM usage (calls/promptTokens/completionTokens/durationMs/model), accumulated by onUsage. */
   usage: jsonb('usage'),
   /**
-   * 会话级动作留痕（全部步骤，含最后一条 finding 之后的尾段）——详情页「会话过程」逐步查看。
-   * 与 findings.actionsTrail 的关系：finding 存的是"自上一条 finding 起"的片段（面包屑），
-   * 这里存的是整场会话的完整动作序列（审计视角：跑了什么 SQL、点了什么、成没成）。
+   * Session-level action trail (all steps, including the tail after the last finding) — viewed step by step on the detail page's "session process".
+   * Relation to findings.actionsTrail: a finding stores the fragment "since the previous finding" (breadcrumb),
+   * this stores the complete action sequence of the whole session (audit view: what SQL ran, what was clicked, whether it succeeded).
    */
   actionsTrail: jsonb('actions_trail').$type<
     Array<{ type: string; target: string; ok: boolean; detail?: string; value?: string; ms?: number; key?: string }>
   >(),
-  /** 运行时环境快照 id。裸 uuid 无 FK：删环境不应牵连历史探索记录（审计惯例）。 */
+  /** Runtime environment snapshot id. Bare uuid without FK: deleting an environment must not cascade into historical exploration records (audit convention). */
   envId: uuid('env_id'),
   startedAt: timestamp('started_at'),
   finishedAt: timestamp('finished_at'),
@@ -1241,21 +1241,21 @@ export const explorationFindings = pgTable('exploration_findings', {
   order: integer('order').notNull(),
   title: varchar('title', { length: 200 }).notNull(),
   description: text('description').notNull(),
-  /** 复用 test_cases.priority 的 P0-P3 词表，promote 时零转换。 */
+  /** Reuses the P0-P3 vocabulary of test_cases.priority, zero conversion at promote time. */
   severity: varchar('severity', { length: 8 }).notNull().default('P2'),
-  /** LLM 给出的复现步骤（可能脑补）；reproSteps 为空时 promote 以 actionsTrail 文本化兜底。 */
+  /** Repro steps given by the LLM (possibly hallucinated); when reproSteps is empty, promote falls back to textualizing actionsTrail. */
   reproSteps: jsonb('repro_steps').$type<Array<{ action: string; expected?: string }>>().notNull().default([]),
-  /** 平台记录的实际动作留痕（onAction 自上一条 finding 起累积）——动作序列的 ground truth。
-   *  value/ms/key 是升格用例机械映射所需的原形字段（fill 输入值 / wait 毫秒 / press 键名）。 */
+  /** Platform-recorded actual action trail (onAction accumulates since the previous finding) — the ground truth of the action sequence.
+   *  value/ms/key are the raw fields needed for the mechanical mapping of the promoted case (fill input value / wait ms / press key name). */
   actionsTrail: jsonb('actions_trail').$type<
     Array<{ type: string; target: string; ok: boolean; detail?: string; value?: string; ms?: number; key?: string }>
   >(),
-  /** web 路径 /screenshots/<sessionId>/finding-<order>.png，由 express.static('/screenshots') 服务。 */
+  /** web path /screenshots/<sessionId>/finding-<order>.png, served by express.static('/screenshots'). */
   screenshotPath: text('screenshot_path'),
   pageUrl: text('page_url'),
   /**
-   * 证据帧元数据（pi 链路 A1）：finding 报告工具在「决策那一刻」先截图再落库，
-   * 这里钉住帧的页面状态——与 actionsTrail（片段）互补：trail 是怎么走到这的，frame 是看到什么。
+   * Evidence frame metadata (pi chain A1): the finding report tool takes a screenshot first, then persists, at "the moment of decision";
+   * this pins the frame's page state — complementary to actionsTrail (the fragment): the trail is how it got here, the frame is what it saw.
    */
   evidenceFrame: jsonb('evidence_frame').$type<{
     url: string;
@@ -1265,14 +1265,14 @@ export const explorationFindings = pgTable('exploration_findings', {
     screenshotPath?: string;
   }>(),
   /**
-   * 跨会话交集（S2）：几个会话报了同一缺陷（近义判定口径与会话内去重一致）。
-   * ≥2 = 多视角共同发现。**纯标注**——不改 status（人工审阅才是权威）。
-   * 非矩阵会话恒为 1。
+   * Cross-session intersection (S2): several sessions reported the same defect (same near-duplicate criterion as in-session dedup).
+   * ≥2 = jointly discovered from multiple perspectives. **Annotation only** — does not change status (human review is the authority).
+   * Always 1 for non-matrix sessions.
    */
   crossSessionCount: integer('cross_session_count').notNull().default(1),
   /**
-   * 独立评审结论（A3）：{verdict: confirmed|dismissed|unclear, reason, confidence, model, judgedAt}。
-   * **只标注不改 status**——评审是第二个视角，权威仍是人工审阅。
+   * Independent review verdict (A3): {verdict: confirmed|dismissed|unclear, reason, confidence, model, judgedAt}.
+   * **Annotation only, does not change status** — the review is a second perspective; human review remains the authority.
    */
   judge: jsonb('judge').$type<{
     verdict: 'confirmed' | 'dismissed' | 'unclear';
@@ -1281,12 +1281,12 @@ export const explorationFindings = pgTable('exploration_findings', {
     model?: string;
     judgedAt: string;
   }>(),
-  /** pending → confirmed | dismissed；confirmed → promoted（写 promotedCaseId）。 */
+  /** pending → confirmed | dismissed; confirmed → promoted (writes promotedCaseId). */
   status: varchar('status', { length: 16 }).notNull().default('pending'),
-  /** 审阅三件套 = assistant_solidify_proposals 同款。 */
+  /** The review trio = same as assistant_solidify_proposals. */
   reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
   reviewedAt: timestamp('reviewed_at'),
-  /** 裸 uuid：用例可删，溯源记录不消失（同 resolved_by_proposal 惯例）。 */
+  /** Bare uuid: the case may be deleted; the provenance record survives (same convention as resolved_by_proposal). */
   promotedCaseId: uuid('promoted_case_id'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({

@@ -1,13 +1,13 @@
 /**
- * assistant_skills 全局共享 CRUD（校验 + 落库共用层）。
- * 由 skillsRoute.ts（REST /api/assistant/skills，router.ts requireManager 保护）与
- * 空间助手 manage_skill 工具共同调用——两类写入面必须是同一套规则。
+ * assistant_skills globally-shared CRUD (the shared validation + persistence layer).
+ * Called by both skillsRoute.ts (REST /api/assistant/skills, protected by requireManager in router.ts) and
+ * the space assistant's manage_skill tool — the two write surfaces must follow one and the same rule set.
  *
- * 2026-10-19 存储翻转：**本层只管元数据 + create 落盘**。正文与目录树在 SKILLS_ROOT/<name>/，
- * create 带 files[] 一次写完整内容、不带则写骨架；import_skill / 设置页文件树编辑器写其余内容；
- * delete 连目录一起删。
+ * 2026-10-19 storage flip: **this layer only manages metadata + create's disk writes**. The body and directory tree live in SKILLS_ROOT/<name>/;
+ * create with files[] writes the full content in one shot, without it writes a skeleton; import_skill / settings-page file tree editor write the rest;
+ * delete removes the directory along with the row.
  *
- * 无 scope：skills 是平台级全局共享（所有项目同一个技能库），DB 无归属列。
+ * No scope: skills are platform-level globally shared (all projects share one skill library); the DB has no ownership column.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,7 +40,7 @@ function assertDescription(v: unknown): string {
   return d;
 }
 
-/** name 唯一性检查（跨全库，全局共享无归属）；冲突 → 409。 */
+/** name uniqueness check (repo-wide, globally shared with no ownership); conflict → 409. */
 export async function assertSkillNameUnique(name: string, excludeId?: string): Promise<void> {
   const conds: SQL[] = [eq(assistantSkills.name, name)];
   if (excludeId) conds.push(ne(assistantSkills.id, excludeId));
@@ -48,7 +48,7 @@ export async function assertSkillNameUnique(name: string, excludeId?: string): P
   if (dup) throw new HttpError(409, 'conflict', 'skill 名称已存在');
 }
 
-/** 写 SKILL.md 骨架：frontmatter 的 name/description 由 DB 值回填（磁盘正文是真身，前言是索引）。 */
+/** Write the SKILL.md skeleton: frontmatter name/description are backfilled from DB values (the on-disk body is the real thing; the preamble is the index). */
 export function writeSkillMd(dir: string, name: string, description: string, body = ''): void {
   writeSkillFileAtomic(
     path.join(dir, 'SKILL.md'),
@@ -59,9 +59,9 @@ export function writeSkillMd(dir: string, name: string, description: string, bod
 export interface SkillFileInput { path: string; content: string }
 
 const MAX_CREATE_FILES = 20;
-const MAX_CREATE_FILE_BYTES = 1_000_000; // 与 skillsRoute 的 MAX_FILE_WRITE_BYTES 同额。
+const MAX_CREATE_FILE_BYTES = 1_000_000; // same amount as skillsRoute's MAX_FILE_WRITE_BYTES.
 
-/** 校验 files[]（形状层面）；路径级守卫在落盘循环里走 resolveInSkill。 */
+/** Validate files[] (at the shape level); the path-level guard goes through resolveInSkill in the persistence loop. */
 function assertSkillFiles(raw: unknown): SkillFileInput[] {
   if (!Array.isArray(raw) || raw.length === 0) {
     throw new HttpError(400, 'bad_request', `files 须为非空数组（每项 {path, content}）`);
@@ -84,9 +84,9 @@ function assertSkillFiles(raw: unknown): SkillFileInput[] {
   });
 }
 
-/** 落 files[] 到技能目录。SKILL.md 缺 frontmatter 时自动补（catalog/loader 依赖 name/description 前言）。
- *  两段式：先对全部路径跑 resolveInSkill，全绿才 mkdirSync 建父目录——
- *  否则 '../x' 这类路径会在校验拒绝【之前】把目录建到技能目录外面。 */
+/** Persist files[] into the skill directory. When SKILL.md lacks frontmatter it is auto-prepended (catalog/loader depend on the name/description preamble).
+ *  Two-phase: run resolveInSkill on all paths first; only when everything is green, mkdirSync the parent directories —
+ *  otherwise paths like '../x' would create directories outside the skill directory【before】validation rejects them. */
 function writeSkillFiles(dir: string, name: string, description: string, files: SkillFileInput[]): void {
   const absOf = files.map((f) => {
     const abs = resolveInSkill(dir, f.path);
@@ -103,7 +103,7 @@ function writeSkillFiles(dir: string, name: string, description: string, files: 
   });
 }
 
-/** 只插 DB 行不建目录（import_skill 复用：目录树已由导入流程写好）。 */
+/** Insert only the DB row, no directory (reused by import_skill: the directory tree was already written by the import flow). */
 export async function registerSkill(name: string, description: string, enabled = true) {
   await assertSkillNameUnique(name);
   const rows = await db.insert(assistantSkills)
@@ -125,8 +125,8 @@ function withDisk(row: SkillRow): SkillWithDisk {
   return { ...row, ...countSkillFiles(dir), onDisk: fs.existsSync(dir), unregistered: false };
 }
 
-/** POST 语义：建目录 + 插行。传 files[] 则一次落完整内容（至少含 SKILL.md）；不传只写骨架。
- *  磁盘上已有同名目录也判冲突——否则会静默接管孤儿目录。 */
+/** POST semantics: create the directory + insert the row. With files[], the full content is written in one shot (at least SKILL.md); without it, only the skeleton.
+ *  An existing same-named directory on disk is also a conflict — otherwise the orphan directory would be silently taken over. */
 export async function createSkill(raw: Record<string, unknown>): Promise<SkillWithDisk> {
   const name = assertSkillName(raw.name);
   const description = assertDescription(raw.description);
@@ -141,13 +141,13 @@ export async function createSkill(raw: Record<string, unknown>): Promise<SkillWi
     const row = await registerSkill(name, description, raw.enabled === false ? false : true);
     return withDisk(row);
   } catch (e) {
-    // DB/写盘失败不留半截目录在盘上。
+    // A DB/disk-write failure must not leave a half-built directory on disk.
     fs.rmSync(dir, { recursive: true, force: true });
     throw e;
   }
 }
 
-/** PATCH：description/enabled 只动 DB；改名要搬目录（目标已存在 → 409；DB 写失败 → 搬回去）。 */
+/** PATCH: description/enabled only touch the DB; renaming moves the directory (target exists → 409; DB write failure → move back). */
 export async function updateSkill(id: string, raw: Record<string, unknown>): Promise<SkillWithDisk> {
   const existing = (await db.select().from(assistantSkills).where(eq(assistantSkills.id, id)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'skill 不存在');
@@ -171,14 +171,14 @@ export async function updateSkill(id: string, raw: Record<string, unknown>): Pro
     .returning();
   if (updated.length === 0) {
     if (renamedFrom) {
-      try { fs.renameSync(skillDirOf(patch.name as string), skillDirOf(renamedFrom)); } catch { /* 回滚失败只能靠人工 */ }
+      try { fs.renameSync(skillDirOf(patch.name as string), skillDirOf(renamedFrom)); } catch { /* a rollback failure can only be fixed manually */ }
     }
     throw new HttpError(404, 'not_found', 'skill 不存在');
   }
   return withDisk(updated[0]!);
 }
 
-/** DELETE：删行 + 删目录（目录删除走 removeSkillDir，校验父目录恰为 SKILLS_ROOT）。 */
+/** DELETE: delete the row + the directory (directory deletion goes through removeSkillDir, which validates the parent is exactly SKILLS_ROOT). */
 export async function deleteSkill(id: string): Promise<void> {
   const existing = (await db.select().from(assistantSkills).where(eq(assistantSkills.id, id)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'skill 不存在');
@@ -187,7 +187,7 @@ export async function deleteSkill(id: string): Promise<void> {
   removeSkillDir(SKILLS_ROOT, existing.name);
 }
 
-/** 列表 = DB 行（拼磁盘统计）+ 孤儿目录合成行。enabled 过滤时不含孤儿（孤儿没有 enabled 语义）。 */
+/** List = DB rows (joined with disk stats) + synthesized rows for orphan directories. With the enabled filter, orphans are excluded (orphans carry no enabled semantics). */
 export async function listSkills(enabled?: boolean): Promise<SkillWithDisk[]> {
   const rows = enabled === undefined
     ? await db.select().from(assistantSkills).orderBy(asc(assistantSkills.name))

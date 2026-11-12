@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-// checkoutRepoForVersion 可注入桩;impl 为 undefined 时走真实实现(既有 no_repo 用例不受影响)
+// checkoutRepoForVersion is injectable as a stub; when impl is undefined the real implementation runs (existing no_repo cases unaffected)
 const mockCheckout = { impl: undefined as undefined | ((versionId: string) => Promise<string>) };
 
 vi.mock('../src/pi/repo.js', async (importOriginal) => {
@@ -15,9 +15,9 @@ vi.mock('../src/pi/repo.js', async (importOriginal) => {
   };
 });
 
-// 跨副本运行闸门用:ioredis 换记账 fake(redisLock 的惰性连接)。其余测试不开 REDIS_URL,
-// client() 直接走 null 分支,零影响;doMock 在 beforeAll 动态 import 之前注册,session.js
-// 静态引入的 redisLock/threadBus 拿到的都是这份 fake。
+// For the cross-replica run gate: ioredis is replaced with an accounting fake (redisLock's lazy connection).
+// Other tests don't set REDIS_URL, so client() takes the null branch — zero impact; the doMock is registered
+// before the dynamic import in beforeAll, so the redisLock/threadBus statically imported by session.js all get this fake.
 class FakeRedis {
   static all: FakeRedis[] = [];
   static DEFAULTS: Record<string, unknown> = { set: 'OK', eval: 1 };
@@ -43,9 +43,10 @@ let pool: Pool;
 interface Captured { ctx: unknown; prompts: string[]; }
 const captured: Captured[] = [];
 
-/** 运行锁测试用:armed 时 prompt 挂起直到 need 个并发都进入——让两条消息在
- *  acquireRunSlot 视角真正重叠(假 prompt 微任务级完成时,后到的消息会在前者
- *  释放锁之后才拿锁,那是串行获取而非重入,测不出「重入只拿一次锁」)。 */
+/** For run-lock tests: while armed, prompt hangs until `need` concurrent callers have entered — so two messages
+ *  genuinely overlap from acquireRunSlot's perspective (if the fake prompt completed at microtask level, the later
+ *  message would take the lock only after the earlier one released it — serial acquisition, not re-entry,
+ *  which can't prove "re-entry acquires the lock only once"). */
 let promptBarrier: { need: number; n: number; open: () => void; p: Promise<void> } | null = null;
 
 function armPromptBarrier(need: number): void {
@@ -113,17 +114,17 @@ describe('space session supervisor', () => {
 
     const rec = await ensureSpaceRecord(threadId);
     expect(rec.versionId).toBe(versionId);
-    // 项目未配 repoUrl → RepoUnavailableError('no_repo') 被吞,工厂收到 repo.noRepo=true 且 cwd/issue 未填
-    // (后台检出尚未完成;不等其结束,保证会话秒开)
+    // Project has no repoUrl → RepoUnavailableError('no_repo') is swallowed; the factory receives repo.noRepo=true with cwd/issue unfilled
+    // (the background checkout hasn't finished; we don't wait for it, so the session opens instantly)
     expect(captured[0]!.ctx).toMatchObject({ threadId, versionId, projectId, repo: { cwd: null, issue: null } });
 
     await sendSpaceUserMessage(threadId, '帮我建三个登录用例');
-    // 原文透传:服务端回显与前端乐观气泡逐字一致,react-pi 的 reconcile 才能去重
+    // Verbatim passthrough: the server echo matches the frontend's optimistic bubble word for word, so react-pi's reconcile can dedupe
     expect(captured[0]!.prompts[0]).toBe('帮我建三个登录用例');
     const row = (await pool.query(`SELECT title FROM ai_threads WHERE id=$1`, [threadId])).rows[0] as { title: string | null };
     expect(row.title).toBe('帮我建三个登录用例');
 
-    // 后续消息同样原文透传(上下文摘要改走 system prompt,不进消息流)
+    // Follow-up messages are also passed through verbatim (the context summary goes into the system prompt, not the message stream)
     await sendSpaceUserMessage(threadId, '再建一个');
     expect(captured[0]!.prompts[1]).toBe('再建一个');
   }, 30_000);
@@ -161,30 +162,30 @@ describe('space session supervisor', () => {
     expect(zh).toContain('杜绝胡编乱造');
     const en = buildSpaceSystemPrompt(null, 'en-US', []);
     expect(en).toContain('Never fabricate');
-    // 方法论补 §6：页面控件以实测清单为准
+    // Methodology §6 addition: page controls are governed by the measured element list
     expect(REQ_DESIGN_METHOD).toContain('禁臆造控件');
     expect(REQ_DESIGN_METHOD).toContain('page.elements');
-    // B 路径回报规则：简洁 + 只引用实测清单里真实存在的控件
+    // Path B reporting rule: concise + only reference controls that actually exist in the measured list
     expect(CASE_AUTHORING_FLOW_ZH).toContain('回报要简洁');
     expect(CASE_AUTHORING_FLOW_EN).toContain('keep the report concise');
   });
 
   it('B 路径（边跑边讨论）文案：走 stage_case+verify_case，run_ai_step 已退役不再出现', async () => {
     const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN } = await import('../src/pi/space/reqDesign.js');
-    // B 入口段落存在且路由到 verify_case；分叉是「明确要求才进 B，纯需求输入走 A」
+    // The Path B entry section exists and routes to verify_case; the fork is "enter B only when explicitly asked, pure requirement input goes A"
     expect(CASE_AUTHORING_FLOW_ZH).toContain('边跑边讨论');
     expect(CASE_AUTHORING_FLOW_ZH).toContain('verify_case');
     expect(CASE_AUTHORING_FLOW_ZH).not.toContain('run_ai_step');
     expect(CASE_AUTHORING_FLOW_EN).toContain('Run and discuss');
     expect(CASE_AUTHORING_FLOW_EN).toContain('verify_case');
     expect(CASE_AUTHORING_FLOW_EN).not.toContain('run_ai_step');
-    // 10-27 prod228 实录（01a17cd5）：用户说了「打开页面」+给了深链,助手仍整段文字背页面结构、
-    // 以「请告诉我第一条测试操作」收尾让用户点菜,首轮零 stage_case/verify_case。守卫 B 段
-    // 必须带「拿到页面就开跑」的主动性规则,且被动等待框架措辞不得回归。
+    // 10-27 prod228 incident (01a17cd5): the user said "open the page" + gave a deep link, yet the assistant recited the page structure in
+    // a wall of text and ended with "please tell me the first test operation", leaving zero stage_case/verify_case in round one. Guard B's
+    // section must carry the proactive "start running once you have the page" rule, and the passive wait-for-instructions wording must not regress.
     expect(CASE_AUTHORING_FLOW_ZH).toContain('拿到页面就开跑');
     expect(CASE_AUTHORING_FLOW_ZH).toContain('观察步');
     expect(CASE_AUTHORING_FLOW_ZH).toContain('打开用户提供的测试页面');
-    expect(CASE_AUTHORING_FLOW_ZH).toContain('请告诉我第一条测试操作'); // 作为被禁止的反模式出现
+    expect(CASE_AUTHORING_FLOW_ZH).toContain('请告诉我第一条测试操作'); // appears as a forbidden anti-pattern
     expect(CASE_AUTHORING_FLOW_ZH).not.toContain('每收到一条操作指令');
     expect(CASE_AUTHORING_FLOW_EN).toContain('do not idle in text');
     expect(CASE_AUTHORING_FLOW_EN).toContain('open the test page the user provided');
@@ -193,7 +194,7 @@ describe('space session supervisor', () => {
 
   it('证据自取纪律文案：事实自己取证、实测为最终证据、失败先回报再深挖（11-07 用户口径：动不动求助用户=不智能）', async () => {
     const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN, REQ_DESIGN_METHOD } = await import('../src/pi/space/reqDesign.js');
-    // 纪律块存在于中英文流程指引:自取渠道枚举 + 实测终局 + 求助用户仅限两类
+    // The discipline block exists in both the ZH and EN flow guides: self-serve channel enumeration + measured evidence as final say + asking the user limited to two cases
     expect(CASE_AUTHORING_FLOW_ZH).toContain('证据自取纪律');
     expect(CASE_AUTHORING_FLOW_ZH).toContain('repo_ls/repo_read/repo_grep(读代码)');
     expect(CASE_AUTHORING_FLOW_ZH).toContain('求助用户只限两类');
@@ -201,10 +202,10 @@ describe('space session supervisor', () => {
     expect(CASE_AUTHORING_FLOW_EN).toContain('Self-serve evidence discipline');
     expect(CASE_AUTHORING_FLOW_EN).toContain('report FIRST, then dig');
     expect(CASE_AUTHORING_FLOW_EN).toContain('ask the user ONLY for two things');
-    // 旧「未经同意禁侦察」红线不得回归
+    // The old "no recon without consent" red line must not regress
     expect(CASE_AUTHORING_FLOW_ZH).not.toContain('未经用户同意,禁止调用 inspect_page');
     expect(CASE_AUTHORING_FLOW_EN).not.toContain('Recon red line');
-    // REQ_DESIGN_METHOD:运行时机身证据优先 + §6 自取取证(旧三路径/裸抛问题文案不得回归)
+    // REQ_DESIGN_METHOD: runtime on-device evidence first + §6 self-serve evidence (the old three-path / bare question-throwing wording must not regress)
     expect(REQ_DESIGN_METHOD).toContain('运行时机身证据优先');
     expect(REQ_DESIGN_METHOD).toContain('缺页面事实自己取证,不抛给用户');
     expect(REQ_DESIGN_METHOD).toContain('求助用户只限两类');
@@ -215,23 +216,23 @@ describe('space session supervisor', () => {
   it('DB/API 步例外措辞：guide 0001/0002/0003 都放行 sql/httpRequest 带 compiled（原禁令仍在但已被限定）', async () => {
     const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN, REQ_DESIGN_METHOD } = await import('../src/pi/space/reqDesign.js');
 
-    // 0001 REQ_DESIGN_METHOD：需要服务端真值时用 httpRequest / sql，且明确它们必须带 compiled
+    // 0001 REQ_DESIGN_METHOD: use httpRequest / sql when server-side truth is needed, and make explicit that they must carry compiled
     expect(REQ_DESIGN_METHOD).toContain('httpRequest/sql 这类步骤不经浏览器执行');
     expect(REQ_DESIGN_METHOD).toContain('必须带上 compiled');
     expect(REQ_DESIGN_METHOD).toContain('要直接查库就用 sql 步骤');
-    // queryDb 已下线：guide 不得再提它
+    // queryDb has been retired: guides must no longer mention it
     expect(REQ_DESIGN_METHOD).not.toContain('queryDb');
 
-    // 0002 中文：第 3 步原禁令保留，但紧跟 DB/API 例外（例外在禁令之后 = 禁令被限定而非被删）
+    // 0002 Chinese: the original step-3 ban is kept, but immediately followed by the DB/API exception (exception after the ban = the ban is scoped, not deleted)
     const zhBan = CASE_AUTHORING_FLOW_ZH.indexOf('不要急着生成 compiled');
     const zhExc = CASE_AUTHORING_FLOW_ZH.indexOf('唯一例外：查库/调接口的步骤——sql / httpRequest——在这一步就带上 compiled');
     expect(zhBan).toBeGreaterThanOrEqual(0);
     expect(zhExc).toBeGreaterThan(zhBan);
-    expect(zhExc - zhBan).toBeLessThan(600); // 例外紧跟禁令，不是散落在别处的另一句话
-    // 入口 B（暂存即实测）同样放行：每条新指令若是查库/调接口就带 compiled
+    expect(zhExc - zhBan).toBeLessThan(600); // the exception follows right after the ban, not a separate sentence scattered elsewhere
+    // Entry B (staging = real measurement) is allowed through the same way: any new instruction that is a DB lookup / API call carries compiled
     expect(CASE_AUTHORING_FLOW_ZH).toContain('本条若是查库/调接口的步骤,则带 compiled');
 
-    // 0003 英文镜像
+    // 0003 English mirror
     const enBan = CASE_AUTHORING_FLOW_EN.indexOf('do NOT generate compiled mechanical DSL yet');
     const enExc = CASE_AUTHORING_FLOW_EN.indexOf('exception: a database-lookup or API-call step — sql / httpRequest — MUST carry its compiled array at this stage');
     expect(enBan).toBeGreaterThanOrEqual(0);
@@ -243,8 +244,8 @@ describe('space session supervisor', () => {
   it('取证渠道只提真实注册的工具：不得出现不存在的 dbQuery', async () => {
     const { CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN, REQ_DESIGN_METHOD } = await import('../src/pi/space/reqDesign.js');
     const { STYLE_ZH_DEFAULT, STYLE_EN_DEFAULT } = await import('../src/pi/space/promptModules.js');
-    // dbQuery 从来不是已注册的工具（注册名是 query_stats / manage_environments / manage_datasets）。
-    // 写进「取证渠道」清单会让 AI 去调一个不存在的工具——必须只留真实工具名。
+    // dbQuery was never a registered tool (the registered names are query_stats / manage_environments / manage_datasets).
+    // Putting it in the "evidence channel" list would make the AI call a nonexistent tool — only real tool names may remain.
     for (const text of [REQ_DESIGN_METHOD, CASE_AUTHORING_FLOW_ZH, CASE_AUTHORING_FLOW_EN, STYLE_ZH_DEFAULT, STYLE_EN_DEFAULT]) {
       expect(text).not.toContain('dbQuery');
     }
@@ -286,11 +287,11 @@ describe('space session supervisor', () => {
     await ensureSpaceRecord(threadId);
     const events: Record<string, unknown>[] = [];
     const unsub = subscribeThread(threadId, (e) => events.push(e as Record<string, unknown>), { includeSnapshot: true });
-    // 快照改为「seq 泵排空后异步补发」(水位≥内容,防双气泡),不再同步首达
+    // The snapshot changed to "async catch-up after the seq pump drains" (watermark ≥ content, prevents double bubbles); no longer synchronous first delivery
     await vi.waitFor(() => expect(events[0]).toBeDefined());
     expect(events[0]!.type).toBe('snapshot');
     emitThreadEvent(threadId, { type: 'confirm_request', confirmId: 'c1' });
-    // 事件经 seq 泵异步投递(Redis INCR 分配 seq;无 Redis 走本地兜底,仍是异步微任务)
+    // Events are delivered asynchronously via the seq pump (Redis INCR assigns seq; without Redis a local fallback runs, still an async microtask)
     await vi.waitFor(() => expect(events[1]).toBeDefined());
     expect(events[1]).toMatchObject({ type: 'confirm_request', confirmId: 'c1', threadId });
     expect(typeof events[1]!.seq).toBe('number');
@@ -305,15 +306,15 @@ describe('space session supervisor', () => {
     const fake = rec.session as unknown as { listeners: Set<(e: unknown) => void> };
     const delivered: Record<string, unknown>[] = [];
     const unsub = subscribeThread(threadId, (e) => delivered.push(e as Record<string, unknown>));
-    // pi 语义:用户消息同步进内容,message_start 紧随发射——fanOut 只入队,seq 戳在异步泵里盖
+    // pi semantics: the user message enters content synchronously and message_start fires right after — fanOut only enqueues; the seq stamp is applied in the async pump
     await sendSpaceUserMessage(threadId, '只发一次');
     const userMsg = { role: 'user', content: '只发一次' };
     for (const l of fake.listeners) l({ type: 'message_start', message: userMsg });
-    // 老实现此刻同步读 = 内容已含消息、水位仍旧值的毒快照;新实现等泵排空后再读
+    // The old implementation reads synchronously here = a poisoned snapshot where content already includes the message but the watermark is stale; the new implementation reads after the pump drains
     const snap = await snapshotOfThread(threadId);
     const stampedSeq = delivered.filter((e) => e.type === 'message_start').at(-1)!.seq;
     expect(snap!.messages).toContainEqual(userMsg);
-    expect(snap!.seq).toBe(stampedSeq); // 前端旧事件门按 seq>水位 放行,水位盖住即不会二次 append
+    expect(snap!.seq).toBe(stampedSeq); // the frontend's old-event gate admits seq > watermark; with the watermark covering it there's no second append
     unsub();
   }, 30_000);
 
@@ -323,18 +324,18 @@ describe('space session supervisor', () => {
     const { ensureSpaceRecord, sendSpaceUserMessage, subscribeThread } = await import('../src/pi/space/session.js');
     const rec = await ensureSpaceRecord(threadId);
     const fake = rec.session as unknown as { listeners: Set<(e: unknown) => void> };
-    // 真实场景:SSE 重连/新监听器恰好在发送后的泵窗口内进来——先有入队投递,再有订阅
+    // Real scenario: an SSE reconnect / new listener arrives exactly inside the post-send pump window — enqueue-delivery first, subscription second
     await sendSpaceUserMessage(threadId, 'hello');
     const userMsg = { role: 'user', content: 'hello' };
     for (const l of fake.listeners) l({ type: 'message_start', message: userMsg });
     const got: Record<string, unknown>[] = [];
     const unsub = subscribeThread(threadId, (e) => got.push(e as Record<string, unknown>), { includeSnapshot: true });
-    // 微任务泵先送达盖戳的 message_start(监听器已同步注册),快照随后补发且水位不落后
+    // The microtask pump first delivers the stamped message_start (the listener was registered synchronously), then the snapshot catch-up follows with a watermark that doesn't lag
     await vi.waitFor(() => expect(got.some((e) => e.type === 'snapshot')).toBe(true));
     const snapEv = got.find((e) => e.type === 'snapshot')!;
     const maxDelivered = Math.max(0, ...got.filter((e) => e.type !== 'snapshot').map((e) => Number(e.seq ?? 0)));
     expect((snapEv.snapshot as { messages: unknown[] }).messages).toContainEqual(userMsg);
-    expect(Number(snapEv.seq)).toBeGreaterThanOrEqual(maxDelivered); // 迟到的 message_start 不会再穿门 append
+    expect(Number(snapEv.seq)).toBeGreaterThanOrEqual(maxDelivered); // the late message_start can't pass the gate into a second append
     unsub();
   }, 30_000);
 
@@ -356,7 +357,7 @@ describe('space session supervisor', () => {
     try {
       const rec = await ensureSpaceRecord(threadId);
       expect(rec.versionId).toBe(versionId);
-      // 后台检出在 session 建立后异步跑;轮询直到 issue 落值(替代固定 sleep,在慢机上避免 flake)
+      // The background checkout runs asynchronously after session creation; poll until issue gets its value (instead of a fixed sleep, avoids flake on slow machines)
       let issue: string | null = null;
       for (let i = 0; i < 30; i++) {
         issue = spaceRepoIssue(threadId);
@@ -379,27 +380,27 @@ describe('space session supervisor', () => {
       const events: Record<string, unknown>[] = [];
       subscribeThread(threadId, (e) => events.push(e as Record<string, unknown>));
 
-      // 同副本并发(steer 语义,rcaWorker 二次 prompt 同款):barrier 让两个 prompt 同时挂起,
-      // 第二条只能走 runs>0 重入,不重复拿锁
+      // Same-replica concurrency (steer semantics, same as rcaWorker's second prompt): the barrier suspends both prompts,
+      // so the second can only take the runs>0 re-entry path and never grabs the lock twice
       armPromptBarrier(2);
       try {
         await Promise.all([sendSpaceUserMessage(threadId, '第一条'), sendSpaceUserMessage(threadId, '第二条')]);
       } finally {
         promptBarrier = null;
       }
-      // seq 全局化后 buildSpaceRecord 先探 Redis 高水位,threadBus 先于 redisLock 建连;
-      // FakeRedis.all 下标不再固定,按「收到过 set」定位 redisLock 那台。
+      // After seq went global, buildSpaceRecord probes the Redis watermark first, and threadBus connects before redisLock;
+      // FakeRedis.all's index is no longer fixed — locate the redisLock instance by "has received a set".
       const redis = FakeRedis.all.find((r) => r.callsOf('set').length > 0)!;
       expect(redis.callsOf('set')).toHaveLength(1);
       expect(redis.callsOf('set')[0]).toEqual([`itest:thread-run:${threadId}`, expect.any(String), 'PX', 300_000, 'NX']);
-      // 5s 心跳未到(毫秒级完成);runs 归零 → release 的 Lua DEL 恰一次
+      // The 5s heartbeat never fires (finished in milliseconds); runs drops to zero → release's Lua DEL runs exactly once
       expect(redis.callsOf('eval')).toHaveLength(1);
       expect(redis.callsOf('eval')[0]![2]).toBe(`itest:thread-run:${threadId}`);
 
-      // 他副本持有(set → null)→ 抛错 + assistant_error 事件(messages 路由 204 先行,这是用户面)
+      // Another replica holds it (set → null) → throw + assistant_error event (the messages route's 204 comes first; that's the user-facing side)
       redis.results.set = null;
       await expect(sendSpaceUserMessage(threadId, '第三条')).rejects.toThrow('另一个实例');
-      // assistant_error 经 seq 泵异步投递,等它落到订阅者
+      // assistant_error is delivered asynchronously via the seq pump; wait for it to reach the subscriber
       await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ type: 'assistant_error' }));
       expect(String(events.at(-1)!.message)).toContain('另一个实例');
     } finally {

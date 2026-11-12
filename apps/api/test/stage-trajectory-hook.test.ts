@@ -5,9 +5,9 @@ import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
-// R2 落库钩子：/stage/save 成功落库后投递轨迹蒸馏（fire-and-forget），enqueue 抛错绝不影响主流程。
-// mock 机制：vi.resetModules + vi.doMock 拦截钩子里的动态 import('../../scheduler/trajectoryQueue.js')
-// ——stageRoute 必须在 doMock 之后重导，动态 import 才会解析到 mock（两种相对路径解析到同一文件）。
+// R2 persistence hook: after /stage/save persists successfully it dispatches trajectory distillation (fire-and-forget); an enqueue throw must never affect the main flow.
+// Mock mechanism: vi.resetModules + vi.doMock intercept the hook's dynamic import('../../scheduler/trajectoryQueue.js')
+// — stageRoute must be re-imported after the doMock so the dynamic import resolves to the mock (both relative paths resolve to the same file).
 let pool: Pool;
 let app: import('express').Express;
 let seedUserId: string;
@@ -26,9 +26,9 @@ beforeAll(async () => {
   const { default: exp } = await import('express');
   const { spaceRoute } = await import('../src/pi/space/router.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
-  // 注意：seedOrg 必须用与 seedProject 同一份 helpers 模块（其 seedOrgCache 是模块级
-  // WeakMap——resetModules 后动态重导会拿到另一份空缓存,再种一个新 org,项目就落到
-  // 请求用户不可见的组织里 → 404 project not found）。
+  // Note: seedOrg must come from the same helpers module instance as seedProject (its seedOrgCache is a module-level
+  // WeakMap — after resetModules a dynamic re-import gets another empty cache, seeds a new org, and the project lands in
+  // an organization invisible to the requesting user → 404 project not found).
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
   seedUserId = userId;
   const { managerUserOf } = await import('./helpers/auth.js');
@@ -52,7 +52,7 @@ beforeEach(async () => {
   enqueueMock.mockResolvedValue(undefined);
 });
 
-/** 造一个版本线程 + 一条已编译暂存用例草稿，返回锚点 id。 */
+/** Create a version thread + one compiled staged case draft, returning the anchor ids. */
 async function seedDraft(): Promise<{ threadId: string; localId: string; groupId: string; versionId: string }> {
   const { versionId, groupId } = await seedProject(pool);
   const threadId = randomUUID();
@@ -82,7 +82,7 @@ describe('POST /threads/:id/stage/save — 轨迹蒸馏落库钩子', () => {
     expect(items).toHaveLength(1);
     expect(items[0]!.localId).toBe(localId);
     expect(items[0]!.caseId).toBe(r.body.caseIdMap[localId]);
-    // caseId 必须是真实落库的用例
+    // caseId must be a really persisted case
     const n = (await pool.query(`SELECT count(*)::int n FROM test_cases WHERE id=$1`, [items[0]!.caseId])).rows[0]!;
     expect(n.n).toBe(1);
   });

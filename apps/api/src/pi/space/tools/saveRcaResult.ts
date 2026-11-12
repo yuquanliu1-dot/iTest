@@ -1,5 +1,5 @@
-/** save_rca_result:RCA 线程专用——把单个失败用例的分析结论写入 plan_run_cases.rca。
- *  仅 purpose='rca' 的线程注册(buildSpaceTools 闸门);status='timeout' 保留给 worker 兜底,AI 不可用。 */
+/** save_rca_result: RCA-thread-only — writes one failed case's analysis conclusion into plan_run_cases.rca.
+ *  Registered only on threads with purpose='rca' (buildSpaceTools gate); status='timeout' is reserved for the worker fallback, never the AI. */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
@@ -64,7 +64,7 @@ export function buildSaveRcaResultTool(ctx: SpaceToolsContext): ToolExecutor {
       await db.update(planRunCases).set({
         rca: { ...rca, analyzedAt: new Date().toISOString(), threadId: ctx.threadId },
       }).where(eq(planRunCases.id, v.planRunCaseId));
-      // 终态 run 详情缓存里有 cases[].rca,结论落库后失效让前端立即可见
+      // The terminal run-detail cache holds cases[].rca; invalidate it once the conclusion lands so the frontend sees it immediately
       await cache.del(planRunDetailKey(row.planRunId));
       return { ok: true, data: `已保存 ${v.planRunCaseId.slice(0, 8)} 的分析结论(${v.status}/${v.category})` };
     },

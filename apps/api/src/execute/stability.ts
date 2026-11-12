@@ -25,14 +25,18 @@ export class ElementNotStable extends Error {
 }
 
 /**
- * 页内稳定性探测函数。必须自包含（只引用页面全局 document/window）——probe 经
- * page.evaluate 序列化注入执行；独立导出仅为单测可直调（stub 全局 document/window）。
+ * In-page stability probe function. Must be self-contained (only references page globals
+ * document/window) — the probe is serialized and injected for execution via page.evaluate;
+ * the standalone export exists only so unit tests can call it directly (stub the global
+ * document/window).
  *
- * 不检查 readonly：页面级探针拿不到本步要操作的目标元素，只能按 DOM 顺序抓第一个
- * 「交互样」元素——prod228 MRM 登录页页顶的语言选择框（readonly 假输入框，点击弹
- * 选择器）会被误判成「页面未就绪」，把页面上所有交互步拖进 2s 稳定性空转（机械步
- * 静默走 dom-fallback、aiTask 步无降级直接失败，2026-11-03 报告
- * c934d5b6 即此）。真正的 readonly 目标由 Playwright fill 自身的报错兜底。
+ * Does not check readonly: a page-level probe cannot see the target element this step operates
+ * on and can only grab the first "interactive-looking" element in DOM order — the language
+ * selector at the top of the prod228 MRM login page (a readonly fake input that opens a picker
+ * on click) would be misjudged as "page not ready", dragging every interactive step on the page
+ * into a 2s stability stall (mechanical steps silently go dom-fallback, aiTask steps have no
+ * fallback and fail outright — the 2026-11-03 report c934d5b6 was exactly this). Real readonly
+ * targets are backed by Playwright fill's own error.
  */
 export function stabilityProbeFn(): StabilityReport {
   const sel = document.querySelector(':focus, [data-itest-active="true"], button, input, select, [role="button"]') as HTMLElement | null;
@@ -83,7 +87,7 @@ export async function waitForStable(
   const deadline = Date.now() + timeoutMs;
   let last: StabilityReport = { ready: true };
   while (true) {
-    // probe 结果形状异常（evaluate 被桥接/替换、返回非 {ready} 形状）时视为稳定，避免阻塞正常执行。
+    // Treat an abnormal probe result shape (evaluate bridged/replaced, returns a non-{ready} shape) as stable, to avoid blocking normal execution.
     const raw = (await probe(page)) as unknown;
     const shaped = raw as StabilityReport;
     if (!raw || typeof raw !== 'object' || typeof shaped.ready !== 'boolean') {
@@ -100,19 +104,21 @@ export async function waitForStable(
 }
 
 /**
- * 点击后静默期：机械 click 成功后等 DOM 落定再放行下一步。
+ * Post-click quiet period: after a mechanical click succeeds, wait for the DOM to settle before releasing the next step.
  *
- * 现有稳定性机制全是 pre-action（waitForStable 查 disabled/loading/overlay、waitTargetEnabled
- * 等目标恢复），拦不住「点击已成功、效果被后到的异步重渲染冲掉」：prod228 14dd97e2/e3f9a616
- * 实录——行点击落在 Search 响应到达前 275ms，响应到来后 el-table 替换数据数组清掉
- * current-row 选中态，下一步等 Modify 启用等到 target-disabled 降级 AI；而 Search 后等 4s
- * 再点行则一切正常（Modify ≤2.5s 启用）。这里按 DOM 指纹（元素数 + innerText 长度）轮询，
- * 连续 quietMs 无变化视为静默，让异步响应与重渲染在下一次动作前落完。
+ * Existing stability mechanisms are all pre-action (waitForStable checks disabled/loading/overlay, waitTargetEnabled
+ * waits for the target to recover) and cannot stop "the click succeeded but its effect was wiped by a later async
+ * re-render": recorded on prod228 as 14dd97e2/e3f9a616 — the row click landed 275ms before the Search response
+ * arrived; when the response came, el-table replaced the data array and cleared the current-row selection, and the
+ * next step waiting for Modify to enable hit target-disabled and degraded to AI; clicking the row 4s after Search
+ * works fine (Modify enables within 2.5s). This polls a DOM fingerprint (element count + innerText length) and
+ * treats quietMs with no change as quiet, letting async responses and re-renders finish before the next action.
  *
- * best-effort：绝不失败本步（点击已发生）——探不了（evaluate 缺失/页面跳转抛错）立即放行，
- * 预算到点仍未静默也放行，不比现状差。deadline + maxIters 双保险（模式同 waitForPageSettled：
- * 单测 mock 墙钟不推进需迭代上限终止）。预算 4s 覆盖实测 0.5-2s 的查询响应窗口；健康页面
- * 代价约 quietMs(400ms)/次 click。
+ * best-effort: never fails this step (the click already happened) — if it cannot probe (evaluate missing/navigation
+ * throws) it releases immediately; if the budget expires without quiet it also releases, no worse than the status
+ * quo. deadline + maxIters double protection (same pattern as waitForPageSettled: unit tests mocking a frozen wall
+ * clock need an iteration cap to terminate). The 4s budget covers the observed 0.5-2s query response window; a
+ * healthy page pays about quietMs(400ms) per click.
  */
 export async function waitForDomQuiet(
   page: Page,
@@ -132,7 +138,7 @@ export async function waitForDomQuiet(
     }
   };
   let prev = await signature();
-  if (prev === null) return; // 探不了 → 不等，绝不比现状差
+  if (prev === null) return; // Cannot probe → do not wait; never worse than the status quo
   let lastChange = Date.now();
   const deadline = lastChange + budgetMs;
   const maxIters = Math.max(2, Math.ceil(budgetMs / Math.max(1, pollMs)) + 5);
@@ -144,8 +150,8 @@ export async function waitForDomQuiet(
       prev = cur;
       lastChange = Date.now();
     } else if (Date.now() - lastChange >= quietMs) {
-      return; // 连续 quietMs 无 DOM 变化 → 已静默
+      return; // quietMs with no DOM change → quiet
     }
   }
-  // 预算到点仍未静默 → 返回，绝不失败本步
+  // Budget expired without quiet → return; never fails this step
 }

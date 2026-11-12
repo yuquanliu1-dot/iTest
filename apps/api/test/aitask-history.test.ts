@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Page } from 'playwright-core';
 
-// playwright-core 打桩：runAiTask 每轮要截图 + 读元素清单，页面本身不参与断言，
-// 断言全在「发给 LLM 的 messages 序列」上。
+// playwright-core stub: runAiTask takes a screenshot + reads the element list each turn; the page itself takes no part in assertions,
+// which all live on "the message sequence sent to the LLM".
 vi.mock('playwright-core', () => {
   const page = {
     goto: vi.fn().mockResolvedValue(undefined),
@@ -20,7 +20,7 @@ vi.mock('playwright-core', () => {
     keyboard: { press: vi.fn().mockResolvedValue(undefined) },
     url: vi.fn(() => 'http://env.example/login'),
     viewportSize: vi.fn(() => ({ width: 1280, height: 800 })),
-    // dumpElements 的 evaluate：返回元素清单
+    // evaluate for dumpElements: returns the element list
     evaluate: vi.fn().mockResolvedValue([{ selector: '#user', tag: 'input', placeholder: '账号' }]),
     context: vi.fn(() => ({ pages: () => [] })),
   };
@@ -32,7 +32,7 @@ import type { LLMClient, LLMMessage, LLMResult } from '../src/agent/llm-client.j
 
 const mocked = await import('playwright-core') as unknown as { __page: Page };
 
-/** 记录每次 complete 的 messages，并按脚本返回 LLM 响应。 */
+/** Record the messages of each complete call and return the scripted LLM response. */
 function makeClient(script: string[]): { client: LLMClient; calls: LLMMessage[][] } {
   const calls: LLMMessage[][] = [];
   let i = 0;
@@ -54,7 +54,7 @@ function makeClient(script: string[]): { client: LLMClient; calls: LLMMessage[][
   return { client, calls };
 }
 
-/** 取一次请求里所有 user 文本 block（便于断言"历史是否累积"）。 */
+/** Take all user text blocks from one request (handy for asserting "whether history accumulates"). */
 function userTexts(msgs: LLMMessage[]): string[] {
   return msgs
     .filter((m) => m.role === 'user')
@@ -67,7 +67,7 @@ describe('runAiTask 多轮累积（prompt cache 前缀）', () => {
   });
 
   it('第 N 轮请求包含第 1..N 轮的完整历史（不再只发当轮）', async () => {
-    // 轮1: 点输入框；轮2: 填值并完成
+    // Turn 1: click the input; turn 2: fill the value and finish
     const { client, calls } = makeClient([
       JSON.stringify({ actions: [{ type: 'click', selector: '#user' }], done: false }),
       JSON.stringify({ actions: [{ type: 'fill', selector: '#user', value: 'alice' }], done: true, summary: '填好了' }),
@@ -75,11 +75,11 @@ describe('runAiTask 多轮累积（prompt cache 前缀）', () => {
     await runAiTask(mocked.__page, '登录', client, false, { maxTurns: 4 });
 
     expect(calls).toHaveLength(2);
-    // 第 1 轮：只有自己
+    // Turn 1: only itself
     expect(calls[0]!.map((m) => m.role)).toEqual(['user']);
-    // 第 2 轮：user1 + assistant1 + user2 —— 这是缓存能命中的关键
+    // Turn 2: user1 + assistant1 + user2 -- this is the key to cache hits
     expect(calls[1]!.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
-    // 第 1 轮的内容仍在第 2 轮请求里（旧实现会整个丢掉）
+    // Turn 1's content is still in turn 2's request (the old implementation dropped it entirely)
     expect(userTexts(calls[1]!)[0]).toContain('第 1/4 轮');
     expect(userTexts(calls[1]!)[1]).toContain('第 2/4 轮');
   });
@@ -91,7 +91,7 @@ describe('runAiTask 多轮累积（prompt cache 前缀）', () => {
     ]);
     await runAiTask(mocked.__page, '观察', client, false, { maxTurns: 3 });
     const assistantMsg = calls[1]!.find((m) => m.role === 'assistant')!;
-    // 原始 JSON 输出原样回放（不是动作摘要，否则前缀漂移、命中率反降）
+    // The original JSON output is replayed verbatim (not an action summary, which would drift the prefix and hurt the hit rate)
     expect(assistantMsg.content[0]).toEqual({
       type: 'text',
       text: JSON.stringify({ actions: [], done: false, summary: '观察中' }),
@@ -99,7 +99,7 @@ describe('runAiTask 多轮累积（prompt cache 前缀）', () => {
   });
 
   it('每轮历史严格只增不减：前缀逐轮延长（第 k 轮请求的前 k-1 条与前一轮逐字相同）', async () => {
-    // 缓存按前缀匹配，这是"前缀真的稳定"的直接断言
+    // The cache matches by prefix; this is a direct assertion that "the prefix is truly stable"
     const { client, calls } = makeClient([
       JSON.stringify({ actions: [{ type: 'click', selector: '#a' }], done: false }),
       JSON.stringify({ actions: [{ type: 'click', selector: '#b' }], done: false }),
@@ -108,10 +108,10 @@ describe('runAiTask 多轮累积（prompt cache 前缀）', () => {
     await runAiTask(mocked.__page, '多点几次', client, false, { maxTurns: 5 });
 
     expect(calls).toHaveLength(3);
-    // 第 3 轮请求的前 4 条 == 第 2 轮请求的全部 4 条
+    // The first 4 entries of turn 3's request == all 4 entries of turn 2's request
     const prev = calls[1]!;
     const cur = calls[2]!;
-    expect(cur.length).toBe(prev.length + 2); // +assistant +新 user
+    expect(cur.length).toBe(prev.length + 2); // +assistant +new user
     for (let i = 0; i < prev.length; i++) {
       expect(JSON.stringify(cur[i])).toBe(JSON.stringify(prev[i]));
     }
@@ -127,7 +127,7 @@ describe('runAiTask 多轮累积（prompt cache 前缀）', () => {
     expect(firstUser.role).toBe('user');
     expect(firstUser.content[0]!.type).toBe('image');
     expect(firstUser.content[1]!.type).toBe('text');
-    // 第 2 轮仍保留第 1 轮的截图 block —— 旧实现下截图每轮被丢弃，无法复用
+    // Turn 2 still keeps turn 1's screenshot block -- under the old implementation screenshots were dropped each turn and couldn't be reused
     expect(calls[1]![0]!.content.some((b) => b.type === 'image')).toBe(true);
   });
 
@@ -164,11 +164,11 @@ describe('runAiTask 多轮累积（prompt cache 前缀）', () => {
   it('maxTurns 用尽仍逐轮累积（第 3 轮请求带满前 2 轮历史；兜底判定是独立单轮调用不进 agent 历史）', async () => {
     const { client, calls } = makeClient([JSON.stringify({ actions: [], done: false })]);
     await expect(runAiTask(mocked.__page, '做不完', client, false, { maxTurns: 3 })).rejects.toThrow(/超过 3 轮/);
-    // 3 轮 agent 回路 + 1 次轮数耗尽兜底判定（走 systemPrompt+userMessage 通道，不带回路历史）
+    // 3 agent-loop turns + 1 turns-exhausted fallback judgment (goes through the systemPrompt+userMessage channel, without loop history)
     expect(calls).toHaveLength(4);
-    // 3 轮 = user1,a1,user2,a2,user3
+    // 3 turns = user1,a1,user2,a2,user3
     expect(calls[2]!.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user']);
-    // 兜底判定不携带 messages（零动作完成判定是回路外的独立视觉调用，不影响缓存前缀）
+    // The fallback judgment carries no messages (the zero-action completion judgment is an independent out-of-loop vision call and doesn't affect the cache prefix)
     expect(calls[3]).toEqual([]);
   });
 

@@ -15,7 +15,7 @@ beforeAll(async () => {
   process.env.DATABASE_URL = pgDb.uri;
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // db/client.js 在 import 时读 DATABASE_URL，必须等容器就绪后再动态加载（envContext 同理，它引了 db/client）
+  // db/client.js reads DATABASE_URL at import time, so it must be dynamically loaded after the container is ready (same for envContext, which imports db/client)
   ({ resolveCaseUrl, relativizeUrl } = await import('../src/lib/resolve-url.js'));
   ({ WebServiceMissing } = await import('../src/execute/envContext.js'));
 }, 60_000);
@@ -35,7 +35,7 @@ beforeEach(async () => {
   groupId = s.groupId;
 });
 
-/** 不走 DB 的 ResolveUrlEnv mock：frontend(默认) + backend 两个 web 服务。 */
+/** DB-free ResolveUrlEnv mock: two web services, frontend (default) + backend. */
 const webEnv = () => ({
   envName: '默认环境',
   webServices: [
@@ -48,7 +48,7 @@ const webEnv = () => ({
     : 'http://10.0.0.1:8080',
 });
 
-/** 插默认环境 + frontend(默认)/backend 两个 web 对象，返回环境 id。 */
+/** Insert the default environment + frontend (default)/backend web objects, returning the environment id. */
 const insertWebEnv = async () => {
   const e = await pool.query(
     `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认环境', true) RETURNING id`,

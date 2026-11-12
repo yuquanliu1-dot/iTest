@@ -1,4 +1,4 @@
-/** 标量字段 diff 文本:`k: before → after`(按键排序);对象/数组字段与 updatedAt 跳过。无变化返回 undefined。 */
+/** Diff text for scalar fields: `k: before → after` (sorted by key); object/array fields and updatedAt are skipped. Returns undefined when nothing changed. */
 export function diffText(before: Record<string, unknown>, after: Record<string, unknown>): string | undefined {
   const lines: string[] = [];
   for (const k of Object.keys(before).sort()) {

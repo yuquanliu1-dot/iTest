@@ -1,16 +1,20 @@
 /**
- * AI 产出文件的临时托管（thread 级）。
+ * Temporary hosting of AI-produced files (thread-scoped).
  *
- * 两类产物，同一套落盘/令牌/读取路径：
- *  - **短 TTL**（registerArtifact）：xmind 导出等一次性文件，30 分钟过期（内存态 + 磁盘登记记录）。
- *  - **永久**（registerPersistentArtifact）：skill 脚本生成的可下载文档，落 ai_thread_artifacts 表，
- *    不过期，跨会话/跨进程重启仍可下载。
+ * Two artifact classes, one set of persist/token/read paths:
+ *  - **Short TTL** (registerArtifact): one-shot files like xmind exports, expire after 30 minutes
+ *    (in-memory state + a disk record file).
+ *  - **Permanent** (registerPersistentArtifact): downloadable documents produced by skill scripts,
+ *    stored in the ai_thread_artifacts table; never expire, downloadable across sessions/process restarts.
  *
- * 流程：工具生成 buffer → register* 落盘 .data/exports/<token><真实扩展名> + 登记记录
- *   → SSE artifact 事件携 token/name/size → 前端下载卡 → GET /threads/:id/artifacts/:token 换文件。
+ * Flow: the tool produces a buffer → register* writes .data/exports/<token><real extension> plus a
+ *   record file → SSE artifact event carries token/name/size → frontend download card →
+ *   GET /threads/:id/artifacts/:token exchanges for the file.
  *
- * 登记记录随文件落盘：多副本共享 .data 卷，任一副本内存 Map miss 时可从磁盘回源，任意副本皆可服务下载。
- * 永久产物额外写 DB 行（token 唯一），读取时 DB 优先——发版顺序无关，旧数据仍可读。
+ * The record file is persisted alongside the file: replicas share the .data volume, so any replica
+ * whose in-memory Map misses can re-source from disk, and any replica can serve the download.
+ * Permanent artifacts additionally write a DB row (token unique); reads prefer DB — release-order
+ * agnostic, old data stays readable.
  */
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
@@ -21,11 +25,11 @@ import { aiThreadArtifacts } from '../../db/schema.js';
 import { DATA_DIR } from '../repo.js';
 
 export const EXPORT_DIR = join(DATA_DIR, 'exports');
-/** 登记记录目录：与产物文件分开，避免产物本身是 .json 时与记录文件抢同一个路径。 */
+/** Record-file directory: kept apart from artifact files, so an artifact that is itself .json never collides with a record file on the same path. */
 const RECORD_DIR = join(EXPORT_DIR, '.records');
 const TTL_MS = 30 * 60_000;
 
-/** 产物文件大小上限：脚本 stdout 有 100KB 上限，产物文件本身没有——加一道防撑爆磁盘。 */
+/** Artifact size cap: script stdout has a 100KB limit but artifact files do not — this guards against filling the disk. */
 export const MAX_ARTIFACT_BYTES = 50 * 1024 * 1024;
 
 interface ArtifactRecord {
@@ -33,7 +37,7 @@ interface ArtifactRecord {
   name: string;
   mime: string;
   size: number;
-  /** null = 永久有效。 */
+  /** null = valid forever. */
   expiresAt: number | null;
   threadId: string;
 }
@@ -41,9 +45,11 @@ interface ArtifactRecord {
 const artifacts = new Map<string, ArtifactRecord>();
 
 /**
- * 扩展名 → MIME。不引新依赖：mime-types 不在 api 依赖树里（传递依赖不可直接用）。
- * 覆盖 skill 常见产物格式；未命中给 application/octet-stream（浏览器按扩展名自行处理）。
- * 文本类补 charset=utf-8——中文报告用默认 latin-1 会乱码。
+ * Extension → MIME. No new dependency: mime-types is not in the api dependency tree (transitive
+ * dependencies cannot be used directly).
+ * Covers the skill layer's common artifact formats; misses get application/octet-stream (the
+ * browser handles it by extension itself).
+ * Text types get charset=utf-8 appended — Chinese reports garble under the default latin-1.
  */
 const MIME_TABLE: Record<string, string> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -83,16 +89,17 @@ const MIME_TABLE: Record<string, string> = {
   har: 'application/json; charset=utf-8',
 };
 
-/** 按扩展名推断 Content-Type；未知扩展名退到 octet-stream。 */
+/** Infers Content-Type from extension; unknown extensions fall back to octet-stream. */
 export function mimeOfName(name: string): string {
   const ext = extOfName(name);
   return MIME_TABLE[ext] ?? 'application/octet-stream';
 }
 
 /**
- * 取文件名的扩展名（小写，纯 [a-z0-9]）。
- * 名字由脚本/用户自报 → 不可信输入，必须严格净化：无扩展名给 'bin'，
- * 带路径分隔符或非字母数字的一律剥掉（只留最后一段的点后部分），杜绝路径逃逸。
+ * Extracts the file name's extension (lowercase, pure [a-z0-9]).
+ * The name is self-reported by script/user → untrusted input, must be sanitized strictly: no
+ * extension gets 'bin'; path separators or non-alphanumerics are stripped (only the part after the
+ * last segment's dot is kept), eliminating path escapes.
  */
 export function extOfName(name: string): string {
   const base = String(name).split(/[\\/]/).pop() ?? '';
@@ -104,7 +111,7 @@ export function extOfName(name: string): string {
   return cleaned;
 }
 
-/** 产物落盘路径：<token>.<真实扩展名>。扩展名来自 name，故 .docx/.xlsx/.pdf 各得其所。 */
+/** Artifact path on disk: <token>.<real extension>. The extension comes from name, so .docx/.xlsx/.pdf each land in their own type. */
 function pathOf(token: string, ext: string): string {
   return join(EXPORT_DIR, `${token}.${ext}`);
 }
@@ -113,12 +120,12 @@ function recordPathOf(token: string): string {
   return join(RECORD_DIR, `${token}.json`);
 }
 
-/** 旧版登记记录路径（发版前写入的存量文件）：与新记录目录并存，读时兼容。 */
+/** Legacy record path (pre-existing files written before the release): coexists with the new record dir; read-time compatible. */
 function legacyRecordPathOf(token: string): string {
   return join(EXPORT_DIR, `${token}.json`);
 }
 
-/** 磁盘回源登记记录（Map miss 时用，任意副本可读共享卷）。path 以 token 重建，不信落盘字符串；任何异常按不存在处理。 */
+/** Disk re-source of the record (used on Map miss; any replica can read the shared volume). path is rebuilt from the token — the persisted string is not trusted; any anomaly is treated as not-found. */
 const TOKEN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function parseRecord(raw: string): ArtifactRecord | null {
@@ -134,7 +141,7 @@ function parseRecord(raw: string): ArtifactRecord | null {
 }
 
 async function readRecordFromDisk(token: string): Promise<ArtifactRecord | null> {
-  // 先新记录目录，再兼容发版前的旧路径。
+  // New record dir first, then the pre-release legacy path for compatibility.
   for (const p of [recordPathOf(token), legacyRecordPathOf(token)]) {
     let raw: string;
     try {
@@ -144,13 +151,13 @@ async function readRecordFromDisk(token: string): Promise<ArtifactRecord | null>
     }
     const rec = parseRecord(raw);
     if (!rec) continue;
-    // path 不信落盘字符串，按 token + 扩展名重建。
+    // path does not trust the persisted string; rebuilt from token + extension.
     return { ...rec, path: pathOf(token, extOfName(rec.name)) };
   }
   return null;
 }
 
-/** DB 里的永久产物行 → ArtifactRecord（path 以 token 重建）。 */
+/** Permanent artifact DB row → ArtifactRecord (path rebuilt from the token). */
 async function readPersistentFromDb(token: string): Promise<ArtifactRecord | null> {
   const row = (await db
     .select({
@@ -175,9 +182,10 @@ async function readPersistentFromDb(token: string): Promise<ArtifactRecord | nul
 }
 
 /**
- * 清扫过期产物。
- * 三类来源：新记录目录、旧的顶层 .json 记录、孤儿产物文件（进程崩溃留下的无主文件）。
- * DB 里的永久产物永不过期，一律跳过。
+ * Sweeps expired artifacts.
+ * Three sources: the new record dir, the old top-level .json records, and orphan artifact files
+ * (unowned leftovers from process crashes).
+ * Permanent artifacts in DB never expire — all skipped.
  */
 async function sweep(): Promise<void> {
   await mkdir(RECORD_DIR, { recursive: true }).catch(() => {});
@@ -189,21 +197,21 @@ async function sweep(): Promise<void> {
   }
   const now = Date.now();
 
-  // DB 永久产物 token 集合：这些文件不受 TTL 影响，任何清理都要跳过。
+  // Set of permanent DB artifact tokens: these files ignore TTL, every cleanup must skip them.
   const permanent = new Set<string>();
   try {
     const rows = await db.select({ token: aiThreadArtifacts.token }).from(aiThreadArtifacts);
     for (const r of rows) permanent.add(r.token);
   } catch {
-    /* DB 不可用时按无永久产物处理，最坏情况是多留文件（可接受） */
+    /* DB unavailable: treat as no permanent artifacts; worst case keeps extra files (acceptable) */
   }
 
-  // 1) 新记录目录里的记录
+  // 1) Records in the new record dir
   let newRecords: string[] = [];
   try {
     newRecords = await readdir(RECORD_DIR);
   } catch {
-    /* 目录刚建还没内容 */
+    /* dir just created, no content yet */
   }
   for (const n of newRecords) {
     if (!n.endsWith('.json')) continue;
@@ -216,12 +224,12 @@ async function sweep(): Promise<void> {
     await unlink(recordPathOf(token)).catch(() => {});
   }
 
-  // 2) 旧的顶层 .json 记录（发版前写入）
+  // 2) Old top-level .json records (written before the release)
   for (const n of names) {
     if (!n.endsWith('.json')) continue;
     const token = n.slice(0, -'.json'.length);
     if (!TOKEN_RE.test(token)) continue;
-    if (permanent.has(token)) continue; // 该 token 现在是永久产物，.json 反而是它的产物文件本体
+    if (permanent.has(token)) continue; // this token is now a permanent artifact; the .json is actually its artifact file itself
     const rec = await readRecordFromDisk(token);
     if (!rec || rec.expiresAt === null) continue;
     if (now - rec.expiresAt <= 0) continue;
@@ -229,7 +237,7 @@ async function sweep(): Promise<void> {
     await unlink(legacyRecordPathOf(token)).catch(() => {});
   }
 
-  // 3) 孤儿产物文件：无任何记录指向，且 mtime 超过 TTL（进程崩溃残留）。
+  // 3) Orphan artifact files: pointed at by no record and mtime exceeds TTL (process-crash leftovers).
   for (const n of names) {
     if (n === '.records' || n.endsWith('.json')) continue;
     const token = n.replace(/\.[^.]+$/, '');
@@ -241,7 +249,7 @@ async function sweep(): Promise<void> {
       if (now - st.mtimeMs <= TTL_MS) continue;
       await unlink(p);
     } catch {
-      /* 已被并发清扫 */
+      /* already swept concurrently */
     }
   }
 
@@ -251,17 +259,17 @@ async function sweep(): Promise<void> {
 }
 
 export interface ArtifactMeta {
-  /** 原始文件名（含扩展名，可中文）。浏览器落盘名 = 此值。 */
+  /** Original file name (with extension, may be Chinese). Browser download name = this value. */
   name: string;
-  /** Content-Type；缺省按扩展名推断。 */
+  /** Content-Type; inferred from extension when absent. */
   mime?: string;
-  /** 可选条目数（沿用 xmind 语义：文件内含多少条用例）。 */
+  /** Optional entry count (xmind semantics: how many cases the file contains). */
   count?: number;
 }
 
 /**
- * 注册短 TTL 产物（xmind 导出等一次性文件）。
- * 30 分钟后过期 → 下载返回 410。登记记录落磁盘供多副本回源。
+ * Registers a short-TTL artifact (one-shot files like xmind exports).
+ * Expires after 30 minutes → download returns 410. The record file lands on disk for multi-replica re-sourcing.
  */
 export async function registerArtifact(buffer: Buffer, name: string, threadId: string): Promise<string> {
   const ext = extOfName(name);
@@ -284,8 +292,9 @@ export async function registerArtifact(buffer: Buffer, name: string, threadId: s
 }
 
 /**
- * 注册永久产物（skill 脚本生成的可下载文档）：落盘 + 落 ai_thread_artifacts 表。
- * 落库失败则删掉已落盘的文件——不留无主文件。
+ * Registers a permanent artifact (downloadable document produced by a skill script): writes to disk
+ * + inserts into ai_thread_artifacts.
+ * If the insert fails, the already-written file is deleted — no unowned files left behind.
  */
 export async function registerPersistentArtifact(
   buffer: Buffer,
@@ -332,7 +341,7 @@ export async function registerPersistentArtifact(
   return token;
 }
 
-/** 某线程的永久产物列表（新→旧）。 */
+/** Permanent artifact list for a thread (newest first). */
 export async function listThreadArtifacts(threadId: string): Promise<Array<{
   token: string;
   name: string;
@@ -364,7 +373,7 @@ export async function listThreadArtifacts(threadId: string): Promise<Array<{
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 }
 
-/** 过期/不存在返回 null（路由层转 410）。Map miss 时先查 DB（永久产物）再从共享磁盘回源；过期时 best-effort 清掉两个文件。 */
+/** Expired/not-found returns null (route layer turns it into 410). On Map miss, DB (permanent artifacts) is checked first, then the shared disk re-sources; on expiry both files are cleaned best-effort. */
 export async function getArtifact(token: string): Promise<ArtifactRecord | null> {
   if (!TOKEN_RE.test(token)) return null;
   const a = artifacts.get(token) ?? (await readPersistentFromDb(token)) ?? (await readRecordFromDisk(token));
@@ -384,7 +393,7 @@ export async function readArtifactFile(a: ArtifactRecord): Promise<Buffer> {
   return readFile(a.path);
 }
 
-/** RFC 5987：ASCII 兜底 + filename* 中文。 */
+/** RFC 5987: ASCII fallback + filename* for Chinese. */
 export function contentDispositionUtf8(name: string): string {
   const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'");
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;

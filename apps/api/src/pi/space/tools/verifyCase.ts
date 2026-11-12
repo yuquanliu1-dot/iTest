@@ -1,15 +1,18 @@
 /**
- * verify_case 工具：生成/修改用例后在真实被测系统上实测验证（全 AI 驱动，无硬编码登录）。
- * 编排：读用例 → resolveEnv → resolveCaseUrl → launch → 逐步骤 runAiTask（LLM 看截图+元素清单
- * 自主操作浏览器）→ 失败即停 → 失败页元素清单（复用 inspectPage 提取器）→ 结构化反馈供 agent 自修正。
- * AI 步骤 + 终态判定全过后，追加与正式回放同引擎的 compiled 机械干跑（executeCaseInBrowser）：
- * AI 临场执行可自适应修正（换落点/换目标重试），回放是逐字派发——分叉只有真机回放能暴露。
- * 登录/验证码/改密弹窗等场景由 LLM 按页面实际状态自主判断处理；凭据经占位符注入、执行时刻替换，
- * 不进 LLM 上下文/返回值/日志。验证不落 report（结果只回对话上下文）；副作用与正式执行一致（spec 已确认接受）。
+ * verify_case tool: live-verifies a case on the real SUT after it has been generated/modified (fully AI-driven, no hardcoded login).
+ * Orchestration: read case → resolveEnv → resolveCaseUrl → launch → step-by-step runAiTask (the LLM operates the browser
+ * autonomously from screenshots + element lists) → fail-stop on failure → failed-page element list (reuses the inspectPage extractor)
+ * → structured feedback for the agent to self-correct.
+ * After the AI steps + final-state judgment all pass, appends a compiled mechanical dry run with the same engine as formal replay
+ * (executeCaseInBrowser): AI live execution can adaptively correct (retry with a different landing point/target), replay dispatches
+ * verbatim — only a real-machine replay can expose the fork.
+ * Login/captcha/change-password dialogs and similar scenarios are judged and handled autonomously by the LLM from the page's actual
+ * state; credentials are injected via placeholders and substituted at execution time, never entering LLM context/returns/logs.
+ * Verification doesn't write a report (results go back into the conversation context only); side effects match formal execution (spec confirmed accepted).
  */
 import { randomUUID } from 'node:crypto';
 import { Type } from '@earendil-works/pi-ai';
-// 步骤/元哈希已移 verifyTrace.ts（solidify 轨迹新鲜度与 verify 前缀确认共用同一套哈希）
+// Step/meta hashes moved to verifyTrace.ts (solidify trace freshness and verify prefix confirmation share the same hash set)
 import { hashEffectiveSteps, hashVerifyMeta, traceKey, saveVerifiedTrace, clearVerifiedTrace } from './verifyTrace.js';
 import { chromium } from 'playwright-core';
 import type { Browser, BrowserContext, Page, Locator as PwLocator } from 'playwright-core';
@@ -48,31 +51,31 @@ import { recordNlAiFailSignal } from '../failureSignals.js';
 import { abortGuard, type ToolExecutor } from '../../tools.js';
 import type { SpaceToolsContext } from './context.js';
 
-// AI 轮次慢于编译回放，watchdog 基础 300s；多步用例按步数缩放（每步 ~130s 预算，
-// prod228 实测每步 AI 相 ~85-107s，130s/步留出机械回放/restore 余量）——固定 300s 装不下 10 步用例。
-// 单步对话轮上限独立收紧（STEP_MAX_TURNS）；单步 AI 相另有秒级帽子 STEP_AI_TIMEOUT_MS：
-// 某一步在慢 SUT 上拖到该帽子 → fail-stop 该步（StepTimedOut），而不是让整轮到全局预算耗尽才死。
-// 帽子取 240s（初版 150s 偏紧）：prod228 实测「冷容器重建后全新一轮 = 登录 + 步1 AI 相」就要 183.7s
-// （步内至多 maxTurns=5 轮，不同步冷启动+登录会到分钟级）——150s 会把这类合法慢步误杀成 StepTimedOut，
-// 240s 在 183.7s 上留 ~30% 余量，同时仍能兜住 LLM 客户端挂起这类轮数计数不到的异常。
+// AI turns are slower than compiled replay; watchdog base is 300s, scaled by step count for multi-step cases (~130s per step budget;
+// prod228 measured each step's AI phase at ~85-107s, 130s/step leaves room for mechanical replay/restore) — a fixed 300s can't fit 10-step cases.
+// The per-step conversation-turn cap is tightened separately (STEP_MAX_TURNS); the per-step AI phase also has a wall-clock cap STEP_AI_TIMEOUT_MS:
+// if one step drags to that cap on a slow SUT → fail-stop that step (StepTimedOut) instead of letting the whole round die when the global budget runs out.
+// The cap is 240s (the initial 150s was too tight): prod228 measured "a fresh round after cold container rebuild = login + step 1's AI phase" at 183.7s
+// (up to maxTurns=5 turns per step; cold-start + login on different steps reaches minute-level) — 150s would miskill such legitimate slow steps as StepTimedOut;
+// 240s leaves ~30% headroom over 183.7s while still catching anomalies like a hung LLM client that turn counting can't see.
 const VERIFY_TIMEOUT_BASE_MS = 300_000;
 const VERIFY_TIME_PER_STEP_MS = 130_000;
 const STEP_AI_TIMEOUT_MS = 240_000;
 const STEP_MAX_TURNS = 5;
-/** caseId 是 UUID 形状才允许直查 testCases.id（uuid 列）；否则只可能是草稿 localId，跳过 DB 查询。 */
+/** Only a UUID-shaped caseId may query testCases.id directly (uuid column); otherwise it can only be a draft localId — skip the DB query. */
 const UUID_SHAPE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 全局看门狗预算 = max(基础 300s, 步数 × 每步 130s)。多步用例的慢是渐进累计的，预算必须随步数增长。 */
+/** Global watchdog budget = max(base 300s, steps × 130s per step). A multi-step case's slowness accumulates gradually; the budget must grow with the step count. */
 export function computeVerifyTimeoutMs(stepCount: number): number {
   return Math.max(VERIFY_TIMEOUT_BASE_MS, stepCount * VERIFY_TIME_PER_STEP_MS);
 }
-// 同一用例连续失败上限：prompt 建议 3 轮，但 prompt 建议不硬——agent 可无视。这里加硬约束：
-// 第 N+1 轮若失败大类签名与前一轮相同（无进展）即强制停止并给出"环境/前置问题"提示，
-// 避免在环境缺数据/页面持续不稳定的场景里空转烧 LLM 调用。
+// Consecutive-failure cap per case: the prompt suggests 3 rounds, but prompt advice isn't hard — the agent can ignore it. A hard constraint lives here:
+// if round N+1's failure-class signature matches the previous round (no progress), force-stop and emit an "environment/precondition problem" hint,
+// avoiding spinning through LLM calls when the environment lacks data or the page stays unstable.
 const VERIFY_MAX_STAGNANT_ROUNDS = 3;
 
-/** 凭据占位符：提示词里只有字面量，valueSub 在动作执行时刻替换为真实值。
- *  协议常量随 execute 层定义（valueSub 语义所在地），此处转出口径不变。 */
+/** Credential placeholders: only the literal appears in prompts; valueSub substitutes the real value at action execution time.
+ *  The protocol constants are defined with the execute layer (where valueSub semantics live); the re-export surface here is unchanged. */
 export { USER_PH, PASSWORD_PH, SECRET_PH };
 
 interface AiStepResult {
@@ -85,32 +88,33 @@ interface AiStepResult {
   failureReason?: 'StepReportedFailed' | 'AiTaskAborted' | 'SecretMissing' | 'LocatorMismatch' | 'AmbiguousLocator' | 'StepTimedOut';
 }
 
-/** 按 thread×case 维度跟踪连续同因失败轮次（防空转硬约束用）。
- *  失败签名 = 失败大类（failureClassFromReason）——签名相同视为无进展。
- *  通过 → 清除计数；强制停止 → 回退到上限-1（两次强制停止之间放行 1 次实测，不永久死锁）。 */
+/** Tracks consecutive same-cause failure rounds per thread×case (the anti-spin hard constraint).
+ *  Failure signature = failure class (failureClassFromReason) — identical signatures count as no progress.
+ *  Pass → clear the counter; forced stop → rewind to cap-1 (one live run is allowed between two forced stops, so no permanent deadlock). */
 interface RoundState {
   lastSignature: string;
   consecutive: number;
-  /** 上一轮「已通过步骤数」——停滞判据的进展信号。 */
+  /** Last round's "passed step count" — the progress signal for the stagnation criterion. */
   lastPassed: number;
-  /** 熔断后下一次调用是护栏放行的最后一轮（note 会显式警告该轮结束后必须汇报）。入口消费即清。 */
+  /** After a breaker trip, the next call is the final round the guard allows (the note explicitly warns it must report when that round ends). Cleared on consumption at the entry. */
   escapedAfter?: boolean;
 }
 const verifyRoundState = new Map<string, RoundState>();
 const roundKey = (threadId: string, caseId: string) => `${threadId}::${caseId}`;
-/** AI 相（视觉执行）自身的失败原因——与 locator 闸门击杀不同，这类失败说明
- *  模型看着真实页面也完成不了这步：大概率是自然语言步骤描述与页面实际不符
- *  （目标不存在/措辞歧义/前置状态没建立），agent 改 selector 无从下手。 */
+/** The AI phase's (visual execution) own failure reasons — unlike locator-gate kills, these mean the model couldn't complete the step
+ *  even while looking at the real page: most likely the natural-language step description doesn't match the page's reality
+ *  (target doesn't exist / ambiguous wording / precondition state never established), and fixing the selector is no help to the agent. */
 const AI_PHASE_FAIL_REASONS = new Set(['AiTaskAborted', 'StepTimedOut', 'StepReportedFailed']);
 
-/** failureReason → 失败大类（停滞护栏的签名口径）。
- *  prod228 2026-10-26 实录（26 轮 verify / 2h39m / 零产出）：旧签名 `${failureReason}:${stepOrder}`
- *  下同签名最长连续仅 2 轮，护栏全程未触发——AI 每轮换选择器、失败步前后挪动，旧签名就当成"新原因"。
- *  归一口径：locator 闸门击杀（LocatorMismatch/AmbiguousLocator）与 AI 相执行失败
- *  （AiTaskAborted/StepTimedOut/StepReportedFailed）合并为 execution——同一页面障碍（元素找不到/
- *  弹窗挡路/SUT 状态漂移）在不同轮会以这两种形态交替出现，拆成两类会被横跳绕过；
- *  终态判定 / 机械回放分叉 / 密文缺失语义各自独立成类（修好一类自然换类，属正常推进）。
- *  未映射的新原因按原样字符串参与比较（同样新原因连续出现仍可累计停滞）。 */
+/** failureReason → failure class (the signature convention for the stagnation guard).
+ *  prod228 2026-10-26 record (26 verify rounds / 2h39m / zero output): under the old signature `${failureReason}:${stepOrder}`
+ *  the longest same-signature streak was only 2 rounds and the guard never tripped — the AI changed selectors each round and the
+ *  failing step drifted back and forth, so the old signature treated it as a "new reason" every time.
+ *  Normalized convention: locator-gate kills (LocatorMismatch/AmbiguousLocator) and AI-phase execution failures
+ *  (AiTaskAborted/StepTimedOut/StepReportedFailed) merge into execution — the same page obstruction (element not found /
+ *  dialog blocking / SUT state drift) alternates between these two shapes across rounds; splitting them lets the guard be evaded by hopping;
+ *  final-state judgment / mechanical-replay fork / missing ciphertext each form their own class (fixing one naturally moves to another — normal progress).
+ *  Unmapped new reasons participate in comparison as their raw string (the same new reason appearing consecutively still accumulates stagnation). */
 function failureClassFromReason(reason: string | null | undefined): string {
   switch (reason) {
     case 'LocatorMismatch':
@@ -127,10 +131,10 @@ function failureClassFromReason(reason: string | null | undefined): string {
       return reason ?? 'Unknown';
   }
 }
-/** 机械执行步（不经浏览器、直接发协议/查库的 kind）：浏览器 AI 相结构上无法执行它们。
- *  prod228 2026-10-28 实录：AI 相被要求「执行 SQL 查询数据库」时反复尝试、超 5 轮未完成
- *  （agent 自己记下「AI 相是浏览器执行器，无法执行 SQL 查询数据库」）。这类步骤的真值由
- *  结尾的 compiled 机械干跑裁决（runSql/runHttpRequest 等不经 Playwright），AI 相不该掺和。 */
+/** Mechanical-execution steps (kinds that hit protocols/query the DB directly, no browser): the browser AI phase structurally cannot execute them.
+ *  prod228 2026-10-28 record: when the AI phase was asked to "execute a SQL query against the database" it retried repeatedly for over 5 turns
+ *  (the agent itself noted "the AI phase is a browser executor and cannot execute SQL queries against the database"). Such steps' truth is
+ *  decided by the compiled mechanical dry run at the end (runSql/runHttpRequest etc. bypass Playwright); the AI phase shouldn't meddle. */
 const MECHANICAL_ONLY_KINDS: ReadonlySet<string> = new Set([
   'httpRequest',
   'sql',
@@ -138,24 +142,24 @@ const MECHANICAL_ONLY_KINDS: ReadonlySet<string> = new Set([
   'sendSyslog',
 ]);
 
-/** 一步的 compiled 是否全部由机械执行步组成（= 无任何浏览器动作）。 */
+/** Whether a step's compiled consists entirely of mechanical-execution steps (= no browser actions at all). */
 function isMechanicalOnlyStep(compiled: unknown): boolean {
   const actions = (Array.isArray(compiled) ? compiled : []) as Array<{ kind?: string }>;
   if (actions.length === 0) return false;
   return actions.every((a) => MECHANICAL_ONLY_KINDS.has(a?.kind ?? ''));
 }
 
-/** 一步的 compiled 是否含机械执行步（混合步：浏览器动作 + 机械步）。 */
+/** Whether a step's compiled contains any mechanical-execution step (a mixed step: browser actions + mechanical steps). */
 function hasMechanicalStep(compiled: unknown): boolean {
   const actions = (Array.isArray(compiled) ? compiled : []) as Array<{ kind?: string }>;
   return actions.some((a) => MECHANICAL_ONLY_KINDS.has(a?.kind ?? ''));
 }
 
-/** 登录类用例判定（导出供单测）：步骤引用了用户名/密码凭据占位符 = 测的是登录/登出这类
- *  会话行为本身。这类用例必须从干净会话起跑——此前 perform_login/其他用例留下的登录态会把
- *  goto 弹回首页，登录页根本到不了（2026-11-08 prod228 实录：登录用例 3 轮 verify 全灭于
- *  「页面已是登录后状态」）。instruction 与 compiled 的 fill value 都要扫（占位符可能在任一
- *  处）；STEP_SECRET 是步骤级敏感值（业务表单密码框），不是登录信号，不参与判定。 */
+/** Login-case detection (exported for unit tests): a step referencing the username/password credential placeholders = the case tests
+ *  session behavior itself (login/logout). Such cases must start from a clean session — a login state left by perform_login/other cases
+ *  would bounce the goto back to the home page, and the login page would never be reachable (2026-11-08 prod228 record: a login case's
+ *  3 verify rounds all died on "the page is already in a logged-in state"). Both the instruction and compiled fill values are scanned
+ *  (the placeholder can appear in either); STEP_SECRET is a step-level sensitive value (business form password field), not a login signal, and doesn't participate. */
 export function isLoginCaseSteps(steps: Array<{ instruction?: unknown; compiled?: unknown }>): boolean {
   const re = /ITEST_(?:USERNAME|PASSWORD)/;
   return steps.some(
@@ -163,7 +167,7 @@ export function isLoginCaseSteps(steps: Array<{ instruction?: unknown; compiled?
   );
 }
 
-/** 从 verify_case 响应 data JSON 解析出"失败签名"（失败大类）；passed 或解析失败 → null（清计数）。 */
+/** Parses the "failure signature" (failure class) out of the verify_case response data JSON; passed or unparseable → null (clears the counter). */
 function failureSignatureFromData(data: string): string | null {
   try {
     const j = JSON.parse(data) as {
@@ -178,8 +182,8 @@ function failureSignatureFromData(data: string): string | null {
   }
 }
 
-/** 从 verify_case 响应 data JSON 数出「已通过步骤数」——停滞护栏的进展判据。
- *  steps 里含上一轮已确认的前缀结果（resume 轮合并），所以该数就是本例已确认到第几步。 */
+/** Counts the "passed step number" out of the verify_case response data JSON — the progress criterion for the stagnation guard.
+ *  steps includes the previous round's confirmed prefix results (merged in resume rounds), so this number is how far the case has been confirmed. */
 function passedCountFromData(data: string): number {
   try {
     const j = JSON.parse(data) as { steps?: Array<{ status?: string }> };
@@ -190,10 +194,10 @@ function passedCountFromData(data: string): number {
   }
 }
 
-/** 更新按 thread×case 的失败签名轮次：通过 → 清除；签名变更 → 重置计数；同签名 → 累加。
- *  但「同签名 + 已确认前缀变长」= 失败点后移（有进展）→ 不计为空转，重置连续计数。
- *  2026-11-07 prod228 实录：同一用例连续 3 轮都是 execution 大类，但失败步从第 1 步挪到第 2 步
- *  （前缀每轮都在变长），旧口径把这种「在推进」的失败也判成停滞并熔断，agent 拿不到继续的机会。 */
+/** Updates the failure-signature round counter per thread×case: pass → clear; signature changed → reset the counter; same signature → accumulate.
+ *  But "same signature + confirmed prefix grew" = the failure point moved forward (progress) → not counted as spinning; the consecutive counter resets.
+ *  2026-11-07 prod228 record: the same case spent 3 consecutive rounds in the execution class while the failing step moved from step 1 to step 2
+ *  (the prefix grew every round); the old convention judged this "advancing" failure as stagnation and tripped, denying the agent any chance to continue. */
 function updateRoundState(key: string, data: string): void {
   const sig = failureSignatureFromData(data);
   if (sig === null) {
@@ -203,8 +207,8 @@ function updateRoundState(key: string, data: string): void {
   verifyRoundState.set(key, nextRoundState(verifyRoundState.get(key), sig, passedCountFromData(data)));
 }
 
-/** 停滞护栏状态推进（纯函数，便于单测）：签名变 → 重置；同签名但已确认前缀变长（有进展）→ 重置；
- *  同签名且无进展 → 连续计数 +1。 */
+/** Stagnation-guard state transition (pure function, unit-testable): signature changed → reset; same signature but the confirmed prefix grew (progress) → reset;
+ *  same signature and no progress → consecutive count +1. */
 export function nextRoundState(
   prev: RoundState | undefined,
   sig: string,
@@ -216,13 +220,13 @@ export function nextRoundState(
 }
 
 /**
- * 终态判定失败时探测「环境无前置数据」信号（Element-UI 空表 / 分页 0 条 / 通用空态文案）。
- * 用于把 VisionAssertionFailed 的失败反馈从「与预期不符」细化成「环境里根本没有可验证的数据」——
- * 2026-10-13 prod228 实测：AI 建的用例只做「进页面看列表」，而「自动处置」tab 恒为 0 条，
- * 终态判定必然落空。反馈若只说「不符」，AI 会靠稀释 expectedOutcome 蒙混过关（三轮才收敛）。
- * 命中即在 note 里点名：要么让用例先造出前置数据，要么如实汇报环境缺数据，不要改预期。
- * 用字符串表达式传 page.evaluate：tsx/esbuild keepNames 会注入 __name 辅助调用，
- * 浏览器端无此符号会 ReferenceError（与 inspectPage.ts 同因）。
+ * Probes the "environment has no precondition data" signal when the final-state judgment fails (Element-UI empty table / pagination at 0 / generic empty-state copy).
+ * Used to refine the VisionAssertionFailed failure feedback from "doesn't match expectations" into "there is no verifiable data in the environment at all" —
+ * 2026-10-13 prod228 measurement: the AI-built case only did "open the page and look at the list", while the 「自动处置」 tab stayed at 0 rows,
+ * so the final-state judgment was bound to miss. If the feedback only says "mismatch", the AI will water down expectedOutcome to sneak through (three rounds to converge).
+ * On a hit, the note names it: either have the case seed the precondition data first, or honestly report the environment lacks data — don't change the expectation.
+ * Passes page.evaluate as a string expression: tsx/esbuild keepNames injects __name helper calls,
+ * and the browser has no such symbol → ReferenceError (same cause as inspectPage.ts).
  */
 async function detectEmptyDataState(page: Page): Promise<string | null> {
   try {
@@ -244,7 +248,7 @@ async function detectEmptyDataState(page: Page): Promise<string | null> {
   }
 }
 
-/** 收集 compiled 步骤里的全部 locator 候选（供静态定位预检 / 失败归因的形态无关探针复用）。 */
+/** Collects every locator candidate from compiled steps (reused by the static locator pre-check / failure attribution's shape-agnostic probes). */
 export function collectStepLocators(compiled: unknown): Locator[] {
   const actions = (Array.isArray(compiled) ? compiled : []) as Array<{ kind?: string; locator?: Locator[] }>;
   const out: Locator[] = [];
@@ -258,9 +262,9 @@ export function collectStepLocators(compiled: unknown): Locator[] {
   return out;
 }
 
-/** 全视觉判定：全部步骤无 compiled（或纯 aiTask）→ full 模式据此跳过机械干跑。
- *  注意「纯 aiTask」不在 mechanical 闸门里用：机械干跑 dispatch 到 aiTask 会真实执行
- *  （cdp.ts case 'aiTask'），是正式可派发动作——mechanical 闸门看 hasNoCompiledSteps。 */
+/** All-visual detection: no step has compiled (or all are pure aiTask) → the full mode skips the mechanical dry run based on this.
+ *  Note "pure aiTask" is not used in the mechanical gate: a mechanical dry run dispatching to aiTask really executes it
+ *  (cdp.ts case 'aiTask'), which is a formally dispatchable action — the mechanical gate looks at hasNoCompiledSteps. */
 function isAllVisualSteps(steps: EffectiveStep[]): boolean {
   return steps.every((s) => {
     const c = (s as { compiled?: unknown }).compiled;
@@ -269,9 +273,9 @@ function isAllVisualSteps(steps: EffectiveStep[]): boolean {
   });
 }
 
-/** 全部步骤都没有可派发的 compiled（纯自然语言）：机械干跑无从逐字派发，mechanical 模式据此拒绝。
- *  与 isAllVisualSteps 的区别：纯 aiTask 的 compiled 也是正式可派发动作——2026-10-28 prod228 实录：
- *  全 aiTask 固化结果被旧口径拒之门外，被迫再跑一遍被明令禁止的 full。 */
+/** No step has dispatchable compiled (pure natural language): the mechanical dry run has nothing to dispatch verbatim, so the mechanical mode refuses on this.
+ *  Difference from isAllVisualSteps: pure aiTask compiled is also a formally dispatchable action — 2026-10-28 prod228 record:
+ *  an all-aiTask solidified result was turned away by the old convention, forced to re-run the explicitly forbidden full. */
 function hasNoCompiledSteps(steps: EffectiveStep[]): boolean {
   return steps.every((s) => {
     const c = (s as { compiled?: unknown }).compiled;
@@ -279,51 +283,52 @@ function hasNoCompiledSteps(steps: EffectiveStep[]): boolean {
   });
 }
 
-/** 结尾干跑要喂哪些步。
+/** Which steps the closing dry run feeds.
  *
- *  - mechanical（固化验收）：全喂——严格语义，缺 compiled 即失败（compile-missing 是真缺陷）。
- *  - full 且全 compiled（固化后重测）：全喂——逐字派发就是分叉检测的本体。
- *  - full 且混合（自然语言步 + 带 compiled 的步，如讨论期手写的 sql/httpRequest 步）：
- *    只喂**纯机械步**。两个理由，都与 isAllVisualSteps 的注释同源：
- *    (a) 自然语言步已由 AI 相验证过，干跑逐字派发它没有 compiled，只会以 compile-missing
- *        抛错 → replayFailure → 整例误判 ReplayDivergence（混合用例在旧口径下必假失败）；
- *    (b) 编译过的 UI 步在混合用例里同样不能单独回放——它的前置自然语言步状态不在干跑上下文里，
- *        单独派发必然误判。
- *    机械步（sql/httpRequest/observeLog/sendSyslog）不依赖浏览器页面状态，是混合用例
- *    里唯一能被干跑真裁决的部分——讨论期写的查库/调接口步就靠它拿到断言结论。 */
+ *  - mechanical (solidification acceptance): feed all — strict semantics; a missing compiled fails (compile-missing is a real defect).
+ *  - full with all compiled (post-solidification retest): feed all — verbatim dispatch is the very body of fork detection.
+ *  - full with mixed steps (natural-language steps + steps carrying compiled, e.g. hand-written sql/httpRequest steps from the discussion period):
+ *    feed only **pure mechanical steps**. Two reasons, sharing the same origin as the isAllVisualSteps comment:
+ *    (a) natural-language steps were already verified by the AI phase; verbatim dispatching them has no compiled and would only throw
+ *        compile-missing → replayFailure → misjudge the whole case as ReplayDivergence (mixed cases always false-failed under the old convention);
+ *    (b) compiled UI steps can't be replayed alone in a mixed case either — their precondition natural-language step state isn't in the
+ *        dry-run context, so dispatching them alone necessarily misjudges.
+ *    Mechanical steps (sql/httpRequest/observeLog/sendSyslog) don't depend on browser page state and are the only part of a mixed case
+ *    the dry run can truly adjudicate — the DB-query/API steps written during the discussion period get their assertion conclusions through exactly this. */
 function pickReplayTargets(steps: EffectiveStep[], mode: 'full' | 'mechanical' | undefined): EffectiveStep[] {
   if (mode === 'mechanical') return steps;
   const dispatchable = steps.filter((s) => {
     const c = (s as { compiled?: unknown }).compiled;
     return Array.isArray(c) && c.length > 0;
   });
-  if (dispatchable.length === steps.length) return steps; // 全 compiled：全喂
+  if (dispatchable.length === steps.length) return steps; // all compiled: feed all
   return dispatchable.filter((s) => isMechanicalOnlyStep(s.compiled));
 }
 
-/** 前缀确认状态：AI 相跨轮续跑的依据（Problem 1）。
- *  key = threadId::caseId（与停滞护栏同 key、同进程内内存生命周期）。
- *  stepsHash 按步存：某步的 instruction/compiled/assertion/sensitive/delayMs 任一变化即使
- *  firstDiff 落在该步、前缀截断到它之前——判定缓存随步哈希自动失效。
- *  metaHash 刻意排除 expectedOutcome/title：最常改的 vision 修正不该让整个 AI 相白跑。
+/** Prefix confirmation state: the basis for cross-round AI-phase resume (Problem 1).
+ *  key = threadId::caseId (same key and same in-process memory lifecycle as the stagnation guard).
+ *  stepsHash is stored per step: any change to a step's instruction/compiled/assertion/sensitive/delayMs puts
+ *  firstDiff at that step and truncates the prefix before it — the judgment cache invalidates automatically with the step hash.
+ *  metaHash deliberately excludes expectedOutcome/title: the most frequently changed vision fix shouldn't waste the whole AI phase.
  */
 interface VerifyConfirmState {
   stepsHash: string[];
   metaHash: string;
-  /** 已确认条数 k：步骤 1..k 的 AI 相全过且未被后续改动击穿。 */
+  /** Confirmed count k: steps 1..k's AI phase all passed and were not pierced by later edits. */
   confirmedThrough: number;
-  /** stepId → 断言判定缓存（judgeAssertionText 的单轮 LLM 判定；跳过 judge 的前缀步据此复用）。 */
+  /** stepId → assertion judgment cache (judgeAssertionText's single-round LLM judgment; prefix steps that skip the judge reuse this). */
   assertionVerdicts: Map<string, { real: boolean; dropped?: string }>;
-  /** 已确认前缀步骤的 AI 相通过结果（响应 steps 合并复用；截图路径跨轮仍可访问，无 TTL）。 */
+  /** Confirmed prefix steps' AI-phase pass results (merged and reused in the response steps; screenshot paths stay accessible across rounds, no TTL). */
   confirmedStepResults: AiStepResult[];
-  /** 已确认步骤的 AI 动作轨迹（resume 轮合并完整轨迹用）：前缀步沿用上一轮条目，
-   *  本轮 AI 相补齐改动步。没有它，resume 轮存不出完整轨迹 → 紧跟的 solidify 无从零执行
-   *  （prod228 实测：改一步再验，resumeFrom=2 恰好撞上轨迹存不下的轮次）。 */
+  /** Confirmed steps' AI action traces (for merging complete traces in resume rounds): prefix steps carry over the previous round's entries,
+   *  and this round's AI phase fills in changed steps. Without it, a resume round can't save a complete trace → the immediately following
+   *  solidify has nothing to reuse for zero-execution
+   *  (prod228 measurement: edit one step then verify, and resumeFrom=2 happens to land on a round that can't save traces). */
   confirmedTraces: Map<string, AiAction[]>;
 }
 const verifyConfirmCache = new Map<string, VerifyConfirmState>();
 
-/** 机械回放敏感字段解密表：恢复续跑（restore）与结尾完整回放共用。 */
+/** Mechanical replay's sensitive-field decryption table: shared by restore-resume and the closing full replay. */
 function buildReplaySecrets(steps: EffectiveStep[]): Map<string, string> {
   const m = new Map<string, string>();
   for (const s of steps) {
@@ -341,14 +346,14 @@ function buildReplaySecrets(steps: EffectiveStep[]): Map<string, string> {
   return m;
 }
 
-/** 闸门用的候选形状（与 buildCandidates 输出一致）。 */
+/** Candidate shape used by the gate (matches buildCandidates output). */
 type GateCandidate = { kind: string; loc: PwLocator; src?: string };
-/** 闸门用的 locator 形状（@itest/shared Locator 的结构子集）。 */
+/** Locator shape used by the gate (a structural subset of @itest/shared Locator). */
 type GateLocatorSpec = { strategy?: string; value?: string };
 
-/** locator 的「锚点文案」：作者想点的那个元素的文字。
- *  text 策略 = value 本身；role 策略 = role[name="X"] 里的 name（或 "role 文案" 形态的后半段）。
- *  没有文案锚点的（css/xpath/testId）不做歧义消解——那类选择器本就该由作者写精确。 */
+/** A locator's "anchor text": the text of the element the author intended to click.
+ *  text strategy = the value itself; role strategy = the name in role[name="X"] (or the latter half of a "role 文案" shape).
+ *  Locators without a text anchor (css/xpath/testId) get no ambiguity resolution — that kind of selector should be written precisely by the author anyway. */
 export function locatorAnchorName(l: GateLocatorSpec): string | null {
   const v = typeof l?.value === 'string' ? l.value.trim() : '';
   if (!v) return null;
@@ -361,14 +366,14 @@ export function locatorAnchorName(l: GateLocatorSpec): string | null {
   return null;
 }
 
-/** 唯一「精确文案」锚点：作者原意就是这一段文字。
- *  Playwright 的 getByRole/getByText 默认子串匹配（「XX（本级）」也算命中「XX」），
- *  子串候选数天然偏大；exact 才是作者意图的唯一锚点。命中数必须恰好 1。 */
+/** The unique "exact text" anchor: the author's intent is precisely this text.
+ *  Playwright's getByRole/getByText match by substring by default (「XX（本级）」 also matches 「XX」),
+ *  so substring candidate counts are naturally inflated; exact is the only anchor of the author's intent. The hit count must be exactly 1. */
 async function probeUniqueAnchor(page: Page, spec: GateLocatorSpec, name: string): Promise<PwLocator | null> {
   const tries: PwLocator[] = [];
   if (spec.strategy === 'role') {
     const m = spec.value!.match(/^([\w-]+)(?:\[name="([^"]*)"\]|\[name='([^']*)'\])$/);
-    // role 的可及名会被嵌套内容污染（级联 li 的可及名含子列文字）→ exact 常为 0，再退到 exact 文本。
+    // A role's accessible name gets polluted by nested content (the cascader li's accessible name contains child-column text) → exact often yields 0; fall back to exact text.
     if (m) tries.push(page.getByRole(m[1] as never, { name, exact: true }));
     tries.push(page.getByText(name, { exact: true }));
   } else if (spec.strategy === 'text') {
@@ -381,7 +386,7 @@ async function probeUniqueAnchor(page: Page, spec: GateLocatorSpec, name: string
   return null;
 }
 
-/** 命中候选的「DOM 序第一个可见匹配」——回放 strict 兜底实际会点的那个元素。 */
+/** The hit candidate's "first visible match in DOM order" — the element replay's strict fallback would actually click. */
 async function visibleFirstMatch(cand: GateCandidate): Promise<PwLocator | null> {
   try {
     const filtered = cand.loc.filter({ visible: true });
@@ -392,12 +397,12 @@ async function visibleFirstMatch(cand: GateCandidate): Promise<PwLocator | null>
   }
 }
 
-/** 假歧义消解：命中多个时，证明「回放实际会点的那个元素」就是目标 → 不判歧义。
- *  回放口径（cdp.ts tryFirstMatch 的 strict 兜底）：命中多元素 → filter({visible:true}).first()。
- *  两种「点得对」形态：
- *   ① 回放点的元素自身文案一字不差（text 策略：精确文案元素本身）；
- *   ② 回放点的元素包含目标（role 策略：级联节点 li 包裹同名 label 子节点）。
- *  否则（回放会点到「XX（本级）」这类另一个条目）→ 保留 AmbiguousLocator。 */
+/** False-ambiguity resolution: when multiple elements are hit, proving that "the element replay would actually click" is the target → no ambiguity.
+ *  Replay convention (cdp.ts tryFirstMatch's strict fallback): multiple element hits → filter({visible:true}).first().
+ *  Two "clicked correctly" shapes:
+ *   ① the element replay clicks has exactly the target text (text strategy: the exact-text element itself);
+ *   ② the element replay clicks contains the target (role strategy: a cascader li wrapping a same-named label child).
+ *  Otherwise (replay would click another entry like 「XX（本级）」) → keep AmbiguousLocator. */
 async function anchorResolvesAmbiguity(
   page: Page,
   locs: GateLocatorSpec[],
@@ -417,25 +422,25 @@ async function anchorResolvesAmbiguity(
   return contained > 0;
 }
 
-/** compiled 保真校验：verify_case 的 AI 可以临场绕开坏 locator，但正式回放是逐字执行 compiled 的——
- *  校验不通过必须在验证阶段就判失败，逼 AI 用真实选择器修正，而不是"AI 能过=用例能跑"。
- *  **闸门口径必须不严于回放**（回放口径见 cdp.ts tryFirstMatch）：闸门比回放严 = 把回放能过的步判死
- *  （2026-11-07 prod228 实录：级联选择「XX」被同前缀的「XX（本级）」撞成假歧义，回放实际点得对）。
- *  时机：click/hover 在步骤前校验，但**只判步内第一个动作**（回放第一步面对的正是步首 DOM）；
- *  步内后续动作面对的是前序动作执行后的 DOM，此刻探测结构性不可靠（详见 judgeIdxs 处的两条理由），
- *  交结尾的 compiled 机械干跑裁决。断言类、fill、check、select、extract 在 AI 通过后校验
- *  （这些动作结束时元素理应仍在）。navigate/aiTask/waitFor 无从或不必校验，跳过。
- *  候选探测直接复用回放的 buildCandidates + count()：候选展开（纯 #id 提升、role 拆 name、testId 包
- *  data-testid）与探测顺序跟 tryFirstMatch 完全一致——verify 的「首命中候选」就是回放实际会采用的候选。
- *  两级判失败：
- *  1) 全部候选未命中 → LocatorMismatch（回放必挂）；
- *  2) 首命中候选命中多个元素（count>1）且动作是 click/fill/hover → AmbiguousLocator——这三类在回放里
- *     命中多元素会静默退到 .first() 操作 DOM 序第一个（check/select 是显式抛错，无静默风险），
- *     verify 只测 count>0 会放行"碰巧对"的选择器（目标恰好是第一个匹配），表单加字段/调序即静默错元素。
- *     但「回放退到 first()」不等于「回放点错」：若第一个可见匹配正是目标（精确文案锚点），
- *     回放点得对 → 不判歧义（见 anchorResolvesAmbiguity）。
- *  探测窗口与回放对齐（LOCATOR_PROBE_ROUNDS 轮 × 250ms ≈3s，首轮立即）：SPA 深链挂载滞后可达秒级、
- *  networkidle 不可靠，verify 预检窗口若短于回放会误判回放能过的 locator。 */
+/** compiled fidelity check: verify_case's AI can bypass a bad locator live, but formal replay executes compiled verbatim —
+ *  a failed check must be judged as failure at the verification stage, forcing the AI to fix it with real selectors, not "the AI got through = the case runs".
+ *  **The gate must never be stricter than replay** (replay convention in cdp.ts tryFirstMatch): gate stricter than replay = killing steps replay would pass
+ *  (2026-11-07 prod228 record: cascader selection of 「XX」 collided into false ambiguity with the same-prefix 「XX（本级）」, while replay actually clicked correctly).
+ *  Timing: click/hover validate before the step, but **only the step's first action is judged** (replay's first action faces exactly the step-start DOM);
+ *  a step's later actions face the DOM after preceding actions executed, where probing is structurally unreliable (see the two reasons at judgeIdxs),
+ *  and is adjudicated by the closing compiled mechanical dry run. Assertion kinds, fill, check, select, extract validate after the AI passes
+ *  (these elements should still be present when the actions end). navigate/aiTask/waitFor can't or needn't be validated; skipped.
+ *  Candidate probing directly reuses replay's buildCandidates + count(): candidate expansion (bare-#id promotion, role name splitting, testId wrapping in
+ *  data-testid) and probe order match tryFirstMatch exactly — verify's "first-hit candidate" is the candidate replay would actually adopt.
+ *  Two failure levels:
+ *  1) all candidates miss → LocatorMismatch (replay would fail);
+ *  2) the first-hit candidate hits multiple elements (count>1) and the action is click/fill/hover → AmbiguousLocator — in replay these three kinds
+ *     silently fall back to .first() operating the first in DOM order on multi-element hits (check/select throw explicitly, no silent risk);
+ *     verify testing only count>0 would admit "coincidentally right" selectors (the target happens to be the first match); adding a form field/reordering then silently operates the wrong element.
+ *     But "replay falls back to first()" ≠ "replay clicks wrong": if the first visible match is exactly the target (exact-text anchor),
+ *     replay clicks correctly → no ambiguity (see anchorResolvesAmbiguity).
+ *  The probe window aligns with replay (LOCATOR_PROBE_ROUNDS rounds × 250ms ≈3s, first round immediate): SPA deep-link mount lag can reach seconds and
+ *  networkidle is unreliable; a verify pre-check window shorter than replay's would misjudge locators replay would pass. */
 export async function checkCompiledLocators(
   page: Page,
   compiled: unknown,
@@ -445,14 +450,14 @@ export async function checkCompiledLocators(
     kind?: string;
     locator?: Array<{ strategy?: string; value?: string }>;
   }>;
-  // 状态跳变点：navigate/aiTask 会把 DOM 上下文整个换掉，跨跳变的动作不能对着别的时刻的 DOM 判。
+  // State-jump points: navigate/aiTask swap out the whole DOM context; actions spanning a jump can't be judged against a different moment's DOM.
   let lastJump = -1;
   for (let i = 0; i < actions.length; i++) {
     const k = actions[i]?.kind;
     if (k === 'navigate' || k === 'aiTask') lastJump = i;
   }
-  // 结构性错误与命中无关，直接判失败（web 回放遇 mobile-only strategy 必抛）。
-  // 按 mode 分族（click/hover 属 pre、其余属 post），与命中探测分开——命中探测只看待判动作。
+  // Structural errors are hit-independent; judge as failure directly (web replay always throws on mobile-only strategies).
+  // Family by mode (click/hover are pre, the rest post), separated from hit probing — hit probing only looks at the actions to be judged.
   for (const a of actions) {
     if (!a.kind) continue;
     const timing = a.kind === 'click' || a.kind === 'hover' ? 'pre' : 'post';
@@ -467,17 +472,17 @@ export async function checkCompiledLocators(
       }
     }
   }
-  // 待判动作下标：
-  //  - pre：只判步内【第一个】动作，且仅当它是 click/hover。理由是「闸门不能比回放严」：
-  //    回放逐字派发时，第一个动作面对的正是步首 DOM，它的命中与否就是回放第一步的成败；
-  //    步内后续动作面对的是【前序动作执行后】的 DOM，此刻探测结构性不可靠——
-  //      ① 目标此刻还不存在 → 判 LocatorMismatch，可回放其实走得通
-  //         （2026-11-07 prod228 实录：4 连击的级联步 [打开面板, 选三级] 的 [1][2][3] 在 [0] 执行前
-  //          命中 0；同理 fill 后点下拉建议项）；
-  //      ② 目标此刻存在但被前序动作改变了上下文 → 判「歧义」而回放此刻只有一个匹配
-  //         （级联 level-0 的 li 包着 level-1 的 li，可及名被子列文案污染 → count=2）。
-  //    后续动作的 locator 交给结尾的 compiled 机械干跑裁决（与正式回放同引擎、逐字派发）。
-  //  - post：判最后一个状态跳变之后的动作（跳变之前的动作目标已被换掉的页面带走，判了必假失败）。
+  // Action indices to judge:
+  //  - pre: judge only the step's【first】action, and only when it is click/hover. Reason: "the gate can't be stricter than replay":
+  //    when replay dispatches verbatim, the first action faces exactly the step-start DOM, so its hit/miss is replay's first-step success/failure;
+  //    the step's later actions face the【post-preceding-action】DOM, where probing is structurally unreliable —
+  //      ① the target doesn't exist yet → judged LocatorMismatch, though replay would actually work
+  //         (2026-11-07 prod228 record: in the 4-click cascader step [打开面板, 选三级], [1][2][3] hit 0 before [0] executes;
+  //          likewise clicking a dropdown suggestion after a fill);
+  //      ② the target exists now but a preceding action changed its context → judged "ambiguous" while replay currently has only one match
+  //         (the cascader's level-0 li wraps the level-1 li; its accessible name is polluted by child-column text → count=2).
+  //    Later actions' locators go to the closing compiled mechanical dry run (same engine as formal replay, verbatim dispatch).
+  //  - post: judge actions after the last state jump (before the jump, the action targets were carried away by the replaced page; judging them guarantees a false failure).
   const judgeIdxs: number[] = [];
   if (mode === 'pre') {
     const first = actions[0];
@@ -494,7 +499,7 @@ export async function checkCompiledLocators(
     const a = actions[idx]!;
     const locs = Array.isArray(a.locator) ? a.locator : [];
     if (locs.length === 0) continue;
-    // 与回放同一候选构造 + count 探测：任一候选命中即停（回放同款短路）；全部落空才判 LocatorMismatch。
+    // Same candidate construction + count probing as replay: stop on any candidate hit (replay's same short-circuit); only all-miss judges LocatorMismatch.
     const cands = buildCandidates(page, { locator: locs as unknown as Locator[] });
     if (cands.length > 0) {
       let hitCount = 0;
@@ -508,7 +513,7 @@ export async function checkCompiledLocators(
           const desc = c.src ?? c.kind;
           const probe = c.loc as unknown as { count?: () => Promise<number> };
           if (!probe || typeof probe.count !== 'function') {
-            // 没有 count() 的候选直接接受（与回放 tryFirstMatch 一致）
+            // Candidates without count() are accepted directly (same as replay's tryFirstMatch)
             hitCount = 1;
             hitDesc = `${c.kind} ${desc}`;
             hitCand = c;
@@ -525,7 +530,7 @@ export async function checkCompiledLocators(
             const msg = `${c.kind}=${desc} 命中 0 个元素`;
             if (!missSeen.has(msg)) { missSeen.add(msg); misses.push(msg); }
           } catch (e) {
-            // 探测异常（选择器不合法）按该候选落空处理——回放对 count 异常同样捕获后继续下一候选
+            // Probe exceptions (illegal selector) count as that candidate missing — replay likewise catches count exceptions and continues to the next candidate
             const msg = `${c.kind}=${desc} 探测异常: ${(e as Error).message.slice(0, 80)}`;
             if (!missSeen.has(msg)) { missSeen.add(msg); misses.push(msg); }
           }
@@ -535,7 +540,7 @@ export async function checkCompiledLocators(
         return { reason: 'LocatorMismatch', message: `compiled 定位校验不通过（回放将失败）: ${a.kind} 全部 ${cands.length} 个候选均未命中 — ${misses.join('；')}` };
       }
       if ((a.kind === 'click' || a.kind === 'fill' || a.kind === 'hover') && hitCount > 1) {
-        // 假歧义消解：回放命中多元素会退到「可见匹配的第一个」，若那正是目标 → 回放点得对，不判歧义。
+        // False-ambiguity resolution: on multi-element hits replay falls back to "the first visible match"; if that is exactly the target → replay clicks correctly, no ambiguity.
         if (hitCand && (await anchorResolvesAmbiguity(page, locs, hitCand))) continue;
         return {
           reason: 'AmbiguousLocator',
@@ -547,17 +552,17 @@ export async function checkCompiledLocators(
   return null;
 }
 
-/** 单步执行指令：自然语言 + compiled 参考 + 占位符凭据段（仅配置了 login 时）+ 输出契约。
- *  solidify_case 复用同一提示词协议（AI 相执行 + 占位符凭据注入）。
- *  webManifest：环境可用 web 服务清单（renderWebResourceManifest 产出）——有命名 web 时注入，
- *  让模型知道每个服务各自的凭据占位符形态（@name），而不是只知道一个裸占位符。 */
+/** Single-step execution instruction: natural language + compiled reference + placeholder credential section (only when login is configured) + output contract.
+ *  solidify_case reuses the same prompt protocol (AI-phase execution + placeholder credential injection).
+ *  webManifest: the environment's available web-service listing (produced by renderWebResourceManifest) — injected when named webs exist,
+ *  so the model knows each service's own credential placeholder shape (@name) rather than just one bare placeholder. */
 export function buildStepInstruction(
   step: { order: number; instruction: string | null; compiled: unknown; assertion: unknown },
   total: number,
   sec: { hasLogin: boolean; hasSecret: boolean },
   droppedAssertion?: string | null,
   webManifest?: string,
-  /** 本步含机械执行步（sql/httpRequest 等）：AI 相只做浏览器那一半。 */
+  /** This step contains mechanical-execution steps (sql/httpRequest etc.): the AI phase only does the browser half. */
   hasMechanicalAction?: boolean,
 ): string {
   const lines: string[] = [];
@@ -568,12 +573,12 @@ export function buildStepInstruction(
   lines.push('- 编译动作（compiled DSL，供参考；若页面实际与它不符，以实际页面为准自行调整）：');
   lines.push(JSON.stringify(step.compiled));
   if (hasMechanicalAction) {
-    // 混合作业：机械那半 AI 结构上做不到，明说边界，别让它反复尝试白烧轮次。
+    // Mixed workload: the AI structurally cannot do the mechanical half — state the boundary explicitly, don't let it burn turns trying.
     lines.push('- 本步含机械执行动作（数据库查询 / HTTP 请求 / 日志读取等不经浏览器）：**你只负责浏览器里的那部分动作**。机械动作由平台在验证末尾用 compiled 干跑执行并裁决，你不要尝试在浏览器里查库或发接口请求，也不要因为做不到而报失败。');
   }
   if (droppedAssertion) {
-    // 判定为描述性短语的断言已被丢弃：不写「预期结果」行，改为如实告知，
-    // 免得 AI 自行完成操作后又去核实一个页面上根本不存在的文案。
+    // Assertions judged as descriptive phrases are dropped: don't write the 「预期结果」 line; state the truth instead,
+    // so the AI doesn't go verify copy that doesn't exist anywhere on the page after finishing the operation.
     lines.push(`- 断言：已忽略（原预期「${droppedAssertion}」是描述状态的短语而非页面文案，页面上不会有这段文字）。仅完成上面的操作即可，不要为它编造失败理由。`);
   } else if (step.assertion != null) {
     lines.push(`- 断言（预期结果，完成后自行核实）：${JSON.stringify(step.assertion)}`);
@@ -582,7 +587,7 @@ export function buildStepInstruction(
     lines.push('');
     lines.push('## 登录凭据');
     lines.push('若当前页面是登录页（由你根据页面内容自行判断），先用占位符完成登录再执行本步：');
-    // 有命名 web 服务时逐服务点名占位符形态；否则退回裸占位符（走三级默认链）。
+    // With named web services, name each service's placeholder shape; otherwise fall back to the bare placeholder (three-level default chain).
     if (webManifest) {
       lines.push('## 本次可用的 web 服务');
       lines.push(webManifest);
@@ -616,7 +621,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
       '在真实被测系统上逐步验证用例的 compiled 步骤可执行性。全 AI 驱动：模型看截图与元素清单自主操作浏览器，登录/验证码/弹窗由模型按页面实际状态自主处理，失败即停并返回失败步骤详情与失败页可交互元素清单。执行前平台直接 goto 用例 url——url 必须是目标业务页的完整深链（含应用前缀），导航/登录不写进步骤，第一步从目标页面上的业务操作开始。AI 步骤与终态判定全过后，还会用与正式回放同引擎的机械干跑逐字执行 compiled（failureReason=ReplayDivergence 表示 AI 能过但逐字回放分叉）。mode 决定验收形态：mode="full"（默认）= 全 AI 实测（AI 相 + 终态判定 + 机械干跑），实测通过时顺带缓存每步的 AI 动作轨迹（供 solidify_case 零执行复用）；mode="mechanical" = 固化后的机械验收（跳过 AI 相，只做机械干跑 + 终态判定，语义验证已由前一轮实测完成）。**不要对同一用例重复跑 full**：full 的 AI 相每步 1~2 分钟，步骤未变时重复跑纯浪费。caseId 支持两种形态：落库用例 id，或本线程 stage_case 生成的 localId（纯草稿验证，全程不落库，save 时才正式建用例）。依据清单修正 locator 后可再次调用（同一用例建议最多 3 轮）。再次调用会复用上一轮已确认的前缀：以机械回放重建前缀 DOM 状态（代替重跑 AI 相，已确认步骤不再烧 LLM 轮次），AI 相从首个改动/失败步续跑，结尾仍保留与正式回放同引擎的完整机械干跑。验证会产生真实副作用（与正式执行一致，机械干跑会再执行一遍）。',
     parameters: Type.Object({
       caseId: Type.String({ minLength: 1 }),
-      // full=全 AI 实测（默认，含机械干跑）；mechanical=固化后机械验收（跳过 AI 相，只干跑+终态判定）
+      // full=full AI live test (default, includes mechanical dry run); mechanical=post-solidification mechanical acceptance (skips AI phase, dry run + final-state judgment only)
       mode: Type.Optional(Type.Union([Type.Literal('full'), Type.Literal('mechanical')])),
     }),
     promptGuidelines: [
@@ -641,12 +646,12 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
     ],
     execute: async (input, signal) => {
       const { caseId, mode } = input as { caseId: string; mode?: 'full' | 'mechanical' };
-      // 停止检查点：会话已停止就直接短路，不起浏览器不烧 LLM。
+      // Stop checkpoint: if the session already stopped, short-circuit directly — no browser launch, no LLM spend.
       if (signal?.aborted) return { ok: false, error: '已停止：用户中断了本次验证' };
-      // ── 空转硬约束：同一用例同因连续失败达上限即强制停止（prompt 指南对 agent 不硬,这里真正拦截）──
-      // 失败签名未变即无进展：环境缺前导数据/被测页面持续不稳定这类前置问题重试再多轮也只重复烧 LLM,
-      // 直接短路返回把结论交给 agent 如实汇报。触发后将计数回退到上限-1——下一次调用允许正常跑一轮：
-      // 仍同因失败会再次触发停止（强制停止之间至多放行 1 次实测）,已修复则通过清除计数,不会永久死锁。
+      // ── Anti-spin hard constraint: same case failing for the same reason reaches the cap → forced stop (the prompt guidance isn't hard on the agent; the real interception happens here) ──
+      // An unchanged failure signature means no progress: precondition problems like missing environment data / a persistently unstable page only burn LLM calls however many rounds they retry,
+      // so short-circuit the return and hand the conclusion to the agent for honest reporting. After tripping, the counter rewinds to cap-1 — the next call may run one normal round:
+      // a same-cause failure trips the stop again (at most 1 live run is allowed between forced stops); if fixed, passing clears the counter — no permanent deadlock.
       const roundState = verifyRoundState.get(roundKey(ctx.threadId, caseId));
       if (roundState && roundState.consecutive >= VERIFY_MAX_STAGNANT_ROUNDS) {
         verifyRoundState.set(roundKey(ctx.threadId, caseId), {
@@ -665,33 +670,33 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               action: null,
               error: null,
               failureReason: 'StagnantRoundLimit',
-              // 措辞刻意加硬（prod228 2026-10-27 实录：护栏触发后 agent 无视软提示，
-              // 转头读源码/建探针用例自诊 9~15 分钟）。必须显式禁止一切工具调用并给出可粘贴汇报模板。
+              // Wording deliberately hardened (prod228 2026-10-27 record: after the guard tripped, the agent ignored the soft hint
+              // and went off reading source code / building probe cases for 9~15 minutes of self-diagnosis). All tool calls must be explicitly forbidden and a paste-ready report template given.
               humanMessage: `【停滞护栏·强制熔断】失败大类 ${roundState.lastSignature} 已连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮零进展，本次调用已强制停止验证（未启动浏览器、未消耗 LLM）。同类失败连续出现说明是环境前置数据缺失、被测页面持续不稳定或用例存在前置依赖——重复实测无法解决。你现在必须立即停止调用一切工具（包括 verify_case、读仓库源码、grep、查数据库——它们都无法改变结果），直接向用户汇报，可用模板：「用例验证停滞：已实测多轮，最后卡在〈失败步骤与 failureReason〉；连续同类失败表明环境或用例存在前置问题，重复实测无法解决。建议：a.检查环境数据与页面可用性 b.简化或拆分该用例 c.人工处理。环境就绪后告诉我，我会再验证一轮（护栏会放行）。」在用户明确回复之前，不要再发起任何工具调用。`,
               note: `verify_case 停滞护栏触发:失败大类 ${roundState.lastSignature} 连续 ${VERIFY_MAX_STAGNANT_ROUNDS} 轮无进展,强制停止以防空转消耗 LLM 调用。触发后必须停止一切工具调用并按 humanMessage 模板向用户汇报;下一次调用是护栏放行的最后一轮,再失败将再次熔断。`,
             },
           }),
         };
       }
-      // 放行轮（熔断后的下一次调用）显式警告：本轮结束后必须汇报，不得继续自行重试。
+      // Escape round (the call right after a breaker trip) gets an explicit warning: this round must end with a report; no more self-retries.
       const isEscapeRound = roundState?.escapedAfter === true;
       if (roundState?.escapedAfter) {
         verifyRoundState.set(roundKey(ctx.threadId, caseId), { ...roundState, escapedAfter: false });
       }
-      /** 本轮附加提示（放行轮警告 / 入口重定向告警），随 rdata 顶层 roundNotes 返回给 agent。 */
+      /** This round's extra notes (escape-round warning / entry redirect notice), returned to the agent at rdata's top-level roundNotes. */
       const roundNotes: string[] = [];
       if (isEscapeRound) {
         roundNotes.push(`⚠ 停滞护栏放行的最后一轮：本轮再以同类失败结束将再次熔断。本轮结束后必须立即向用户汇报结果（停止一切工具调用），不得继续自行重试或自诊。`);
       }
       const withRoundNotes = (payload: Record<string, unknown>): string =>
         JSON.stringify(roundNotes.length > 0 ? { ...payload, roundNotes } : payload);
-      // 最外层兜底：db 查询 / chromium launch / resolveCaseUrl 等未预料异常一律转 ok:false
-      // （ToolExecutor 契约：不向 agent 循环抛异常）
+      // Outermost fallback: unexpected exceptions from db queries / chromium launch / resolveCaseUrl etc. all convert to ok:false
+      // (ToolExecutor contract: never throw into the agent loop)
       try {
-        // ── 前置校验（不启动浏览器）──
-        // caseId 双形态：落库用例 id，或本线程 stage_case 的 localId（纯草稿——验证全程不落库，save 时才正式建 case/steps）
-        // 非 UUID 形状的 localId 跳过 uuid 列查询直查草稿（否则先炸 invalid input syntax for type uuid，
-        // 草稿回落根本没机会跑——prod228 2026-10-27 实录）
+        // ── Preflight validation (no browser launch) ──
+        // caseId dual shape: a persisted case id, or this thread's stage_case localId (pure draft — verification never persists; save formally creates case/steps)
+        // Non-UUID-shaped localIds skip the uuid-column query and go straight to drafts (otherwise invalid input syntax for type uuid throws first,
+        // and the draft fallback never gets a chance to run — prod228 2026-10-27 record)
         const dbCase = UUID_SHAPE_RE.test(caseId)
           ? (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0]
           : undefined;
@@ -707,8 +712,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         if (dbCase?.platform === 'mobile') {
           return { ok: false, error: 'verify_case 暂不支持移动端用例（v1 仅支持 web）' };
         }
-        // 执行所需元数据两种来源对齐到同一形状；草稿无 groupId（无分组默认 URL 链）、无 platform（暂存仅 web）
-        // 注意不能用 dbCase?.x ?? stagedCase!.x 合并——dbCase 存在而字段为 null 时会落到 stagedCase!.x 空引用
+        // The two sources of execution metadata align to the same shape; drafts have no groupId (no group default URL chain) and no platform (staging is web only)
+        // Note you can't merge with dbCase?.x ?? stagedCase!.x — when dbCase exists but the field is null, it would fall through to a null stagedCase!.x reference
         const caseMeta = dbCase
           ? {
               title: dbCase.title,
@@ -716,7 +721,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               expectedOutcome: dbCase.expectedOutcome,
               defaultEnvId: dbCase.defaultEnvId,
               versionId: dbCase.versionId,
-              // 用例绑定的 web 服务名：无 @ref 占位符的凭据归属（与执行层同一把尺）。
+              // The case-bound web service name: credential ownership for non-@ref placeholders (same yardstick as the execution layer).
               webServiceRef: dbCase.webServiceRef ?? null,
             }
           : {
@@ -725,7 +730,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               expectedOutcome: stagedCase!.expectedOutcome ?? null,
               defaultEnvId: stagedCase!.defaultEnvId ?? null,
               versionId: stagedCase!.versionId,
-              // 暂存表无 web_service_ref 列（stage_case 暂不涉及 web 绑定），草稿恒走默认链。
+              // The staging table has no web_service_ref column (stage_case doesn't touch web binding yet); drafts always take the default chain.
               webServiceRef: null,
             };
         const steps: EffectiveStep[] = dbCase
@@ -736,7 +741,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               instruction: typeof s.action === 'string' ? s.action : null,
               compiled: Array.isArray(s.compiled) ? s.compiled : null,
               assertion: typeof s.assertion === 'string' ? s.assertion : null,
-              // 暂存步骤本无 sensitive/密文字段（save 映射也只带 instruction/assertion/compiled），与落库路径的虚拟插入步对齐
+              // Staged steps have no sensitive/ciphertext fields to begin with (the save mapping also only carries instruction/assertion/compiled), aligned with the DB path's virtual inserted steps
               sensitive: false,
               delayMs: null,
               secretCiphertext: null,
@@ -745,14 +750,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }));
         if (steps.length === 0) return { ok: false, error: '用例没有可验证的步骤' };
 
-        // ── 暂存叠加：本线程已暂存的 stage_case_op 虚拟应用到 DB 用例上,验证基于暂存状态继续——
-        //    失败→暂存修正→直接重验的循环全程不落库,全部通过后用户在暂存区统一保存 ──
-        //    （纯草稿没有 DB caseId 可供 op 挂载，修正循环 = 同 localId 重发 stage_case 覆盖后再验）
+        // ── Staging overlay: stage_case_op entries already staged on this thread are virtually applied onto the DB case, verification continues on the staged state —
+        //    the fail → stage a fix → re-verify loop never persists; after everything passes the user saves uniformly from the staging area ──
+        //    (pure drafts have no DB caseId for ops to attach to; their fix loop = re-send stage_case with the same localId to overwrite, then verify)
         let effectiveSteps = steps;
         const overlayPatches: { url?: string | null; defaultEnvId?: string | null } = {};
         let opsApplied = 0;
         if (dbCase) {
-          // 带上 localId：叠加态插入步的合成 id 是 staged:<insert op 的 localId>（固化/验证同源）。
+          // Carry the localId: in the overlaid state an inserted step's synthetic id is staged:<insert op's localId> (same source for solidify/verify).
           const stagedOps = await db
             .select({ localId: aiStageCaseOps.localId, op: aiStageCaseOps.op, payload: aiStageCaseOps.payload })
             .from(aiStageCaseOps)
@@ -769,14 +774,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         }
         if (effectiveSteps.length === 0) return { ok: false, error: '用例没有可验证的步骤' };
         const effectiveCase = { ...caseMeta, ...overlayPatches };
-        // 全局看门狗预算随有效步数缩放：慢 SUT 上每步 AI 相渐进累计，固定预算装不下多步用例
+        // The global watchdog budget scales with the effective step count: on a slow SUT each step's AI phase accumulates gradually; a fixed budget can't fit multi-step cases
         const verifyTimeoutMs = computeVerifyTimeoutMs(effectiveSteps.length);
-        // 登录类用例 → 三处干净会话门槛（acquire / cachedState / commit），见 isLoginCaseSteps
+        // Login cases → three clean-session gates (acquire / cachedState / commit), see isLoginCaseSteps
         const loginCase = isLoginCaseSteps(effectiveSteps);
 
-        // ── 前缀确认决策（Problem 1：跨轮砍 AI 相前缀重跑，保留结尾完整机械回放）──
-        // validPrefixLen>0 表示上轮已确认、且本步骤未变/环境未换的前缀条数。本轮用机械回放重建
-        // 前缀 DOM 状态后，AI 相从该处续跑；restore 失败则收敛到失败步由 AI 接管。
+        // ── Prefix confirmation decision (Problem 1: cut the AI-phase prefix rerun across rounds, keep the closing full mechanical replay) ──
+        // validPrefixLen>0 = the number of prefix steps confirmed last round whose content is unchanged / environment is the same. This round rebuilds
+        // the prefix DOM state via mechanical replay, then the AI phase resumes from there; if restore fails it converges to the failed step and the AI takes over.
         const ckey = roundKey(ctx.threadId, caseId);
         const curStepsHash = hashEffectiveSteps(effectiveSteps);
         const curMetaHash = hashVerifyMeta({
@@ -784,11 +789,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           defaultEnvId: effectiveCase.defaultEnvId,
           versionId: effectiveCase.versionId,
         });
-        // ── 机械验收模式（mode='mechanical'）：solidify 固化后的验收专用 ──
-        // AI 相的语义验证已在实测轮完成，本模式只做 compiled 机械干跑 + 终态判定；
-        // 纯自然语言用例（无 compiled）无从逐字派发 → 拒绝并引导 full。含 aiTask 的 compiled
-        // 是正式可派发动作（干跑 dispatch aiTask 由 AI 真实执行）→ 放行（2026-10-28 prod228
-        // 实录：全 aiTask 固化结果被旧口径拒绝，被迫再跑被明令禁止的 full）。
+        // ── Mechanical acceptance mode (mode='mechanical'): dedicated to acceptance after solidify_case compiles the case ──
+        // The AI phase's semantic validation already happened in the live-test round; this mode only does the compiled mechanical dry run + final-state judgment.
+        // A pure natural-language case (no compiled) has nothing to dispatch verbatim → reject and steer to full. Compiled containing aiTask
+        // is a formally dispatchable action (the dry run's dispatch aiTask is really executed by the AI) → let through (2026-10-28 prod228
+        // record: an all-aiTask solidified result was rejected by the old convention, forced to rerun the explicitly forbidden full).
         if (mode === 'mechanical' && hasNoCompiledSteps(effectiveSteps)) {
           return {
             ok: false,
@@ -799,7 +804,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         let validPrefixLen = 0;
         if (prevConfirm && mode !== 'mechanical') {
           if (prevConfirm.metaHash !== curMetaHash) {
-            validPrefixLen = 0; // 换被测对象(SUT/环境/版本)，前缀全部失效
+            validPrefixLen = 0; // SUT/environment/version swapped → the whole prefix is invalidated
           } else {
             let d = -1;
             for (let i = 0; i < effectiveSteps.length; i++) {
@@ -810,7 +815,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         }
         const prefixConfirmedResults: AiStepResult[] = prevConfirm?.confirmedStepResults.slice(0, validPrefixLen) ?? [];
 
-        // ── LLM 前置检查（全 AI 驱动的硬前提；未配置直接失败，用户去设置页配置）──
+        // ── LLM preflight (the hard prerequisite of the fully AI-driven flow; unconfigured fails directly, user configures it on the settings page) ──
         let client: Awaited<ReturnType<typeof resolveLlmClient>>['client'];
         try {
           client = (await resolveLlmClient()).client;
@@ -818,7 +823,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           return { ok: false, error: `LLM 未配置，无法执行 AI 验证: ${(e as Error).message}` };
         }
 
-        // ── 环境解析（case defaultEnv > version link > 项目默认）──
+        // ── Environment resolution (case defaultEnv > version link > project default) ──
         let envCtx: Awaited<ReturnType<typeof resolveEnv>>;
         try {
           envCtx = await resolveEnv(
@@ -831,25 +836,25 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           if (errName === 'EnvProjectMismatch') return { ok: false, error: '环境所属项目与当前用例不匹配' };
           return { ok: false, error: `环境解析失败: ${(e as Error).message}` };
         }
-        // 提示词里的 web 服务清单（只含 name/origin/有无凭据，绝不含真实值）——环境解析后才有，
-        // 故在这里算一次，逐步骤复用。
+        // The prompt's web-service listing (name/origin/credential presence only, never real values) — only available after environment resolution,
+        // so compute it once here and reuse per step.
         const webManifest = (() => {
           try { return renderWebResourceManifest({ envCtx }); } catch { return ''; }
         })();
 
-        // ── L1 源码静态预检（advisory，不判死）──
-        // 仓库就绪即自动尝试：全用例候选一次性批量查源码（单次 rg 遍历树），得到
-        // unique/multiple/not-found/dynamic-suspect，进 verify_progress.staticNote +
-        // result.staticAnalysis + 失败 note。
-        // 「静态排行，运行时拍板」：静态事实不改变任何通过/失败判决，只做上下文；
-        // repo 未配置/检出中/工具异常 → 静默降级为现行纯运行时行为，零回归。
+        // ── L1 source-code static pre-check (advisory, never verdicts) ──
+        // Attempted automatically whenever the repo is ready: all case candidates batch-query the source in one shot (a single rg tree walk), yielding
+        // unique/multiple/not-found/dynamic-suspect, which feed verify_progress.staticNote +
+        // result.staticAnalysis + the failure note.
+        // "Static ranking, runtime decides": static facts never change any pass/fail verdict, context only;
+        // repo unconfigured / still checking out / tool error → silently degrade to the current pure-runtime behavior, zero regression.
         const staticByStep: StaticLocatorReport[][] = [];
         const staticAnalysis: Array<{ order: number; note: string }> = [];
         if (ctx.repo.cwd) {
           try {
             const cwd = repoToolCwd(ctx.repo);
-            // 先把所有步骤的候选摊平，一次批量计数——跨步骤重复的 pattern（如多个 fill 共用
-            // [placeholder="账号"]）只查一次；逐步骤查询则是每步都重扫一遍树。
+            // First flatten every step's candidates and batch-count in one shot — a pattern repeated across steps (e.g. several fills sharing
+            // the same placeholder) is queried once; per-step queries would re-walk the tree for every step.
             const stepLocs = effectiveSteps.map((s) => collectStepLocators(s.compiled));
             const flat = stepLocs.flat();
             const allReports = flat.length > 0
@@ -864,23 +869,23 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               if (note) staticAnalysis.push({ order: effectiveSteps[i]!.order, note });
             }
           } catch {
-            // 仓库工具异常表面化前静默降级：静态分析是增强，不是依赖
+            // Silent degradation before repo tool errors surface: static analysis is an enhancement, not a dependency
           }
         }
         const staticNote = staticAnalysis.length > 0
           ? `源码静态分析:${staticAnalysis.map((a) => `步骤#${a.order} ${a.note}`).join(' | ')}`
           : null;
 
-        // ── 浏览器 + watchdog → 逐步骤 AI 驱动执行（fail-stop）──
+        // ── Browser + watchdog → step-by-step AI-driven execution (fail-stop) ──
         let browser: Browser | undefined;
         let context: BrowserContext | undefined;
         let page: Page | undefined;
         let live: ReturnType<typeof registerLiveView> | undefined;
         let timedOut = false;
-        // 保活状态机：registryOwned=浏览器归注册表（命中轮）；completed=走到正常完成发射点；
-        // zombie=在途异步仍在驱动浏览器（runAiTask/restore/replay 均无 AbortSignal 可抢占，
-        // 只能弃守）。finally 凭 completed&&!zombie&&!timedOut+连通性决定 commit 保活 /
-        // invalidate 销毁 / 照旧即用即关。
+        // Keep-alive state machine: registryOwned = the browser belongs to the registry (hit round); completed = reached a normal completion emission point;
+        // zombie = in-flight async still driving the browser (runAiTask/restore/replay all lack a preemtable AbortSignal —
+        // can only be abandoned). The finally block uses completed&&!zombie&&!timedOut+connectivity to decide commit keep-alive /
+        // invalidate destroy / plain use-and-close as before.
         const sessKey = roundKey(ctx.threadId, caseId);
         let registryOwned = false;
         let completed = false;
@@ -888,47 +893,47 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
         let reused = false;
         let appliedCount = 0;
         let reuseApplied = 0;
-        // 结尾机械干跑的终态页（finally 关闭防 kept context 页积累；声明在 try 外供 finally 可见。
-        // 断言初始化：赋值发生在 onPageReady 回调里，CFA 不可见——裸 null 初始化会让 finally 收窄成 never）
+        // The closing mechanical dry run's terminal page (finally closes it to keep kept-context pages from accumulating; declared outside try so finally can see it.
+        // Assertion init: the assignment happens inside the onPageReady callback, invisible to CFA — a bare null init would narrow finally to never)
         let replayPage = null as Page | null;
         const timer = setTimeout(() => {
           timedOut = true;
           if (browser) void browser.close().catch(() => undefined);
         }, verifyTimeoutMs);
-        // 停止守卫：用户点停止即抢占在途 AI/回放；finally 关浏览器让残余操作随之终止。
+        // Stop guard: the user clicking stop preempts in-flight AI/replay; finally closes the browser so residual operations terminate with it.
         const stopGuard = abortGuard(signal, '已停止：用户中断了本次验证');
         try {
-          // resolveCaseUrl 可能抛 WebServiceMissing(相对 url 但环境无 web 服务),放进本 try 让 finally
-          // 的 envCtx.close 兜底(异常路径也不泄漏连接池)。
-          // 草稿无分组，share null groupId:resolveCaseUrl 在传 envCtx 时只用 resolveWebOrigin 拼相对路径,
-          // 相对 url(/开头)→默认 web 服务 origin + path;绝对直通;空 → 默认 origin(空 url 无服务则 null)。
+          // resolveCaseUrl may throw WebServiceMissing (relative url but the environment has no web service); inside this try so finally's
+          // envCtx.close covers it (no connection-pool leak on the exception path either).
+          // Drafts have no group, share a null groupId: with envCtx passed, resolveCaseUrl only uses resolveWebOrigin to join relative paths;
+          // a relative url (/prefix) → default web service origin + path; absolute passes through; empty → default origin (null if no service for an empty url).
           const resolvedUrl = await resolveCaseUrl(
             {
               url: effectiveCase.url,
-              // 草稿无 DB 行:groupId 传 envCtx 时未被使用(仅 defaultEnvFallback 的 displayWebEnv 需要),填空串;
-              // webServiceRef 草稿无法绑定命名服务 → null 走默认 web 服务。
+              // Drafts have no DB row: groupId is unused when envCtx is passed (only defaultEnvFallback's displayWebEnv needs it), pass an empty string;
+              // drafts cannot bind a named webServiceRef → null takes the default web service.
               groupId: stagedCase ? '' : dbCase!.groupId,
               webServiceRef: stagedCase ? null : (dbCase!.webServiceRef ?? null),
             },
             { envCtx },
           );
           const targetUrl = resolvedUrl && /^https?:\/\//.test(resolvedUrl) ? resolvedUrl : undefined;
-          // 干跑 ExecContext 的相对 URL navigate 靠 caseWebOrigin 拼绝对地址（与 runCase 同源解析）——
-          // 此前两处 ctx 都没带，机械干跑遇 /开头 navigate 一律 invalid-navigate-url（prod228 实测）。
+          // The dry-run ExecContext's relative-URL navigate relies on caseWebOrigin to build absolute addresses (same resolution as runCase) —
+          // previously neither ctx carried it, and a mechanical dry run hitting a /prefix navigate always got invalid-navigate-url (prod228 record).
           let caseWebOrigin: string | null = null;
           try { caseWebOrigin = envCtx.resolveWebOrigin(effectiveCase.webServiceRef ?? null); } catch { caseWebOrigin = null; }
-          // 停止检查点：起浏览器前再探一次（上面的 DB/静态分析期间用户可能已点停止）。
+          // Stop checkpoint: probe once more before launching the browser (the user may have clicked stop during the DB/static analysis above).
           if (signal?.aborted) return { ok: false, error: '已停止：用户中断了本次验证' };
-          // ── 保活复用尝试（mechanical 终端验收轮不进注册表，保持即用即关）──
-          // 命中：browser/context/page 停在上一轮终态，前缀零重放零 restore，AI 相从 appliedCount
-          // 直接续跑；未命中：fresh launch，轮末 finally 视结果上册供下轮复用。注册表任何失效
-          // 条件（过期/断连/前缀步被编辑/换环境）由 acquire 内部销毁降级到本路径。
-          // 登录用例同样跳过：kept context 停在上一轮的登录后状态，登录页到不了。
+          // ── Keep-alive reuse attempt (mechanical terminal-acceptance rounds don't enter the registry, staying use-and-close) ──
+          // Hit: browser/context/page rest at last round's terminal state, zero prefix replay and zero restore, the AI phase resumes directly from appliedCount;
+          // miss: fresh launch, and end-of-round finally registers it for the next round's reuse as the result warrants. Any registry invalidation
+          // condition (expired / disconnected / prefix step edited / environment swapped) is destroyed inside acquire, degrading to this path.
+          // Login cases skip too: a kept context rests at last round's post-login state and can never reach the login page.
           const acquired =
             mode !== 'mechanical' && !loginCase ? acquireBrowserSession(sessKey, curMetaHash, curStepsHash) : null;
-          // 命中登录态缓存则注入 context:同环境重试轮/后续用例免登录（过期自愈,见 loginStateCache）；
-          // 复用轮登录态天然在 kept context 里，不注入（loginKey 仍要算——轮末 storageState 回写用）；
-          // 登录用例两者都不允许（缓存/kept 会话都会把 goto 弹回登录后首页）——干净会话是前提
+          // On a login-state cache hit inject it into the context: same-environment retry rounds / later cases skip login (self-heals on expiry, see loginStateCache);
+          // a reused round's login state is already inside the kept context, so don't inject (loginKey still computed — the end-of-round storageState write-back needs it);
+          // Login cases allow neither (cache/kept sessions both bounce the goto back to the post-login home page) — a clean session is the prerequisite
           const loginKey = loginStateKey(envCtx.envId, envCtx.login?.user);
           const cachedState = acquired || loginCase ? null : getLoginState(loginKey);
           if (acquired) {
@@ -948,27 +953,27 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             });
             page = await context.newPage();
           }
-          // 浏览器 console error / pageerror 采集：AI 相自管 page（不经 runStepsInContext），
-          // 自挂订阅；失败收尾时 drain 进归因证据（缓冲上限 10 条，典型即失败步的报错）。
-          // 同页幂等（WeakMap 返回同实例）：复用轮拿到既有实例，先 drain 清隔轮残留。
+          // Browser console error / pageerror collection: the AI phase manages its own page (not via runStepsInContext),
+          // so subscribe directly; drained into attribution evidence on failure wrap-up (buffer cap 10 entries, typically the failed step's errors).
+          // Idempotent per page (WeakMap returns the same instance): a reused round gets the existing instance, drain first to clear cross-round residue.
           drainConsoleForPage(page);
           const consoleCapture = createConsoleCapture(page);
-          // playground 实时画面：注册页面源，start 事件把流地址带给前端进度卡；finally close 结束流
-          // （ctx.liveView === false 为批量后台链路：不注册画面源，省 0.5fps 截图轮询开销）
+          // Playground live view: register the page source, the start event hands the stream URL to the frontend progress card; finally close ends the stream
+          // (ctx.liveView === false is the batch background path: no view source registered, saving the 0.5fps screenshot polling overhead)
           if (ctx.liveView !== false) {
             live = registerLiveView();
             live.setPage(page);
           }
 
           const reportId = `verify-${randomUUID()}`;
-          // 断言判定缓存重建：resume 轮前缀步跳过 judge，但 restore/结尾完整回放都要用
-          // droppedAssertions 把描述性短语断言排除在机械判定之外——从上一轮判定缓存恢复。
+          // Assertion-verdict cache rebuild: resume rounds' prefix steps skip judging, but restore/the closing full replay both need
+          // droppedAssertions to exclude descriptive-phrase assertions from mechanical adjudication — restored from last round's verdict cache.
           const droppedAssertions = new Map<string, string>();
           if (prevConfirm) {
             if (mode === 'mechanical') {
-              // 机械模式无 AI 相跑不了 judgeAssertionText：仅当环境与该步内容都与判定轮
-              // 完全一致时才复用 dropped 判定；没复用到的断言按字面进机械回放（失败 note
-              // 会提示改 full 复核）。
+              // Mechanical mode has no AI phase and can't run judgeAssertionText: reuse a dropped verdict only when both the environment and that
+              // step's content exactly match the judging round; verdicts not reused go into mechanical replay literally (the failure note
+              // will suggest re-checking with full).
               if (prevConfirm.metaHash === curMetaHash) {
                 effectiveSteps.forEach((s, i) => {
                   if (prevConfirm.stepsHash[i] !== curStepsHash[i]) return;
@@ -982,7 +987,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               }
             }
           }
-          /** 机械回放步映射（restore 与结尾完整回放共用）：dropped 断言在回放里不参与判定。 */
+          /** Mechanical-replay step mapping (shared by restore and the closing full replay): dropped assertions don't participate in replay adjudication. */
           const mapForReplay = (s: EffectiveStep) => ({
             order: s.order,
             assertion: droppedAssertions.has(s.id) ? null : s.assertion,
@@ -991,15 +996,16 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             sensitive: s.sensitive,
             compiled: Array.isArray(s.compiled) ? s.compiled : null,
           });
-          /** restore 可派发的机械动作（按步 id 缓存）：视觉步（纯 NL / 纯 aiTask）经 mapForReplay 后
-           *  无机械语义——纯 NL 连 instruction 都不带，机械引擎直接 compile-missing，前缀里第一个这样
-           *  的步就会打断 restore、AI 相从那里整体重跑（重新截图识别），「已确认步骤不再烧 LLM 轮次」
-           *  对视觉用例落空。改喂上一轮确认轨迹（confirmedTraces，与 solidify 同源）映射出的机械动作
-           *  重建状态——零 LLM/零截图。映射不出（坐标形态/凭据/裸标签被拒）→ null：该步无从派发机械
-           *  动作，机械引擎必在它上面 compile-missing 断链，故不把它喂进 restore 切片（见 restoreLen）。 */
+          /** Restore-dispatchable mechanical actions (cached per step id): visual steps (pure NL / pure aiTask) after mapForReplay carry
+           *  no mechanical semantics — pure NL doesn't even carry an instruction, so the mechanical engine compile-misses directly; the first such
+           *  step in the prefix would break the restore and the AI phase would rerun wholesale from there (re-screenshot recognition), making
+           *  "confirmed steps don't burn LLM turns" fall through for visual cases. Instead feed the confirmed traces from the previous round
+           *  (confirmedTraces, same source as solidify) mapped into mechanical actions to rebuild state — zero LLM/zero screenshots. If unmappable
+           *  (coordinate form / credentials / bare labels rejected) → null: that step has no mechanical action to dispatch, the mechanical engine
+           *  will inevitably compile-miss and break the chain there, so it isn't fed into the restore slice (see restoreLen). */
           const restoreCompiledByStepId = new Map<string, StepAction[] | null>();
           const restoreCompiledFor = (s: EffectiveStep): StepAction[] | null => {
-            if (!isVisualStep(s)) return null; // 机械步保留原 compiled（回放保真），不需要轨迹映射
+            if (!isVisualStep(s)) return null; // Mechanical steps keep their original compiled (replay fidelity), no trace mapping needed
             const cached = restoreCompiledByStepId.get(s.id);
             if (cached !== undefined) return cached;
             const carried = prevConfirm?.confirmedTraces.get(s.id);
@@ -1008,29 +1014,29 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             restoreCompiledByStepId.set(s.id, compiled);
             return compiled;
           };
-          /** 该步能否机械回放重建状态：机械步原样可放；视觉步须有可映射的确认轨迹。 */
+          /** Whether this step's state can be rebuilt by mechanical replay: mechanical steps replay as-is; visual steps need a mappable confirmed trace. */
           const restorable = (s: EffectiveStep): boolean =>
             !isVisualStep(s) || restoreCompiledFor(s) !== null;
           const mapForRestore = (s: EffectiveStep) => {
             const base = mapForReplay(s);
-            if (!isVisualStep(s)) return base; // 机械步保留原 compiled（回放保真），敏感步无轨迹自然回退
+            if (!isVisualStep(s)) return base; // Mechanical steps keep their original compiled (replay fidelity); sensitive steps have no trace and naturally fall back
             const compiled = restoreCompiledFor(s);
             return compiled ? { ...base, compiled } : base;
           };
-          // 敏感字段解密表：restore 与结尾完整回放共用（解密失败会抛，与原有最终回放语义一致）
+          // Sensitive-field decryption table: shared by restore-resume and the closing full replay (a decrypt failure throws, matching the original final-replay semantics)
           const replaySecrets = buildReplaySecrets(effectiveSteps);
 
-          // ── 前缀状态重建（resume）：机械回放已确认前缀，把浏览器恢复到第 validPrefixLen 步的 DOM 状态 ──
-          // executeCaseInBrowser 内部自建 page 并 goto(targetUrl)，成功/失败都把它交还（onPageReady /
-          // onFailurePage），后续 AI 相与证据采集继续用该 page。restore 失败 → 收敛到失败步由 AI 接管
-          // （机械回放失败不判死：AI 临场可能自适应绕过）。
-          // 保活命中轮整段跳过：浏览器停在上一轮终态，前缀已生效，AI 相从 reuseApplied 直接续跑。
+          // ── Prefix state rebuild (resume): mechanically replay the confirmed prefix to restore the browser to step validPrefixLen's DOM state ──
+          // executeCaseInBrowser builds its own page internally and gotos targetUrl, handing the page back on success/failure (onPageReady /
+          // onFailurePage); the subsequent AI phase and evidence collection keep using that page. Restore failure → converge to the failed step and let the AI take over
+          // (mechanical replay failure isn't a verdict: the AI may adaptively bypass live).
+          // Keep-alive hit rounds skip this whole block: the browser rests at last round's terminal state, the prefix is already in effect, the AI phase resumes from reuseApplied.
           let resumeIndex = reused ? reuseApplied : validPrefixLen;
-          // restore 切片 = 前缀的最长「可机械恢复」段：不可恢复的视觉步（无确认轨迹/映射被拒）
-          // 喂进机械引擎必然 compile-missing 断链，回放白跑一次注定失败的动作，还把恢复收敛点
-          // 打回该步——prod228 实测 46/46 轮带前缀的 verify 全部收敛到第 1 步重跑，且带前缀的轮
-          // 反而比全新轮慢（p50 112s vs 60s，多的就是这次注定失败的回放）。截断后：可恢复段由机械
-          // 回放重建状态，其后的步交 AI 相接管（与原「回放失败收敛到失败步」同口径），只是不再白跑。
+          // Restore slice = the longest "mechanically restorable" segment of the prefix: an unrestorable visual step (no confirmed trace / mapping rejected)
+          // fed into the mechanical engine inevitably compile-misses and breaks the chain; the replay would run a doomed-to-fail action for nothing,
+          // and would knock the restore convergence point back to that step — prod228 measured 46/46 verify rounds with a prefix converging to step 1 rerun,
+          // and prefix rounds were actually slower than fresh rounds (p50 112s vs 60s, the difference being this doomed replay). After truncation: the restorable segment
+          // is rebuilt by mechanical replay and the steps after it go to the AI phase (same convention as the original "replay failure converges to the failed step"), just no longer wasted.
           let restoreLen = 0;
           if (validPrefixLen > 0 && !reused) {
             for (const s of effectiveSteps.slice(0, validPrefixLen)) {
@@ -1039,14 +1045,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
           if (validPrefixLen > 0 && !reused && restoreLen === 0) {
-            // 前缀整段无从机械恢复 → 不做回放，本轮等价全新轮：AI 相从第 1 步接管
-            // （页面导航由下方初始 goto 负责——不做回放就没有 executeCaseInBrowser 的导航）。
+            // The prefix is entirely mechanically unrestorable → no replay; this round is equivalent to a fresh round: the AI phase takes over from step 1
+            // (page navigation handled by the initial goto below — no replay means no executeCaseInBrowser navigation).
             resumeIndex = 0;
           }
           if (validPrefixLen > 0 && !reused && restoreLen > 0) {
             let restoredPage: Page | null = null;
             const restoreSlice = effectiveSteps.slice(0, restoreLen);
-            // 停止可抢占 restore：在途回放随 finally 关浏览器终止，异常吞掉不上抛。
+            // Stop can preempt the restore: the in-flight replay terminates when finally closes the browser; swallow the exception, don't rethrow.
             const restorePromise = executeCaseInBrowser(
               caseId,
               restoreSlice.map(mapForRestore),
@@ -1055,7 +1061,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 envCtx,
                 llmClient: client,
                 liveView: live,
-                // 不传 expectedOutcome：restore 只做前缀状态重建，vision 终态判定留给主流程
+                // No expectedOutcome: restore only rebuilds prefix state; the vision final-state judgment is left to the main flow
                 ...(replaySecrets.size > 0
                   ? { secretResolver: async (stepId: string) => replaySecrets.get(stepId) ?? null }
                   : {}),
@@ -1069,7 +1075,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               undefined,
               undefined,
               undefined,
-              // restore 失败现场即 AI 续跑起点（切片步下标 == 全局下标：切片自 0 起）
+              // The restore-failure scene is the AI resume point (slice step index == global index: the slice starts at 0)
               async (p, j) => { restoredPage = p; resumeIndex = j; },
             );
             void restorePromise.catch(() => undefined);
@@ -1077,8 +1083,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             try {
               restoreRes = await Promise.race([restorePromise, stopGuard]);
             } catch (e) {
-              // stopGuard 抢占：在途 restore 无 signal 可停，弃守关浏览器后仍会继续改页面——
-              // 命中轮标记 zombie 让 finally 销毁注册表浏览器，下轮降级 fresh 路径。
+              // stopGuard preemption: the in-flight restore has no stoppable signal; after abandonment and browser close it still mutates the page —
+              // mark hit rounds zombie so finally destroys the registry browser, degrading the next round to the fresh path.
               zombie = true;
               throw e;
             }
@@ -1086,18 +1092,18 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               const j = restoreRes.findIndex((r) => r.status === 'failed');
               resumeIndex = j < 0 ? restoreLen : j;
             } else {
-              // 回放全过：已生效前缀 = 实际回放的那一段（restoreLen，可能短于 validPrefixLen）
+              // Replay all passed: the effective prefix = the segment actually replayed (restoreLen, possibly shorter than validPrefixLen)
               resumeIndex = restoreLen;
             }
             if (restoredPage) page = restoredPage;
           }
-          // restore 落定后的已生效前缀（完全恢复=restoreLen；收敛=失败步 j），轮末 commit 口径
+          // The effective prefix after restore settles (full recovery=restoreLen; converged=failed step j), the end-of-round commit convention
           appliedCount = resumeIndex;
 
-          // 初始导航（页面尚未被导航过时）：restore 已完成导航（restoreRan）；保活命中轮浏览器停在
-          // 上一轮终态（appliedCount>0）也不需要；其余（全新轮 / 前缀整段不可恢复而跳过 restore /
-          // 命中轮 appliedCount=0 状态未知）都要 goto 到已知态。mechanical 跳过——干跑
-          // executeCaseInBrowser 自带 goto，预导航只是多一次页面加载与副作用。
+          // Initial navigation (when the page hasn't been navigated yet): restore already navigated (restoreRan); a keep-alive hit round's browser rests at
+          // last round's terminal state (appliedCount>0) so it doesn't need it either; the rest (fresh rounds / prefix unrestorable end-to-end so restore skipped /
+          // hit rounds with appliedCount=0 of unknown state) must goto to a known state. mechanical skips — the dry run's
+          // executeCaseInBrowser has its own goto; pre-navigation would just be one extra page load and side effect.
           const restoreRan = validPrefixLen > 0 && !reused && restoreLen > 0;
           if (mode !== 'mechanical' && !restoreRan && !(reused && appliedCount > 0) && targetUrl) {
             const firstCompiled = effectiveSteps[0]?.compiled;
@@ -1106,8 +1112,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               : undefined) as { kind?: string; url?: string } | undefined;
             const skipInit = firstAction?.kind === 'navigate' && firstAction.url === targetUrl;
             if (!skipInit) {
-              // goto + 落地校验重试：深链冷启动可能被前端兜底路由弹回（重试一次通常能赢竞态）。
-              // 落到登录页不告警——full 模式 AI 相会自助登录；其他落点差异在 roundNotes 提示 agent。
+              // goto + landed-verification retry: a deep-link cold start may be bounced by the frontend fallback route (one retry usually wins the race).
+              // Landing on the login page isn't warned about — full mode's AI phase self-serves login; other landing-point differences go to the agent in roundNotes.
               const landed = await gotoWithLandedRetry(page, targetUrl);
               if (!landed.landed && !landed.finalUrl.includes('/login')) {
                 roundNotes.push(`入口深链 goto 后未落到目标页（当前在 ${landed.finalUrl}，目标 ${targetUrl}）——多为前端路由冷启动竞态（如 qiankun 兜底路由）或入口地址不对；若当前页是登录页/首页概览页，也可能是会话已过期（登录态缓存 30 分钟，人机间隔一长就过期），此时应先 get_login_credentials + perform_login 重新登录再重验，而不是把步骤判成写错。后续步骤失败时先核对该信息：若失败页元素与目标页无关，属入口未达而非 locator 错，不要盲目改步骤 locator。`);
@@ -1115,20 +1121,20 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
-          // 占位符 → 真实值。凭据替换复用执行层唯一实现（@ref 归属 / 缺凭据 fail-fast
-          // 语义与回放完全一致——两处各写一套字面量精确匹配正是 2026-10-21 prod228 的分叉根因）。
+          // Placeholders → real values. Credential substitution reuses the execute layer's single implementation (@ref ownership / missing-credential fail-fast
+          // semantics match replay exactly — two hand-rolled literal exact-match implementations were precisely the 2026-10-21 prod228 divergence root cause).
           let stepSecret: string | undefined;
-          // 每次取值都重新构造源：stepSecret 逐步骤解密后才赋值，构造时快照会把敏感值冻在 undefined。
+          // Rebuild the source on every substitution: stepSecret is only assigned after per-step decryption; snapshotting at construction time would freeze the sensitive value at undefined.
           const valueSub = (v: string): string =>
             makeCredentialValueSub(
               buildCredentialSource({ envCtx, caseWebServiceRef: effectiveCase.webServiceRef }, stepSecret),
             )(v);
 
           const stepResults: AiStepResult[] = [];
-          /** 本轮 AI 相收集的可固化步骤动作轨迹（solidify_case 零执行复用的数据源）。
-           *  前缀步（[0, validPrefixLen)）本轮由机械恢复执行、无 AI 动作，其轨迹从上一轮
-           *  确认缓存携带（validPrefixLen 的判定已保证这些步内容未变，旧轨迹仍有效）；
-           *  本轮 AI 相实际执行的步就地覆盖。合并后整轮全过即得完整轨迹。 */
+          /** Solidifiable-step action traces collected by this round's AI phase (the data source for solidify_case's zero-execution reuse).
+           *  Prefix steps ([0, validPrefixLen)) were executed by mechanical restore this round with no AI actions; their traces are carried from last round's
+           *  confirmation cache (validPrefixLen's determination already guarantees those steps' content is unchanged, so old traces remain valid);
+           *  steps the AI phase actually executed this round are overwritten in place. After merging, a fully passed round yields a complete trace. */
           const collectedTrace = new Map<string, AiAction[]>();
           if (prevConfirm && validPrefixLen > 0) {
             for (let i = 0; i < validPrefixLen; i++) {
@@ -1137,14 +1143,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               if (carried) collectedTrace.set(id, carried);
             }
           }
-          /** 本轮 AI 相产生的断言判定（写回上一轮缓存，续跑前逐步复用）。 */
+          /** This round's AI-phase assertion verdicts (written back to last round's cache, reused step-by-step before resuming). */
           const verdictsThisRound = new Map<string, { real: boolean; dropped?: string }>();
-          // 全局看门狗超时收尾（步骤中断 / 机械回放中断共用）：把本地已完成前缀写回缓存——
-          // 否则下轮从头重跑，已确认步骤全丢（Problem 1 续跑设计被架空）。错误带完成步数，
-          // 下轮 resume 从中断步续跑而非从第 1 步重来。stepResults 局部下标自 resumeIndex 起，
-          // 完成条数 = resumeIndex（沿用上轮确认的前缀） + stepResults.length（本轮实走）。
+          // Global watchdog timeout wrap-up (shared by step interruption / mechanical replay interruption): write the locally completed prefix back to the cache —
+          // otherwise the next round reruns from scratch and all confirmed steps are lost (Problem 1's resume design neutralized). The error carries the completed step count
+          // so the next round resumes from the interrupted step instead of restarting from step 1. stepResults' local index starts at resumeIndex,
+          // completed count = resumeIndex (the prefix confirmed last round) + stepResults.length (actually walked this round).
           const commitTimeoutPrefix = (where: string): { ok: false; error: string } => {
-            // 机械模式没有 AI 相，无可续跑前缀可写（也不覆盖上一轮 full 的判定缓存）
+            // Mechanical mode has no AI phase, no resumable prefix to write (and must not overwrite last full round's verdict cache)
             if (mode === 'mechanical') {
               return { ok: false, error: `验证超时（${verifyTimeoutMs / 1000}s）已终止：${where}（mechanical 模式无 AI 相前缀，下轮从头上）` };
             }
@@ -1163,8 +1169,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
           };
           let failedIndex = -1;
           let login: 'logged-in' | 'not-needed' = 'not-needed';
-          // SSE 实时进度：验证全程可达数分钟，前端凭这些事件渲染逐步进度卡（spaceEventsStore.verify_progress）。
-          // loginCache/loginUser：登录态缓存命中与凭据用户直显对话框，无需翻服务端日志即可确认复用生效。
+          // SSE real-time progress: verification can run for minutes, the frontend renders the per-step progress card from these events (spaceEventsStore.verify_progress).
+          // loginCache/loginUser: login-state cache hit and credential user shown right in the dialog — confirming reuse took effect without digging through server logs.
           ctx.emit({
             type: 'verify_progress', phase: 'start', caseId, total: effectiveSteps.length, targetUrl: targetUrl ?? null,
             resumeFrom: resumeIndex,
@@ -1176,22 +1182,22 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(staticNote ? { staticNote } : {}),
             liveUrl: live ? `/api/assistant/threads/${ctx.threadId}/live/${live.key}` : undefined,
           });
-          // mechanical 模式跳过整个 AI 相（循环下标直接置越界，语义验证已由实测轮完成）
+          // mechanical mode skips the entire AI phase (loop index set out of bounds directly; semantic validation was done in the live-test round)
           for (let i = mode === 'mechanical' ? effectiveSteps.length : resumeIndex; i < effectiveSteps.length; i++) {
             const s = effectiveSteps[i]!;
             const started = Date.now();
-            // 停止检查点：每步开始前探测（机械等待/上一步收尾期间用户可能已点停止）。
-            // 步边界取消无在途异步：浏览器状态 = 已生效前缀，属可保活的干净断点。
+            // Stop checkpoint: probe before each step (the user may have clicked stop during mechanical waits / the previous step's wrap-up).
+            // Step-boundary cancel has no in-flight async: the browser state = the effective prefix, a clean keep-alive-able breakpoint.
             if (signal?.aborted) {
               completed = true;
               ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
               return { ok: false, error: '已停止：用户中断了本次验证' };
             }
-            // 轨迹收集目标：视觉模式且非敏感的步骤（与 solidify_case 的固化候选同口径）
+            // Trace collection targets: visual-mode non-sensitive steps (same convention as solidify_case's solidification candidates)
             const solidifiable = isVisualStep(s) && !s.sensitive;
             let stepActions: AiAction[] = [];
 
-            // 敏感步骤先解密：密文缺失/解密失败直接判该步失败，不让 LLM 乱填
+            // Sensitive steps decrypt first: missing ciphertext / decrypt failure fails the step directly, never letting the LLM fill blindly
             stepSecret = undefined;
             if (s.sensitive) {
               if (!s.secretCiphertext || !s.secretIv || !s.secretTag) {
@@ -1221,8 +1227,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
 
             if (s.delayMs) await page.waitForTimeout(s.delayMs);
-            // 断言文本体检：描述性短语（「登录表单正常展示」）页面上永远匹配不到，
-            // 在真实页面上判一次，判为描述性就本轮不带它进指令，也不进机械回放。
+            // Assertion text checkup: a descriptive phrase ("登录表单正常展示" style) can never be matched on the page,
+            // so judge it once against the real page; judged descriptive, it's dropped from this round's instruction and from the mechanical replay.
             let assertionForRun: unknown = s.assertion;
             let droppedAssertion: string | null = null;
             if (typeof s.assertion === 'string' && s.assertion.trim()) {
@@ -1230,11 +1236,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 .evaluate(() => document.body?.innerText ?? '')
                 .catch(() => '');
               const verdict = await judgeAssertionText(s.assertion, pageText, client, ctx.lang);
-              // 判定写回本轮缓存：续跑轮的前缀步按上一轮判定复用（mechanical restore 不再逐轮 judge）
+              // Verdict written back to this round's cache: resume rounds' prefix steps reuse last round's verdicts (mechanical restore no longer judges per round)
               verdictsThisRound.set(s.id, { real: verdict.real, ...(verdict.real ? {} : { dropped: s.assertion }) });
               if (verdict.real) {
-                // 上一轮判定为描述性短语、本轮改判为真实页面文案：清除老旧 dropped 记录，
-                // 否则机械回放会沿用 null 掉该断言（本轮 AI 相照常带它，回放却跳过——不一致）。
+                // Last round judged it a descriptive phrase but this round re-judges it as real page copy: clear the stale dropped record,
+                // otherwise the mechanical replay would keep nulling the assertion (this round's AI phase carries it as usual while replay skips it — inconsistent).
                 droppedAssertions.delete(s.id);
               } else {
                 assertionForRun = null;
@@ -1242,11 +1248,11 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 droppedAssertions.set(s.id, s.assertion);
               }
             }
-            // 纯机械步（sql / httpRequest / observeLog / sendSyslog）：不经浏览器，
-            // 浏览器 AI 相结构上无法执行——让它试只会白烧轮次（prod228 2026-10-28 实录：
-            // 「AI 相是浏览器执行器，无法执行 SQL 查询数据库」，超 5 轮未完成）。
-            // 真值由结尾的 compiled 机械干跑裁决（runSql/runHttpRequest 不经 Playwright），
-            // 这里直接记 passed——干跑失败会以 ReplayDivergence 如实报出，不会被放过。
+            // Pure mechanical steps (sql / httpRequest / observeLog / sendSyslog): don't go through the browser,
+            // the browser AI phase structurally cannot execute them — letting it try only burns turns (prod228 2026-10-28 record:
+            // "the AI phase is a browser executor and cannot execute SQL queries against the database", over 5 turns unfinished).
+            // Their truth is adjudicated by the closing compiled mechanical dry run (runSql/runHttpRequest bypass Playwright);
+            // record passed directly here — a dry-run failure is honestly reported as ReplayDivergence and won't be let through.
             if (mode !== 'mechanical' && isMechanicalOnlyStep(s.compiled)) {
               stepResults.push({
                 order: s.order, status: 'passed', durationMs: Date.now() - started,
@@ -1264,14 +1270,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               { hasLogin: !!envCtx.login, hasSecret: stepSecret !== undefined },
               droppedAssertion,
               webManifest,
-              // 混合步（浏览器动作 + 机械步）：告诉 AI 只做浏览器那一半，别去够机械那半。
+              // Mixed step (browser actions + mechanical steps): tell the AI to do only the browser half, don't reach for the mechanical half.
               hasMechanicalStep(s.compiled),
             );
             ctx.emit({
               type: 'verify_progress', phase: 'step_start', order: s.order,
               brief: (s.instruction ?? JSON.stringify(s.compiled) ?? '').slice(0, 120),
             });
-            // compiled 保真前置校验：click/hover 的目标元素此刻就该在页面上，解析不到直接判失败（不烧 AI 轮次）
+            // compiled fidelity pre-check: click/hover target elements should already be on the page right now; unresolvable → fail directly (no AI turns burned)
             const preErr = await checkCompiledLocators(page, s.compiled, 'pre');
             if (preErr) {
               stepResults.push({
@@ -1286,14 +1292,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             let aiRun: Promise<string> | undefined;
             let guardTimer: NodeJS.Timeout | undefined;
             try {
-              // 单步 AI 相秒级帽子：runAiTask 只按轮数受限（STEP_MAX_TURNS）无墙钟上限，慢 SUT 上一轮
-              // 拖到分钟级就会吃光整个全局预算。帽子触发 → fail-stop 该步（StepTimedOut），在途 aiRun 放弃
-              // （catch 里吞掉其 rejection，浏览器最终收尾关闭）。
+              // Per-step AI-phase wall-clock cap: runAiTask is only bounded by turns (STEP_MAX_TURNS) with no wall-clock limit; on a slow SUT one turn
+              // dragging to minutes would eat the whole global budget. Cap trips → fail-stop that step (StepTimedOut), abandoning the in-flight aiRun
+              // (its rejection is swallowed in the catch; the browser is closed in final wrap-up).
               aiRun = runAiTask(page, instruction, client, false, {
                 maxTurns: STEP_MAX_TURNS,
                 valueSub,
                 lang: ctx.lang,
-                // 成功动作按执行顺序收集（占位符替换前的原始参数，同 solidify_case 口径）
+                // Successful actions collected in execution order (original params before placeholder substitution, same convention as solidify_case)
                 onAction: (action, ok) => {
                   if (solidifiable && ok) stepActions.push(action);
                 },
@@ -1305,7 +1311,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               clearTimeout(guardTimer);
               const parsed = tryParseJson(summary);
               if (parsed && parsed.status === 'failed') {
-                // LLM 自报失败：fail-stop，原因直达反馈
+                // LLM self-reported failure: fail-stop, reason goes straight into the feedback
                 const reason = typeof parsed.reason === 'string' ? parsed.reason : summary.slice(0, 200);
                 stepResults.push({
                   order: s.order, status: 'failed', durationMs: Date.now() - started,
@@ -1320,8 +1326,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 break;
               }
               if (parsed?.login === 'logged-in') login = 'logged-in';
-              // compiled 保真后置校验：assert*/fill/check/select/extract 结束时元素理应仍在；
-              // AI 可以临场绕开坏 locator，但回放逐字执行 compiled——此刻校验不过，回放必挂
+              // compiled fidelity post-check: assert*/fill/check/select/extract elements should still be there when the actions end;
+              // the AI can bypass a bad locator live, but replay executes compiled verbatim — failing this check means replay will definitely fail
               const postErr = await checkCompiledLocators(page, s.compiled, 'post');
               if (postErr) {
                 stepResults.push({
@@ -1333,42 +1339,42 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 failedIndex = i;
                 break;
               }
-              // 该步全过（含 post-locator 校验）才把轨迹入册：空数组也入（solidify 侧映射为
-              // kept-aiTask「无可映射动作」，与真跑路径结果一致）
+              // Only register the trace when the step fully passed (including the post-locator check): empty arrays are registered too (the solidify side maps them to
+              // kept-aiTask "无可映射动作", matching the real-run path's result)
               if (solidifiable) collectedTrace.set(s.id, stepActions);
               stepResults.push({
                 order: s.order, status: 'passed', durationMs: Date.now() - started,
                 screenshot: await writeStepScreenshot(reportId, i + 1, page),
-                // 契约漂移兜底：summary 非 JSON 也算通过，但原文带出 warning 供人工核查
+                // Contract-drift fallback: a non-JSON summary still counts as passing, but the raw text is surfaced as a warning for manual review
                 ...(parsed ? {} : { warning: summary.slice(0, 200) }),
               });
               ctx.emit({
                 type: 'verify_progress', phase: 'step_done', order: s.order, status: 'passed',
                 durationMs: Date.now() - started,
-                // 逐步登录行为以 LLM 当轮自报为准（含契约漂移,如实展示）
+                // Per-step login behavior reported by the LLM that round (including contract drift, shown as-is)
                 ...(typeof parsed?.login === 'string' ? { login: parsed.login } : {}),
                 ...(parsed ? {} : { reason: summary.slice(0, 120) }),
               });
-              // 该步副作用已落到 page：保活 commit 口径的已生效前缀推进一位
+              // This step's side effects have landed on the page: the keep-alive commit convention's effective prefix advances by one
               appliedCount = i + 1;
             } catch (e) {
               clearTimeout(guardTimer);
-              // 用户停止：丢弃在途 aiRun（finally 关浏览器令其终止），进度卡收尾为 cancelled。
-              // runAiTask 无 AbortSignal，弃守后仍会继续驱动页面——标记 zombie 禁止保活。
+              // User stop: discard the in-flight aiRun (finally closes the browser to terminate it), progress card wraps up as cancelled.
+              // runAiTask has no AbortSignal; after abandonment it keeps driving the page — mark zombie to forbid keep-alive.
               if (signal?.aborted) {
                 zombie = true;
                 void aiRun?.catch(() => undefined);
                 ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
                 return { ok: false, error: '已停止：用户中断了本次验证' };
               }
-              // watchdog 强关浏览器会让在途 runAiTask 抛错——此时真实原因是超时而非步骤失败
+              // The watchdog force-closing the browser makes the in-flight runAiTask throw — the real cause here is timeout, not step failure
               if (timedOut) {
-                // 全局超时:前缀写缓存 + 带完成步数,下轮 resume 续跑(见 commitTimeoutPrefix)
+                // Global timeout: write the prefix to the cache + carry the completed step count so the next round resumes (see commitTimeoutPrefix)
                 return commitTimeoutPrefix('步骤执行中');
               }
               const eMsg = (e as Error).message ?? '';
               if (eMsg.startsWith('STEP_TIMEOUT:')) {
-                // 单步 AI 相超过 STEP_AI_TIMEOUT_MS：fail-stop 该步而非整轮超时（在途 aiRun 放弃）
+                // The per-step AI phase exceeded STEP_AI_TIMEOUT_MS: fail-stop that step rather than timing out the whole round (abandon the in-flight aiRun)
                 zombie = true;
                 void aiRun?.catch(() => undefined);
                 stepResults.push({
@@ -1391,14 +1397,14 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
-          // ── 前缀确认写回（D2）──
-          // confirmedThrough = 本轮 AI 相真正确认过的连续条数：restore 失败时 resumeIndex 已在
-          // onFailurePage 收敛到全局失败点 j，AI 从 j 续跑——只有 j 之前的步是确认过的（restore 机
-          // 械回放重建），因此 recordedThrough 取 failedIndex（AI 循环首个失败下标）即可覆盖两种路径：
-          // 全过 → len；restore 失败后 AI 又在 k 失败 → k（= 前缀确认条数）。confirmedStepResults 对齐
-          // 全局下标：before-resume 段直接沿用上一轮的确认结果，resume 段取本轮 stepResults，
-          // 二者在 restore 失败（j<validPrefixLen）时恰好无缝衔接、不重复。
-          // 机械模式不写回前缀确认：没有 AI 相就没有新确认的步骤（保留上一轮 full 的判定缓存）
+          // ── Prefix confirmation write-back (D2) ──
+          // confirmedThrough = the consecutive steps the AI phase truly confirmed this round: when restore fails, resumeIndex has already
+          // converged to the global failure point j inside onFailurePage, and the AI resumes from j — only the steps before j are confirmed (rebuilt by the restore
+          // mechanical replay), so taking failedIndex (the AI loop's first failure index) covers both paths:
+          // all passed → len; restore failed then the AI failed again at k → k (= the prefix confirmation count). confirmedStepResults aligns
+          // to global indices: the before-resume segment directly reuses last round's confirmed results, the resume segment takes this round's stepResults;
+          // the two join seamlessly without duplication when restore failed (j<validPrefixLen).
+          // Mechanical mode doesn't write back prefix confirmation: no AI phase means no newly confirmed steps (last full round's verdict cache is kept)
           if (mode !== 'mechanical') {
             const mergedVerdicts = new Map<string, { real: boolean; dropped?: string }>(prevConfirm?.assertionVerdicts ?? []);
             for (const [id, v] of verdictsThisRound) mergedVerdicts.set(id, v);
@@ -1412,16 +1418,16 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             });
           }
 
-          // ── 轨迹缓存写回（solidify_case 零执行复用）──
-          // 整轮全过且「必需视觉步全部在册」才保存：前缀步的轨迹由确认缓存携带（见
-          // collectedTrace 初始化），本轮 AI 相补齐改动步——resume 轮因此也能存出完整轨迹。
-          // 覆盖不完整（如旧格式缓存无轨迹可携带）宁缺毋滥：takeFreshTrace 的 required
-          // 检查本可挡住部分轨迹，主动不写保持"在册即可用"的语义干净。
-          // vision 失败不阻断（步骤已过、expectedOutcome 不参与哈希，改预期不需要重跑实测）。
-          // 任一步骤失败 → 清缓存（旧轨迹对应旧步骤内容，留着只会误导新鲜度判定——哈希本可挡，
-          // 主动清是双保险，也让 getVerifiedTrace 的语义干净）。
-          // 机械模式不动轨迹缓存：本轮没有 AI 相，既无可存轨迹，也不能清掉实测轮存的
-          // （清了会让后续 solidify 无谓回退真跑）。
+          // ── Trace cache write-back (solidify_case zero-execution reuse) ──
+          // Save only when the whole round passed and "all required visual steps are on record": prefix steps' traces are carried by the confirmation cache (see
+          // the collectedTrace init), this round's AI phase fills in changed steps — resume rounds can therefore also save complete traces.
+          // Incomplete coverage (e.g. old-format caches with no traces to carry) prefers absence over garbage: takeFreshTrace's required
+          // check would block partial traces anyway; proactively not writing keeps the "on record = usable" semantics clean.
+          // Vision failure doesn't block (steps passed; expectedOutcome isn't part of the hash, so changing the expectation doesn't need a live re-run).
+          // Any step failure → clear the cache (old traces correspond to old step content; keeping them only misleads freshness checks — the hash would block it,
+          // proactive clearing is a double safety, and it keeps getVerifiedTrace's semantics clean).
+          // Mechanical mode never touches the trace cache: this round has no AI phase, so there's no trace to save and last live round's cache must not be cleared
+          // (clearing it would make later solidify needlessly fall back to a real run).
           const tkey = traceKey(ctx.threadId, caseId);
           let traceSavedNow = false;
           if (mode !== 'mechanical') {
@@ -1436,9 +1442,9 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
-          // 用例级终态判定：与正式回放同一 vision 断言（cdp.ts runCaseVisionAssert），
-          // 全部步骤通过后再判 expectedOutcome——verify_case 不能只保证"步骤能执行"，还得保证"终态符合预期"。
-          // 机械模式的终态判定移到机械干跑之后（在干跑终态页上判，见 replay 段之后）。
+          // Case-level final-state judgment: the same vision assertion as formal replay (cdp.ts runCaseVisionAssert);
+          // after all steps pass, expectedOutcome is judged — verify_case can't only guarantee "steps execute", it must guarantee "the final state matches expectations".
+          // Mechanical mode's final-state judgment moves after the mechanical dry run (judged on the dry run's terminal page, see after the replay section).
           let visionFailure: { error?: string | null; humanMessage?: string | null; screenshot?: string | null; failureReason?: string | null; console?: ConsoleLogEntry[] } | null = null;
           if (mode !== 'mechanical' && failedIndex < 0 && typeof effectiveCase.expectedOutcome === 'string' && effectiveCase.expectedOutcome.trim()) {
             const va = await runCaseVisionAssert({
@@ -1460,26 +1466,26 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             }
           }
 
-          // 登录态回写：不依赖 LLM 自报的 login 字段（实测存在漏报契约漂移），配了登录就无条件存当前会话——
-          // 未登录时存的是匿名会话，下轮注入后 AI 照样识别登录页重新登录并覆盖（自愈）。
-          // watchdog 超时路径在循环内提前 return，不会走到这里。
+          // Login-state write-back: doesn't rely on the LLM-reported login field (measured contract-drift underreporting); with login configured, unconditionally save the current session —
+          // when not logged in, what's saved is an anonymous session, and after injection next round the AI still recognizes the login page, logs in again, and overwrites (self-healing).
+          // The watchdog timeout path returns early inside the loop and never reaches here.
           const savedState = await context.storageState().catch(() => null);
           if (savedState) saveLoginState(loginKey, savedState);
 
-          // ── compiled 机械回放干跑：AI 相全过（步骤 + 终态判定）才跑，最终裁决门 ──
-          // 正式回放逐字派发 compiled；AI 临场执行可自适应修正，两者分叉（如 click 落在
-          // 组件 wrapper 中心不触发行为）只有真机回放能暴露。复用 executeCaseInBrowser：
-          // 同 context（登录态随 cookie 携带）新开 page、不写 DB 报告；截图落 -replay
-          // 目录，避免与 AI 相同名 step-N.png 互相覆盖。副作用与正式执行一致（二次执行
-          // 恰好暴露唯一名冲突等回放脆弱性，属有意语义）。
+          // ── compiled mechanical replay dry run: runs only after the whole AI phase passed (steps + final-state judgment), the final adjudication gate ──
+          // Formal replay dispatches compiled verbatim; the AI's live execution can adaptively correct — the fork between the two (e.g. a click landing
+          // on a component wrapper's center that doesn't trigger behavior) only real-machine replay can expose. Reuses executeCaseInBrowser:
+          // a new page on the same context (login state carried by cookies), no DB report written; screenshots go to the -replay
+          // directory, avoiding the AI phase's same-named step-N.png overwriting each other. Side effects match formal execution (the second execution
+          // conveniently exposes replay fragilities like unique-name conflicts — intentional semantics).
           //
-          // 讨论期实测场景：草稿步骤是纯自然语言（无 compiled）时跳过机械干跑——没有可逐字
-          // 派发的 compiled,跑了也只会以 compile-missing 报"未知错误",反而误导用户以为用例有问题。
-          // full 模式下纯 aiTask（视觉模式）同样跳过；但 mechanical 模式必须干跑：aiTask 是正式
-          // 可派发动作（dispatch 由 AI 真实执行），solidify 产出全 aiTask 固化结果的验收正落在这一轮。
+          // Discussion-phase live-test scenario: when draft steps are pure natural language (no compiled), skip the mechanical dry run — there's nothing to dispatch
+          // verbatim; running it would only report an "unknown error" via compile-missing, misleading the user into thinking the case is broken.
+          // full mode also skips for pure aiTask (visual mode); but mechanical mode must dry run: aiTask is a formally
+          // dispatchable action (dispatch is really executed by the AI), and solidify-produced all-aiTask results' acceptance lands exactly in this round.
           const allVisual = isAllVisualSteps(effectiveSteps);
-          // 干跑步集：混合用例只喂纯机械步（自然语言步逐字派发必 compile-missing 误报分叉，
-          // 编译过的 UI 步缺前置状态也必然误判）——见 pickReplayTargets 注释。
+          // Dry-run subset: mixed cases feed only pure mechanical steps (natural-language steps dispatched verbatim inevitably compile-miss into false divergence,
+          // compiled UI steps without their precondition state inevitably misjudge too) — see the pickReplayTargets comment.
           const replayTargets = pickReplayTargets(effectiveSteps, mode);
           let replayFailure: ExecStepResult | null = null;
           let replaySteps: ExecStepResult[] = [];
@@ -1488,8 +1494,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ctx.emit({ type: 'verify_progress', phase: 'replay_start' });
             replayStartedAt = Date.now();
             try {
-              // 敏感字段注入复用顶部 buildReplaySecrets（restore 与结尾完整回放共用一套解密表）
-              // 停止可抢占干跑：在途回放随 finally 关浏览器终止，异常吞掉不上抛。
+              // Sensitive-field injection reuses buildReplaySecrets at the top (restore and the closing full replay share one decryption table)
+              // Stop can preempt the dry run: the in-flight replay terminates when finally closes the browser; swallow the exception, don't rethrow.
               const replayPromise = executeCaseInBrowser(
                 caseId,
                 replayTargets.map(mapForReplay),
@@ -1505,8 +1511,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                   caseWebServiceRef: effectiveCase.webServiceRef ?? null,
                   caseTitle: effectiveCase.title,
                   caseUrl: targetUrl ?? null,
-                  // onPageReady 无条件触发（成功也拿得到终态页）：机械模式的终态判定/证据
-                  // 采集落在干跑页上；full 模式下 onFailurePage 触发时会覆盖为分叉现场页。
+                  // onPageReady fires unconditionally (the terminal page is available on success too): mechanical mode's final-state judgment/evidence
+                  // collection lands on the dry-run page; in full mode an onFailurePage trigger overwrites it with the fork scene page.
                   onPageReady: (p: Page) => { replayPage = p; },
                 },
                 browser,
@@ -1516,8 +1522,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 undefined,
                 undefined,
                 async (p) => {
-                  // onFailurePage 仅在分叉失败时触发；正常路径的页面切换由 runStepsInContext 的
-                  // ctx.liveView.setPage 在 page 创建时完成（replay ExecContext 已带 liveView）。
+                  // onFailurePage fires only on divergence failure; normal-path page switches are done by runStepsInContext's
+                  // ctx.liveView.setPage at page creation (the replay ExecContext already carries liveView).
                   replayPage = p;
                 },
               );
@@ -1526,13 +1532,13 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               replayFailure = replaySteps.find((r) => r.status === 'failed') ?? null;
             } catch (e) {
               if (signal?.aborted) {
-                // 在途 replay（runStepsInContext）无 signal 可停，弃守后仍继续跑——禁止保活
+                // The in-flight replay (runStepsInContext) has no stoppable signal; after abandonment it keeps running — keep-alive forbidden
                 zombie = true;
                 ctx.emit({ type: 'verify_progress', phase: 'end', result: 'cancelled' });
                 return { ok: false, error: '已停止：用户中断了本次验证' };
               }
               if (timedOut) return commitTimeoutPrefix('机械回放中');
-              zombie = true; // 非预期异常：在途回放状态未知，禁止保活
+              zombie = true; // Unexpected exception: the in-flight replay's state is unknown, keep-alive forbidden
               throw e;
             }
             if (signal?.aborted) {
@@ -1551,8 +1557,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             });
           }
 
-          // ── 机械模式终态判定：干跑成功后在干跑终态页上判 expectedOutcome ──
-          // （full 模式的 vision 已在上方 AI 相之后完成；replayPage 由 onPageReady 无条件交还）
+          // ── Mechanical-mode final-state judgment: after the dry run succeeds, judge expectedOutcome on the dry run's terminal page ──
+          // (full mode's vision already ran after the AI phase above; replayPage is handed back unconditionally by onPageReady)
           if (mode === 'mechanical' && !replayFailure && !visionFailure
             && typeof effectiveCase.expectedOutcome === 'string' && effectiveCase.expectedOutcome.trim()) {
             const va = await runCaseVisionAssert({
@@ -1573,25 +1579,25 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               });
             }
           }
-          // 终态/证据采集页：机械模式在干跑页（AI 相没跑过，初始 page 是 about:blank）；full 模式在 AI 相页面
+          // Final-state/evidence collection page: mechanical mode uses the dry-run page (the AI phase never ran; the initial page is about:blank); full mode uses the AI phase's page
           const visionPage = mode === 'mechanical' ? (replayPage ?? page) : page;
 
-          // ── 失败收尾：失败页元素清单（供 agent 修正 locator）──
+          // ── Failure wrap-up: failed-page element listing (for the agent to fix locators) ──
           let failurePage: Awaited<ReturnType<typeof extractPageElements>> | null = null;
           if (replayFailure) {
-            // 回放分叉时优先取干跑自己的 page（分叉现场）；AI 旧 page 状态已漂移
+            // On replay divergence prefer the dry run's own page (the divergence scene); the AI's old page state has already drifted
             failurePage = await extractPageElements(replayPage ?? page).catch(() => null);
           } else if (failedIndex >= 0 || visionFailure) {
             failurePage = await extractPageElements(visionPage).catch(() => null);
           }
 
-          // 终态判定失败时补测「环境无前置数据」信号：空表/0 条时 note 直接点名数据缺失，
-          // 避免 AI 用稀释 expectedOutcome 的方式把失败蒙成通过
+          // On final-state judgment failure, additionally probe the "environment has no precondition data" signal: with an empty table/0 rows, the note names the data gap directly,
+          // preventing the AI from masking failure as pass by watering down expectedOutcome
           const emptyDataHint = visionFailure ? await detectEmptyDataState(visionPage) : null;
 
-          // ── 结果组装（成功精简、失败信息密集）──
-          // 响应的 steps 按全局步序合并：resume 前缀步沿用上一轮的确认结果（截图路径跨轮可访问），
-          // 本轮 AI 相实际执行的步取 stepResults；restore 失败截断到 j 时两段恰好无缝衔接。
+          // ── Result assembly (succinct on success, information-dense on failure) ──
+          // The response's steps merge by global step order: resume prefix steps reuse last round's confirmed results (screenshot paths stay accessible across rounds),
+          // steps the AI phase actually executed this round take stepResults; when restore failed and truncated to j, the two segments join seamlessly.
           const stepsSummary = [...prefixConfirmedResults.slice(0, resumeIndex), ...stepResults].map((r) => ({
             order: r.order,
             status: r.status,
@@ -1609,34 +1615,34 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             ...(r.failureReason ? { failureReason: r.failureReason } : {}),
             ...(r.screenshot ? { screenshot: r.screenshot } : {}),
             ...(r.hitLocator ? { hitLocator: r.hitLocator } : {}),
-            // 干跑跑出的查库结果：agent 据此确认真值（表名/字段名/数据形态），不再靠建探针用例猜。
+            // DB-query results the dry run produced: the agent confirms ground truth from them (table names/field names/data shapes) instead of guessing via probe cases.
             ...(r.sql ? { sql: { dbRef: r.sql.dbRef, rowCount: r.sql.rowCount, rows: r.sql.rows, assertion: r.sql.assertion } } : {}),
           }));
-          // 体检丢弃的断言原样回传：LLM 据此把「描述性短语」改写成页面上真实存在的
-          // UI 文案（或干脆删掉），而不是靠弱化断言蒙混过关。
+          // Checkup-dropped assertions returned verbatim: the LLM uses them to rewrite "descriptive phrases" into real page
+          // UI copy (or simply delete them), rather than masking failure by weakening assertions.
           const droppedNotes = [...droppedAssertions.entries()].map(([id, text]) => ({
             order: effectiveSteps.find((s) => s.id === id)?.order ?? 0,
             assertion: text,
           }));
           const droppedField = droppedNotes.length > 0 ? { droppedAssertions: droppedNotes } : {};
           if (failedIndex < 0 && !visionFailure && !replayFailure) {
-            // cacheSaved: 正常收尾均无条件回写（watchdog 超时路径在循环内提前 return,无 end 事件）
+            // cacheSaved: normal wrap-ups all write back unconditionally (the watchdog timeout path returns early inside the loop, no end event)
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'passed', cacheSaved: true });
-            // 成功页实况清单（与 failure.page 对称）：终态页上真实存在的可交互控件。
-            // 边跑边讨论时 agent 讨论「下一步用哪个控件」只能以此为准，杜绝臆造筛选项。
-            // replayPage 是干跑终态页；纯视觉草稿跳过干跑，回落 AI 相页面。
+            // Success-page live listing (symmetric with failure.page): interactive controls genuinely present on the terminal page.
+            // When discussing next steps or proposing filters/buttons mid-run, the agent may only cite these — fabricating filters is blocked at the source.
+            // replayPage is the dry run's terminal page; pure visual drafts skip the dry run and fall back to the AI phase's page.
             const successPage = await extractPageElements(replayPage ?? page).catch(() => null);
             const rdata = withRoundNotes({
               result: 'passed',
               caseId,
               envId: envCtx.envId,
               targetUrl: targetUrl ?? null,
-              // 机械模式无 AI 相：没有 login 自报、也没有新轨迹可存
+              // Mechanical mode has no AI phase: no login self-report and no new traces to save
               ...(mode === 'mechanical'
                 ? { mode: 'mechanical' as const }
                 : {
                     login,
-                    // 轨迹已缓存 → 紧接着的 solidify_case 可零执行秒级固化（agent 据此引导用户）
+                    // Trace cached → the immediately following solidify_case can solidify in seconds with zero execution (the agent guides the user accordingly)
                     traceSaved: traceSavedNow,
                   }),
               resumeFrom: resumeIndex,
@@ -1647,22 +1653,22 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               steps: stepsSummary,
               ...droppedField,
               ...(successPage ? { page: successPage } : {}),
-              // replay 只在机械干跑真的跑了时才有意义：full 模式下全视觉用例跳过干跑，
-              // 此时若照发 durationMs 会是 Date.now()-0 的 epoch 垃圾值（prod228 出现 6 次）。
-              // 干跑的逐步明细（含查库返回行）一并带出：agent 据此确认真值，
-              // 不用再另建探针用例去猜表名/字段名/数据形态。
+              // replay is only meaningful when the mechanical dry run actually ran: in full mode all-visual cases skip the dry run,
+              // and emitting durationMs then would be the Date.now()-0 epoch garbage value (seen 6 times in prod228).
+              // The dry run's per-step details (including DB-query rows) are carried out together: the agent confirms ground truth from them,
+              // no longer needing separate probe cases to guess table names/field names/data shapes.
               ...(replayStartedAt > 0
                 ? { replay: { result: 'passed' as const, durationMs: Date.now() - replayStartedAt, steps: replaySummary } }
                 : {}),
             });
-            completed = true; // 正常完成发射点：在途异步均已收敛，浏览器状态可保活
+            completed = true; // Normal completion emission point: all in-flight async has settled, browser state is keep-alive-able
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
             return { ok: true, data: rdata };
           }
           if (visionFailure) {
             ctx.emit({ type: 'verify_progress', phase: 'end', result: 'failed', cacheSaved: true });
-            // 归因全交 LLM（failureDiagnosis）：形态无关证据 = 最后一步各 locator 候选实时命中数
-            // + 可见浮层清单 + 失败页可交互元素清单，外加空数据信号作 extraHint。
+            // Attribution fully delegated to the LLM (failureDiagnosis): shape-agnostic evidence = the failed step's live hit counts per locator candidate
+            // + the visible-overlay listing + the failed page's interactive-element listing, plus the empty-data signal as extraHint.
             const visionStep = effectiveSteps[effectiveSteps.length - 1] ?? null;
             const visionProbes = await probeLocatorHits(visionPage, collectStepLocators(visionStep?.compiled));
             const visionOverlays = (await extractPageEvidence(visionPage)).overlays;
@@ -1707,7 +1713,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 note: `vision 终态判定失败：${mode === 'mechanical' ? '机械步骤全部执行通过后' : '全部步骤执行通过后'}，最终页面仍不符合 expectedOutcome。请核对最后几步的实际业务效果，修正步骤或 expectedOutcome 后重验。${mode === 'mechanical' ? '（机械验收模式：步骤语义未经 AI 相复核、描述性断言按上一轮判定或字面处理——修正后重跑 mechanical，拿不准改 mode=full 复核。）' : ''}${emptyDataHint ? ` ⚠ 失败页检出空数据信号「${emptyDataHint}」：被测环境当前没有可供断言的数据，这通常是环境前置数据缺失，而非选择器/步骤写错。正确做法是让用例先创建出满足 expectedOutcome 的数据（例如造一条会自动触发处置的事件），或如实向用户汇报环境缺数据——严禁通过弱化 expectedOutcome（如把"自动启动处置成功"改成"页面正常加载"）把失败蒙成通过。` : ''}${visionDiag ? ` ⚠ 归因:${visionDiag.note}` : ''}`,
               },
             });
-            completed = true; // 正常完成发射点：在途异步均已收敛，浏览器状态可保活
+            completed = true; // Normal completion emission point: all in-flight async has settled, browser state is keep-alive-able
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
             return { ok: true, data: rdata };
           }
@@ -1715,7 +1721,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             const failedReplayStep = effectiveSteps.find((s) => s.order === replayFailure!.order) ?? null;
             const replayIdx = failedReplayStep ? effectiveSteps.indexOf(failedReplayStep) : -1;
             const replayHint = replayIdx >= 0 ? summarizeStaticReports(staticByStep[replayIdx] ?? []) : null;
-            // 归因全交 LLM：分叉现场页（回放自己的 page）的候选命中 + 浮层 + 元素清单
+            // Attribution fully delegated to the LLM: the divergence scene page's (the replay's own page) candidate hits + overlays + element listing
             const replayPageForDiag = replayPage ?? page;
             const replayProbes = await probeLocatorHits(replayPageForDiag, collectStepLocators(failedReplayStep?.compiled));
             const replayOverlays = (await extractPageEvidence(replayPageForDiag)).overlays;
@@ -1757,8 +1763,8 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 humanMessage: replayFailure.humanMessage ?? replayFailure.error ?? null,
                 screenshot: replayFailure.screenshot ?? null,
                 page: failurePage,
-                // 失败步的查库结果（断言未命中时 rows 仍在——执行器先写 sink 再判断言）：
-                // agent 据此看到「库里到底有什么」，改 expected/查询条件即可，不必建探针用例去摸数据。
+                // The failed step's DB-query result (rows remain even when the assertion missed — the executor writes the sink before judging the assertion):
+                // the agent sees "what's actually in the DB" and can fix expected/the query condition; no probe cases needed to grope for data.
                 ...(replayFailure.sql
                   ? {
                       sql: {
@@ -1773,25 +1779,25 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
                 note: `${mode === 'mechanical' ? '机械验收模式（无 AI 相对照）下 compiled 机械逐字执行失败' : 'AI 临场执行能通过，但与正式回放同引擎的 compiled 机械逐字执行失败（回放分叉）'}——典型如 click 落在组件 wrapper 上不触发实际行为、唯一名冲突二次执行必挂。请用 failure.page.elements 中真实存在的选择器把该步 compiled 改成更精确的可操作目标（组件内部真实接收点击/输入的元素），或修正测试数据策略（时间戳命名）后重验。${mode === 'mechanical' ? '（机械模式无自动登录：若失败页是登录页，多为登录态缓存失效/副本重启——改 mode=full 重新实测登录即可；同因连续两轮失败或归因不明也建议改 full 复核。）' : ''}${replayDiag ? ` ⚠ 归因:${replayDiag.note}` : ''}${replayHint ? ` 源码静态提示:${replayHint}` : ''}`,
               },
             });
-            completed = true; // 正常完成发射点：在途异步均已收敛，浏览器状态可保活
+            completed = true; // Normal completion emission point: all in-flight async has settled, browser state is keep-alive-able
             updateRoundState(roundKey(ctx.threadId, caseId), rdata);
             return { ok: true, data: rdata };
           }
-          // resume 轮 stepResults 只从 resumeIndex 起收集（局部下标），failedIndex 是全局步序，
-          // 二者差一个 resumeIndex 偏移——直接取 stepResults[failedIndex] 会是 undefined（
-          // "Cannot read properties of undefined (reading 'order')"）
+          // In resume rounds stepResults is only collected from resumeIndex on (local indices) while failedIndex is the global step order —
+          // the two differ by a resumeIndex offset; taking stepResults[failedIndex] directly would be undefined (
+          // "Cannot read properties of undefined (reading 'order')")
           const failed = stepResults[failedIndex - resumeIndex]!;
           const failedStep = effectiveSteps[failedIndex]!;
           const failedHint = summarizeStaticReports(staticByStep[failedIndex] ?? []);
-          // 自然语言步（无 compiled / 纯 aiTask）的 AI 相失败分流：这不是 locator 技术错误——
-          // 大概率是步骤描述与页面实际不符（含前面步骤把页面带偏），agent 自修无从下手、
-          // 重跑不改变结果。失败 note 指向「反馈用户调整」而非「修正 locator」。
+          // Natural-language step (no compiled / pure aiTask) AI-phase failure triage: this is not a locator technical error —
+          // most likely the step description doesn't match the page reality (including earlier steps steering the page astray); the agent has no
+          // self-fix to make and rerunning won't change the result. The failure note points at "report to the user for adjustment" not "fix the locator".
           const nlAiFail = AI_PHASE_FAIL_REASONS.has(failed.failureReason ?? '')
             && (!failedStep.compiled
               || (Array.isArray(failedStep.compiled)
                 && failedStep.compiled.every((a) => (a as { kind?: string }).kind === 'aiTask')));
           if (nlAiFail) {
-            // R3.5：落一条原始失败信号（fire-and-forget，失败只 warn 不影响 verify）
+            // R3.5: record one raw failure signal (fire-and-forget; on failure only warns, doesn't affect verify)
             void recordNlAiFailSignal({
               threadId: ctx.threadId, projectId: ctx.projectId, caseId, stepOrder: failed.order,
               payload: {
@@ -1803,7 +1809,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               },
             });
           }
-          // 归因全交 LLM：失败页候选命中 + 浮层 + 元素清单（+ 本轮浏览器 JS 报错缓冲）
+          // Attribution fully delegated to the LLM: failed-page candidate hits + overlays + element listing (+ this round's browser JS error buffer)
           const stepProbes = await probeLocatorHits(page, collectStepLocators(failedStep.compiled));
           const stepOverlays = (await extractPageEvidence(page)).overlays;
           const failedConsole = consoleCapture.drain();
@@ -1844,7 +1850,7 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
               screenshot: failed.screenshot ?? null,
               page: failurePage,
               ...stepEvidenceField,
-              // 本轮窗口内浏览器 JS 报错原文：agent 修正步骤时可直接看到前端侧故障信号。
+              // Browser JS errors caught within this round's window: the agent sees the frontend-side fault signal directly when fixing steps.
               ...(failedConsole.length ? { console: failedConsole } : {}),
               note: nlAiFail
                 ? `该步是自然语言步骤，由 AI 相（视觉执行）在真实页面上执行失败（${failed.failureReason ?? '未知'}）——大概率不是 locator 技术问题，而是步骤描述与页面实际不符：目标不存在/措辞歧义/前置状态没建立，也可能是前面某步的描述把页面带偏。这不是你能自行修复的错误：立即停止重跑与自诊，把失败详情反馈给用户（步骤 ${failed.order}「${failedStep.instruction ?? ''}」原文、failureReason、失败页 URL 与 page.elements/截图，必要时附前一步原文），请用户选择：a.调整该步或前面步骤的自然语言描述 b.补充入口/页面线索 c.确认环境/数据后重验。用户明确答复前不要再调用 verify_case——AI 相每步耗时 1~2 分钟，盲目重跑只烧时间与 token。**唯一例外：失败页是登录页或与目标业务页无关的首页/概览页时，先 get_login_credentials + perform_login 重新登录再重验本用例**——那是会话过期（登录态缓存 30 分钟）不是步骤写错，登录后可自愈，不必等用户答复。**另一条例外（不要问用户）：失败步语义是查库/调接口确认（原文含查库/落库/接口/请求/状态校验之类）时，这是步骤形态错而非描述错——浏览器里没有 DB 工具，AI 相永远跑不了它：把该步改写成带 compiled 的 sql（查被测系统的库）/ httpRequest（调接口）步，同 localId 重发 stage_case 再验，断言结论由结尾干跑给出。**${stepDiag ? ` ⚠ 归因:${stepDiag.note}` : ''}`
@@ -1852,26 +1858,26 @@ export function buildVerifyCaseTool(ctx: SpaceToolsContext): ToolExecutor {
             },
           });
           updateRoundState(roundKey(ctx.threadId, caseId), rdata);
-          // 失败也是干净断点：浏览器停在失败现场（失败步之前的步已生效，appliedCount 即其条数），
-          // 下一轮从失败步续跑而不必重跑前缀。不置 completed → finally 判定不可保活 → 浏览器整个
-          // 丢掉，「失败→修正→重验」这条主循环（prod228 实测 74% 的轮次是失败轮）永远付一遍前缀
-          // 重演 + 重新登录的代价。
+          // Failure is also a clean breakpoint: the browser rests at the failure scene (steps before the failed step have taken effect, appliedCount is their count),
+          // so the next round resumes from the failed step without re-running the prefix. Not setting completed → finally judges non-keep-alive → the whole browser
+          // is discarded, and the main "fail → fix → re-verify" loop (prod228 measured 74% of rounds are failure rounds) forever pays the prefix
+          // replay + re-login cost.
           completed = true;
           return { ok: true, data: rdata };
         } finally {
           clearTimeout(timer);
           live?.close();
-          // ── 保活决策：正常完成（completed）+ 无在途僵尸（zombie）+ 未超时 + 浏览器连通
-          // → commit 上册供下轮零重放续跑；zombie/超时/断连时命中轮 invalidate 销毁、
-          // 新建轮照旧即用即关。replayPage 不是保活口径的终态页（下轮续跑从 AI 相 page 起），关掉。
-          // 登录用例永不上册：它停在本轮自己的登录后状态，下轮要的恰是干净会话。
+          // ── Keep-alive decision: normal completion (completed) + no in-flight zombie (zombie) + not timed out + browser connected
+          // → commit to the registry for the next round's zero-replay resume; on zombie/timeout/disconnect, hit rounds invalidate (destroy) and
+          // fresh rounds close as usual. replayPage isn't the keep-alive terminal page (next round resumes from the AI phase's page), so close it.
+          // Login cases are never registered: they rest at this round's own post-login state, and the next round needs exactly a clean session.
           if (
             mode !== 'mechanical' &&
             !loginCase &&
             browser !== undefined && context !== undefined && page !== undefined &&
             completed && !zombie && !timedOut &&
-            // 可选调用 + 严格等值：Browser/Page 接口恒有这两方法，缺方法只出现在测试桩——
-            // 视为不可保活（注册表在桩环境下惰性，既有测试语义不变），真实浏览器不受影响。
+            // Optional-call + strict equality: Browser/Page interfaces always have these two methods; missing methods only appear in test stubs —
+            // treat as non-keep-alive (the registry is inert under stub environments, existing test semantics unchanged); real browsers are unaffected.
             browser.isConnected?.() === true && page.isClosed?.() === false
           ) {
             if (replayPage && replayPage !== page && replayPage.isClosed?.() !== true) {

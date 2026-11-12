@@ -5,8 +5,8 @@ import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
 /**
- * Task 8 引擎双层循环集成测试：组级 fail_fast / 计划级 fail_fast（组边界评估）/ 登录复用签名 / 老运行兼容。
- * 机械执行 mock 成空步骤（不启浏览器）；失败用 FORCE_FAIL_CASE_IDS（runCase 在 CDP 前短路写失败报告）。
+ * Task 8 engine two-level-loop integration test: group-level fail_fast / plan-level fail_fast (evaluated at group boundaries) / login reuse signature / legacy run compatibility.
+ * Mechanical execution is mocked into empty steps (no browser); failures use FORCE_FAIL_CASE_IDS (runCase short-circuits to write a failure report before CDP).
  */
 const { execMock } = vi.hoisted(() => ({ execMock: vi.fn() }));
 vi.mock('../src/execute/cdp.js', async (importOriginal) => {
@@ -54,7 +54,7 @@ async function makeCase(groupId: string, versionId: string, title: string): Prom
   return c.body.id as string;
 }
 
-/** 造默认 web 环境（无内嵌凭据）：机械用例可解析环境并 passed（执行被 mock 成空步骤）。 */
+/** Create the default web environment (no embedded credentials): mechanical cases can resolve the environment and pass (execution mocked into empty steps). */
 async function seedDefaultEnv(projectId: string): Promise<void> {
   await pool.query(`INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认', true)`, [projectId]);
 }
@@ -210,7 +210,7 @@ describe('runPlan 双层循环（组级语义）', () => {
     const planId = p.rows[0].id as string;
     await pool.query(`INSERT INTO plan_cases(plan_id, case_id, "order") VALUES ($1, $2, 1)`, [planId, c1]);
     await pool.query(`INSERT INTO plan_cases(plan_id, case_id, "order") VALUES ($1, $2, 2)`, [planId, c2]);
-    // groups=null + 标量登录快照（开登录但无登录用例、无环境凭据 → loginPrepare 以 no login case 跳过，不启浏览器）
+    // groups=null + scalar login snapshot (login enabled but no login case, no environment credentials → loginPrepare skips with no login case, no browser launch)
     const run = await pool.query(
       `INSERT INTO plan_runs(plan_id, project_id, status, strategy, groups, login_prepare_enabled)
        VALUES ($1, $2, 'running', 'run_all', NULL, true) RETURNING id`,

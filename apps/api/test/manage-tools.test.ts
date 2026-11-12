@@ -1,18 +1,18 @@
 /**
- * manage_skill / manage_mcp 工具行为测试（直接构造工具闭包调 execute，不经 HTTP）。
+ * manage_skill / manage_mcp tool behavior tests (tool closures constructed directly and execute called, no HTTP).
  *
- * 覆盖：
- *  - 注册闸门：ctx.manager=true 才注册两个管理工具；false 不注册。
- *  - 防御性 execute guard：manager=false 即使手动调用也返回「无管理员权限」。
- *  - manage_skill：create/list/update(renameTo)/delete、重名 409、slug 非法、缺字段、不存在。
- *  - manage_mcp：create stdio/http、file:// url 拒绝、exposure 白名单、重名 409、
- *    list 仅 global、scoped 行 update/delete 拒绝、kind 切换清列、renameTo、不存在。
+ * Coverage:
+ *  - Registration gate: only ctx.manager=true registers the two management tools; false registers none.
+ *  - Defensive execute guard: manager=false returns "no admin permission" even when called manually.
+ *  - manage_skill: create/list/update(renameTo)/delete, duplicate-name 409, invalid slug, missing fields, not-found.
+ *  - manage_mcp: create stdio/http, file:// url rejection, exposure whitelist, duplicate-name 409,
+ *    list global-only, scoped rows reject update/delete, kind switch clears columns, renameTo, not-found.
  *
- * 与 route 测试共用 SCHEMA_SQL（assistant_skills + assistant_mcp_servers 均带 name UQ）。
+ * Shares SCHEMA_SQL with the route tests (assistant_skills + assistant_mcp_servers both carry a name UQ).
  *
- * 隔离要点：PI_DATA_DIR 必须在任何动态 import 之前指到临时目录并 resetModules——
- * skillsStore 的 SKILLS_ROOT 是模块级常量，且 listSkills() 会把磁盘上未登记的目录
- * 当孤儿行返回。不隔离就会读到开发者真实的技能库（且用例之间互相污染）。
+ * Isolation essentials: PI_DATA_DIR must point to a temp dir and resetModules happen before any dynamic import —
+ * skillsStore's SKILLS_ROOT is a module-level constant, and listSkills() returns unregistered directories
+ * on disk as orphan rows. Without isolation the developer's real skill library gets read (and cases pollute each other).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
@@ -58,7 +58,7 @@ beforeAll(async () => {
   process.env.DATABASE_URL = pgDb.uri;
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // 必须在动态 import 之前：SKILLS_ROOT 在模块加载时就从 PI_DATA_DIR 解析。
+  // Must happen before the dynamic imports: SKILLS_ROOT is resolved from PI_DATA_DIR at module load.
   dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'itest-mgrtools-'));
   process.env.PI_DATA_DIR = dataDir;
   vi.resetModules();
@@ -81,7 +81,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await pool.query(`TRUNCATE assistant_skills, assistant_mcp_servers`);
-  // 目录也清：create/update/delete 都真实动磁盘，留着会让下一例的 list 看到孤儿行。
+  // Clear directories too: create/update/delete really touch the disk; leftovers would make the next case's list see orphan rows.
   fs.rmSync(skillsRoot, { recursive: true, force: true });
   fs.mkdirSync(skillsRoot, { recursive: true });
 });
@@ -124,21 +124,21 @@ describe('manage_skill', () => {
     const list = await runSkill(c(), { action: 'list' });
     const rows = JSON.parse((list as { data: string }).data) as Array<{ name: string; fileCount: number }>;
     expect(rows.map((r) => r.name)).toEqual(['smoke-check']);
-    expect(rows[0]!.fileCount).toBe(1); // create 产出的是 SKILL.md 骨架
+    expect(rows[0]!.fileCount).toBe(1); // create produces the SKILL.md skeleton
 
-    // 改名：目录跟着搬
+    // Rename: the directory moves with it
     const renamed = await runSkill(c(), { action: 'update', name: 'smoke-check', renameTo: 'smoke-renamed' });
     expect(renamed.ok).toBe(true);
     expect(JSON.parse((renamed as { data: string }).data)).toMatchObject({ updated: 'smoke-renamed' });
     expect(fs.existsSync(path.join(skillsRoot, 'smoke-renamed', 'SKILL.md'))).toBe(true);
     expect(fs.existsSync(path.join(skillsRoot, 'smoke-check'))).toBe(false);
 
-    // 删除：连目录一起没
+    // Delete: the directory disappears along with the row
     const del = await runSkill(c(), { action: 'delete', name: 'smoke-renamed' });
     expect(del.ok).toBe(true);
     expect(JSON.parse((del as { data: string }).data)).toMatchObject({ deleted: 'smoke-renamed' });
     expect(fs.existsSync(path.join(skillsRoot, 'smoke-renamed'))).toBe(false);
-    // 不存在 → 报错
+    // Not found → error
     const missing = await runSkill(c(), { action: 'delete', name: 'smoke-renamed' });
     expect(missing.ok).toBe(false);
     expect((missing as { error: string }).error).toBe('技能不存在: smoke-renamed');
@@ -170,12 +170,12 @@ describe('manage_skill', () => {
 
   it('update 只改元数据（description/enabled），不提供文件写入面', async () => {
     await runSkill(c(), { action: 'create', name: 'with-script', description: 'x' });
-    // body/scripts 不再是入参——传了也不生效（zod 非严格对象会丢弃未知键）。
+    // body/scripts are no longer inputs — passing them has no effect (zod non-strict objects drop unknown keys).
     const upd = await runSkill(c(), { action: 'update', name: 'with-script', description: '新描述', enabled: false, body: '# 偷偷改正文' });
     expect(upd.ok).toBe(true);
     const rows = JSON.parse((await runSkill(c(), { action: 'list' }) as { data: string }).data) as Array<{ name: string; description: string; enabled: boolean }>;
     expect(rows[0]).toMatchObject({ name: 'with-script', description: '新描述', enabled: false });
-    // 正文没被动：SKILL.md 仍是骨架
+    // Body untouched: SKILL.md is still the skeleton
     expect(fs.readFileSync(path.join(skillsRoot, 'with-script', 'SKILL.md'), 'utf8')).toContain('name: "with-script"');
     expect(fs.readFileSync(path.join(skillsRoot, 'with-script', 'SKILL.md'), 'utf8')).not.toContain('偷偷改正文');
   });
@@ -256,7 +256,7 @@ describe('manage_mcp', () => {
 
   it('list 仅 global：scoped 行不进清单，且 update/delete 拒绝(仅 global 可管理)', async () => {
     await runMcp(c(), { action: 'create', name: 'global-server', command: 'x' });
-    // 直接落一个 scope=project 行（对话面外的归属）
+    // Insert a scope=project row directly (ownership outside the conversation surface)
     await pool.query(
       `INSERT INTO assistant_mcp_servers(name, kind, command, scope, project_id) VALUES ('scoped-server', 'stdio', 'y', 'project', NULL)`,
     );

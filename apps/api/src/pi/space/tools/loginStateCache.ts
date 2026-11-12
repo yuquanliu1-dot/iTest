@@ -1,8 +1,8 @@
 /**
- * 进程内登录态缓存：verify_case / perform_login 按 `${envId}:${user}` 复用已登录 storageState，
- * 省掉每次调用重复的登录+验证码成本（视觉 LLM 往返约 2 分钟/轮）。
- * 只存内存：storageState 含会话 cookie，不落库、不进 LLM 上下文/工具返回值/日志，进程重启即清空。
- * 过期不显式失效——缓存落到登录页时 AI 驱动流程会用凭据重新登录并回写（自愈，最坏退化回无缓存）。
+ * In-process login-state cache: verify_case / perform_login reuse a logged-in storageState by `${envId}:${user}`,
+ * saving the repeated login+captcha cost of every call (~2 minutes per visual-LLM round trip).
+ * Memory only: storageState carries session cookies — never persisted, never fed into LLM context/tool returns/logs, cleared on process restart.
+ * Expiry is not explicitly invalidated — when the cached state lands on a login page, the AI-driven flow re-logs-in with credentials and writes back (self-healing; worst case it degrades back to no cache).
  */
 import type { BrowserContext } from 'playwright-core';
 

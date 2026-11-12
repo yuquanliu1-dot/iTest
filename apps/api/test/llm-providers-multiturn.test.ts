@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// 两个非 Anthropic provider 的多轮形态回归：它们此前只支持单轮，
-// 加了 req.messages 后必须原样回传历史，且缺省/空历史时不崩。
+// Multi-turn regression for the two non-Anthropic providers: they previously only supported single-turn;
+// after req.messages was added they must pass the history through verbatim, and not crash on missing/empty history.
 const { openaiCreate, chatStart, chatSend } = vi.hoisted(() => ({
   openaiCreate: vi.fn(),
   chatStart: vi.fn(),
@@ -16,8 +16,8 @@ vi.mock('openai', () => {
 });
 
 vi.mock('@google/generative-ai', () => {
-  // 真实 SDK 的 startChat 返回一个 ChatSession（带 sendMessage）；桩必须返回它，
-  // 否则 complete 里的 chat.sendMessage 会拿到 undefined。
+  // The real SDK's startChat returns a ChatSession (with sendMessage); the stub must return it,
+  // otherwise chat.sendMessage inside complete gets undefined.
   class GoogleGenerativeAI {
     getGenerativeModel = () => ({
       startChat: (opts: unknown) => {
@@ -39,7 +39,7 @@ const HISTORY: LLMMessage[] = [
   { role: 'user', content: [{ type: 'image', base64: 'AAA', mime: 'image/png' }, { type: 'text', text: '第2轮' }] },
 ];
 
-// 每个用例都断言「本次调用」的入参，桩的调用历史必须隔离
+// Each case asserts the args of "this call", so the stubs' call history must be isolated
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -54,7 +54,7 @@ describe('OpenAIClient 多轮累积', () => {
     const r = await c.complete({ systemPrompt: 'sys', userMessage: '当轮', messages: HISTORY });
     const body = openaiCreate.mock.calls[0]![0] as { messages: Array<{ role: string; content: Array<{ type: string }> }> };
     expect(body.messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
-    // 图片转 data URL
+    // Image becomes a data URL
     expect(body.messages[3]!.content[0]!.type).toBe('image_url');
     expect(body.messages[3]!.content[1]!.type).toBe('text');
     expect(r.vision).toBe(true);
@@ -78,7 +78,7 @@ describe('GoogleClient 多轮累积', () => {
     const r = await c.complete({ systemPrompt: 'sys', userMessage: '当轮', messages: HISTORY });
     const hist = chatStart.mock.calls[0]![0]!.history as Array<{ role: string; parts: Array<{ text?: string; inlineData?: unknown }> }>;
     expect(hist.map((t) => t.role)).toEqual(['user', 'model']);
-    // 当前轮（图 + 文）走 sendMessage，不进 history
+    // The current turn (image + text) goes through sendMessage, not into history
     const sent = chatSend.mock.calls[0]![0] as Array<{ text?: string; inlineData?: unknown }>;
     expect(sent).toHaveLength(2);
     expect(sent[0]!.inlineData).toEqual({ mimeType: 'image/png', data: 'AAA' });
@@ -88,7 +88,7 @@ describe('GoogleClient 多轮累积', () => {
   it('空 messages 数组退化为单轮，不因 turns[-1] 崩溃', async () => {
     chatSend.mockResolvedValueOnce({ response: { text: () => '{"ok":1}' } });
     const c = new GoogleClient({ provider: 'google', apiKey: 'k', model: 'gemini-2.0-flash' });
-    // startChat 的 history 必须以 user 开头；空数组会触发 SDK 运行时异常
+    // startChat's history must start with a user turn; an empty array triggers an SDK runtime exception
     await expect(c.complete({ systemPrompt: 'sys', userMessage: 'u', messages: [] })).resolves.toBeTruthy();
     expect(chatStart.mock.calls[0]![0]!.history).toEqual([]);
   });

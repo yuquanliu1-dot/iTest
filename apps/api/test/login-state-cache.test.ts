@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// 进程内登录态缓存：存取、TTL 过期、key 规则。模块级 Map,各用例用不同 key 隔离。
+// In-process login state cache: store/fetch, TTL expiry, key rules. Module-level Map; each case uses distinct keys for isolation.
 describe('loginStateCache', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

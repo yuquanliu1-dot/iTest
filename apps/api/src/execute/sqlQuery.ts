@@ -1,21 +1,24 @@
 /**
- * sql 步骤执行器：对被测系统自己的数据库跑单条只读 SQL。
- * 2026-11-08：查库统一走这一个 kind（原 queryDb 已下线——它接的也是环境默认 db 对象
- * = SUT 库，表名却锁死平台自己的表，两侧对不上恒定失败）。
+ * SQL step executor: runs a single read-only SQL statement against the SUT system's own database.
+ * 2026-11-08: all DB queries go through this one kind (the old queryDb is retired — it also connected
+ * to the environment default db object = the SUT DB, but locked table names to the platform's own
+ * tables; the two never matched, so it failed constantly).
  *
- * 绑定策略：`{{var}}` 一律走【位置参数绑定】（不做字符串拼接，避免注入）；
- * 显式写好的 `$n`（pg）/ `?`（mysql）占位符则由 action.params 顺序填充。
- * 两套绑定不能混用——顺序无法可靠推断，混用直接判死。
+ * Binding strategy: `{{var}}` always uses [positional parameter binding] (no string concatenation,
+ * to avoid injection); explicitly written `$n` (pg) / `?` (mysql) placeholders are filled in order
+ * from action.params. The two binding styles must not be mixed — the order cannot be reliably
+ * inferred; mixing is a hard failure.
  *
- * 三道防线：变量缺失 fail-fast → sqlGuard 词法只读守卫 → 结果序列化截断。
- * 真正的安全边界是被测库的只读账号（守卫挡不住全部变体，见 sqlGuard 注释）。
+ * Three lines of defense: missing variable fail-fast → sqlGuard lexical read-only guard → result
+ * serialization truncation. The real security boundary is the read-only account on the SUT database
+ * (the guard cannot block all variants, see the sqlGuard comments).
  */
 import { substituteVars, VAR_RE } from '@itest/shared';
 import type { SqlStepResult, SqlAction } from '@itest/shared';
 import type { QueryPool } from './envContext.js';
 import { assertReadOnlySql } from './sqlGuard.js';
 
-/** 单个单元格的最大保留字符数（超出部分截断并标记）。 */
+/** Max characters kept per cell (truncated and marked beyond this). */
 const MAX_CELL_CHARS = 2000;
 const TRUNCATE_MARK = '…(截断)';
 
@@ -25,13 +28,13 @@ export async function runSql(opts: {
   pool: QueryPool;
   action: SqlAction;
   vars?: Record<string, string>;
-  /** 执行期解析出的 db 名字（action.dbRef 缺省时用它回填结果）。 */
+  /** DB name resolved at execution time (used to backfill the result when action.dbRef is absent). */
   dbRef?: string | null;
 }): Promise<SqlStepResult> {
   const { pool } = opts;
   const vars = opts.vars ?? {};
   const started = Date.now();
-  // compiled DSL 来自 test_steps 落库的原始 JSON，未经 zod 解析 → 缺省值在这里兜住。
+  // The compiled DSL is raw JSON persisted in test_steps, not parsed by zod → defaults are clamped here.
   const action = {
     dbRef: opts.action.dbRef,
     sql: opts.action.sql,
@@ -40,13 +43,13 @@ export async function runSql(opts: {
     assertion: opts.action.assertion,
   };
 
-  // 1) 变量缺失 fail-fast：缺变量就不该发查询（发出去必然语法错，且会留下误导性错误）。
+  // 1) Missing variable fail-fast: a missing variable means the query must not be sent (it would be a guaranteed syntax error with a misleading message).
   const { missing } = substituteVars(action.sql, vars);
   if (missing.length > 0) {
     throw new Error(`var-missing: {{${missing[0]!}}} (sql="${action.sql.slice(0, 100)}")`);
   }
 
-  // 2) 绑定：模板变量与显式占位符二选一。
+  // 2) Binding: template variables and explicit placeholders are mutually exclusive.
   const tplCount = [...action.sql.matchAll(TPL_RE)].length;
   const hasExplicitPlaceholder =
     pool.dialect === 'postgres' ? /\$\d+/.test(action.sql) : /\?/.test(action.sql);
@@ -70,7 +73,7 @@ export async function runSql(opts: {
   } else {
     sql = action.sql;
     params = action.params.map((p) => (typeof p === 'string' ? substituteVars(p, vars).value : p));
-    // params 里的模板变量也做缺失检查（否则把 "{{who}}" 原样当字面量发给库）。
+    // Template variables inside params also get the missing check (otherwise "{{who}}" is sent to the DB verbatim as a literal).
     for (const p of action.params) {
       if (typeof p !== 'string') continue;
       const m = substituteVars(p, vars).missing;
@@ -78,9 +81,9 @@ export async function runSql(opts: {
     }
   }
 
-  // 3) 只读守卫：在触碰数据库前拦下写语句。
-  //    守卫跑在【绑定之后】的 SQL 上：变量名可能撞上关键字（如 {{update}}），
-  //    而变量值是位置参数、从不进 SQL 文本——守卫看到的永远是最终语句。
+  // 3) Read-only guard: intercepts write statements before the database is touched.
+  //    The guard runs on the SQL [after binding]: a variable name may collide with a keyword (e.g. {{update}}),
+  //    while variable values are positional parameters and never enter the SQL text — the guard always sees the final statement.
   assertReadOnlySql(sql);
 
   let rows: Record<string, unknown>[];
@@ -110,8 +113,8 @@ export async function runSql(opts: {
     rowCount: clipped.length,
     durationMs: Date.now() - started,
     rows: clipped,
-    // 实际发给库的语句 + 绑定参数值：报告页要能对照「发了什么 / 回了什么」。
-    // 模板变量的值只进 params（位置绑定），sql 里是占位符——这正是真正发出去的东西。
+    // The statement actually sent to the DB + bound parameter values: the report page must be able to compare "what was sent / what came back".
+    // Template variable values only go into params (positional binding); sql holds placeholders — that is exactly what is actually sent.
     sql,
     params,
     ...(truncated ? { truncated: true } : {}),

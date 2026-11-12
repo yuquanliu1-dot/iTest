@@ -1,17 +1,17 @@
 /**
- * verify_case 实测轨迹缓存：full 模式 AI 相顺带收集的逐步动作轨迹，供 solidify_case
- * 在步骤内容未变时零执行完成固化（1 次 AI 执行 + 1 次机械执行的提速关键）。
+ * verify_case live-test trace cache: the per-step action traces collected along the way by full mode's AI phase, letting solidify_case
+ * finish solidification with zero execution when step content is unchanged (the key to the 1 AI execution + 1 mechanical execution speedup).
  *
- * 中性模块：不 import verifyCase/solidifyCase（两者已有 solidify→verify 单向依赖，反向会成环）。
- * 生命周期与 verifyConfirmCache 同模式：进程内 Map + 粘性路由（nginx ip_hash）保证同线程
- * verify→solidify 命中同副本；副本重启/重排丢失时 solidify 自动回退真实执行，仅损失性能。
- * 新鲜度 = 逐步哈希 + 元哈希逐元素相等（与 verify 前缀确认同一套哈希函数）+ TTL 30min。
+ * Neutral module: doesn't import verifyCase/solidifyCase (they already have a solidify→verify one-way dependency; the reverse would form a cycle).
+ * Lifecycle follows the same pattern as verifyConfirmCache: in-process Map + sticky routing (nginx ip_hash) guarantees the same thread's
+ * verify→solidify hits the same replica; on replica restart/re-shuffle loss, solidify automatically falls back to real execution, only losing performance.
+ * Freshness = per-step hash + meta hash element-wise equality (the same hash functions as verify prefix confirmation) + 30min TTL.
  */
 import { createHash } from 'node:crypto';
 import type { AiAction } from '../../../execute/aiTask.js';
 import type { EffectiveStep } from './case-ops-tools.js';
 
-/** 逐步骤语义哈希：覆盖该步 AI 相的全部输入，其一变化即轨迹失效（与 verifyCase 前缀确认共用语义）。 */
+/** Per-step semantic hash: covers all of the step's AI-phase inputs; any change invalidates the trace (shares semantics with verifyCase's prefix confirmation). */
 export function hashEffectiveSteps(steps: EffectiveStep[]): string[] {
   return steps.map((s) =>
     createHash('sha1')
@@ -28,7 +28,7 @@ export function hashEffectiveSteps(steps: EffectiveStep[]): string[] {
   );
 }
 
-/** 环境绑定哈希：URL/默认环境/版本任一变化＝换被测对象，轨迹全部失效。刻意排除 expectedOutcome/title。 */
+/** Environment-binding hash: any change to URL/default environment/version = a different test target, invalidating all traces. expectedOutcome/title deliberately excluded. */
 export function hashVerifyMeta(m: { url: string | null; defaultEnvId: string | null; versionId: string | null }): string {
   return createHash('sha1').update(JSON.stringify([m.url, m.defaultEnvId, m.versionId])).digest('hex');
 }
@@ -36,12 +36,12 @@ export function hashVerifyMeta(m: { url: string | null; defaultEnvId: string | n
 export interface VerifiedTraceEntry {
   stepsHash: string[];
   metaHash: string;
-  /** stepId → 该步骤收集到的成功 AI 动作（按执行顺序；空数组 = 步骤通过但无可映射动作）。 */
+  /** stepId → successful AI actions collected for that step (in execution order; empty array = step passed but had no mappable actions). */
   trace: Map<string, AiAction[]>;
   savedAt: number;
 }
 
-const TRACE_TTL_MS = 30 * 60 * 1000; // 与 loginStateCache 对齐：实测→固化的间隔通常在分钟级
+const TRACE_TTL_MS = 30 * 60 * 1000; // Aligned with loginStateCache: the live-test→solidify gap is usually minutes
 const TRACE_MAX_ENTRIES = 64;
 
 const verifyTraceCache = new Map<string, VerifiedTraceEntry>();
@@ -52,7 +52,7 @@ export function traceKey(threadId: string, caseId: string): string {
 
 export function saveVerifiedTrace(key: string, stepsHash: string[], metaHash: string, trace: Map<string, AiAction[]>): void {
   if (verifyTraceCache.size >= TRACE_MAX_ENTRIES) {
-    // 淘汰最旧：线程数有限、正常流转会被覆盖写入，超限属长会话堆积的兜底
+    // Evict the oldest: the thread count is bounded and normal flow overwrites entries; hitting the cap is long-session pileup fallback
     let oldestKey: string | null = null;
     let oldestAt = Infinity;
     for (const [k, v] of verifyTraceCache) {
@@ -70,7 +70,7 @@ export function clearVerifiedTrace(key: string): void {
   verifyTraceCache.delete(key);
 }
 
-/** 取新鲜轨迹：哈希逐元素相等 + requiredStepIds 全部在册 + 未过 TTL；任一不满足删条目返 null。 */
+/** Take a fresh trace: hash element-wise equality + all requiredStepIds on record + within TTL; any miss deletes the entry and returns null. */
 export function takeFreshTrace(
   key: string,
   stepsHash: string[],
@@ -92,7 +92,7 @@ export function takeFreshTrace(
   return entry.trace;
 }
 
-/** 只读窥视（测试用）。 */
+/** Read-only peek (for tests). */
 export function getVerifiedTrace(key: string): VerifiedTraceEntry | null {
   return verifyTraceCache.get(key) ?? null;
 }

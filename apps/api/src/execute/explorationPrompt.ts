@@ -1,7 +1,7 @@
 /**
- * 探索式测试会话：提示词与产物契约。
- * 与执行提示词（aiTask.SYSTEM_PROMPT_BASE「忠实/不加戏」）方向相反——探索要求「主动找茬」。
- * 动作 JSON 协议与 runAiTask 的解析器保持一致（坐标主通道 + selector 兜底）。
+ * Exploratory-testing session: prompts and artifact contracts.
+ * Opposite in direction to the execution prompt (aiTask.SYSTEM_PROMPT_BASE「忠实/不加戏」) — exploration demands 「主动找茬」 (actively hunt for defects).
+ * The action JSON protocol stays consistent with runAiTask's parser (coordinate main channel + selector fallback).
  */
 import { z } from 'zod';
 import { getExplorationPersona, type ExplorationReproStep, type StepAction } from '@itest/shared';
@@ -9,16 +9,16 @@ import { mapAiActionsToCompiled } from './aiActionMap.js';
 import type { AiAction } from './aiTask.js';
 import type { CodeScope } from './codeScope.js';
 
-/** 单会话 findings 封顶：超出的丢弃（成本与审阅负担的双保险）。 */
+/** Per-session findings cap: excess is dropped (a double guard on cost and review burden). */
 export const EXPLORATION_MAX_FINDINGS = 20;
 
-/** 单会话数据库取证次数封顶：查库是取证手段不是探索主路径，超额即拒（防模型把预算烧在扫库上）。 */
+/** Per-session DB evidence-probe cap: querying the DB is an evidence channel, not the main exploration path — over quota is rejected (keeps the model from burning its budget scanning the DB). */
 export const EXPLORATION_MAX_SQL_PROBES = 20;
 
-/** 单会话仓库读码次数封顶：读码同样是取证手段（对照 EXPLORATION_MAX_SQL_PROBES 同形态）。 */
+/** Per-session repo-read cap: code reading is likewise an evidence channel (same shape as EXPLORATION_MAX_SQL_PROBES). */
 export const EXPLORATION_MAX_REPO_READS = 30;
 
-/** 单会话负面结果账本条数封顶：排除项是给模型的方向感，不是无限膨胀的记忆体。 */
+/** Per-session negative-result ledger cap: exclusions give the model a sense of direction, not an unbounded memory. */
 export const EXPLORATION_MAX_EXCLUDED = 20;
 
 export const EXPLORATION_SYSTEM_PROMPT_BASE = `你是 Web 探索式测试智能体，在真实浏览器里按章程（charter）主动找茬：发现行为异常、校验缺失、状态错乱、体验破绽并如实报告。
@@ -65,23 +65,23 @@ export interface ComposeExplorationArgs {
   startUrl: string;
   charter: string;
   personaKey: string;
-  /** true = 拼「登录准备」前导段（无暖登录态且环境有凭据时）；缺省 false。 */
+  /** true = prepend the login-preparation preamble (no warm login state and the environment has credentials); default false. */
   needsLoginPreamble?: boolean;
-  /** 登录占位符字面量（credentialPlaceholder 产物），needsLoginPreamble 时必填。 */
+  /** Login placeholder literals (credentialPlaceholder output), required when needsLoginPreamble. */
   loginPlaceholders?: { user: string; password: string };
-  /** web 资源清单文本（renderWebResourceManifest 产物），可空。 */
+  /** Web resource manifest text (renderWebResourceManifest output), may be empty. */
   manifest?: string;
-  /** 环境里的数据库对象（label + 方言）；非空则拼「## 数据库取证」段（sql 动作的可用库清单）。 */
+  /** The environment's db objects (label + dialect); non-empty prepends the 「## 数据库取证」 section (the sql action's available-db list). */
   dbs?: Array<{ label: string; dialect: string }>;
-  /** 代码提交范围（resolveCodeScope 产物）；非空则拼「## 代码范围」段。范围是焦点不是围栏。 */
+  /** Code commit scope (resolveCodeScope output); non-empty prepends the 「## 代码范围」 section. The scope is a focus, not a fence. */
   codeScope?: CodeScope;
 }
 
-/** 代码范围段（指令常量段，每轮随 instruction 携带——范围是会话级常量，缓存前缀稳定）。 */
+/** Code-scope section (an instruction constant section, carried with instruction every turn — the scope is a session-level constant, keeping the cache prefix stable). */
 const SCOPE_COMMITS_TO_PROMPT_MAX = 20;
 const SCOPE_FILES_TO_PROMPT_MAX = 40;
 
-/** CodeScope → 「## 代码范围」段：范围标签 + 提交清单 + 改动文件 + 候选起点 + 纪律句。 */
+/** CodeScope → the 「## 代码范围」 section: scope label + commit list + changed files + candidate starting points + discipline sentence. */
 export function renderCodeScopeSection(scope: CodeScope): string {
   const lines: string[] = [`## 代码范围\n${scope.label}`];
   if (scope.commits.length > 0) {
@@ -105,7 +105,7 @@ export function renderCodeScopeSection(scope: CodeScope): string {
   return lines.join('\n');
 }
 
-/** repo 读码动作协议（追加进系统提示词基底，只在有代码提交范围的会话出现）。 */
+/** repo read action protocol (appended to the system prompt base; appears only in sessions with a code commit scope). */
 export function renderRepoActionProtocol(): string {
   return `## 仓库读码（可选取证通道）
 需要代码佐证页面现象时，可输出 repo 动作直接读被测系统的源码（只读，路径相对仓库根）：
@@ -116,7 +116,7 @@ export function renderRepoActionProtocol(): string {
 约束：读码是取证手段不是探索主路径（本会话有次数上限）；源码里的密钥/凭据/内部地址不要写进 findings；改动的代码 ≠ 页面的实际行为，结论仍以页面验证为准。`;
 }
 
-/** 组装探索指令（runAiTask 的 instruction 参数，每轮随 user message 携带）。 */
+/** Composes the exploration instruction (runAiTask's instruction parameter, carried with the user message every turn). */
 export function composeExplorationInstruction(args: ComposeExplorationArgs): string {
   const persona = getExplorationPersona(args.personaKey);
   const sections: string[] = [`## 章程（charter）\n${args.charter.trim()}`, `## 视角\n${persona.directive}`];
@@ -145,7 +145,7 @@ export function composeExplorationInstruction(args: ComposeExplorationArgs): str
 const FindingSchema = z.object({
   title: z.string().trim().min(1).transform((s) => s.slice(0, 200)),
   description: z.string().trim().min(1).transform((s) => s.slice(0, 4000)),
-  /** 非法/缺失判级 → P2 兜底（判级脏值不丢整条 finding）。 */
+  /** Invalid/missing severity → P2 fallback (a dirty severity value doesn't sink the whole finding). */
   severity: z
     .string()
     .optional()
@@ -168,34 +168,34 @@ export interface CoercedFinding {
   reproSteps: ExplorationReproStep[];
 }
 
-/** 标题归一（会话内去重与跨会话交集共用的同一份口径）。 */
+/** Title normalization (one shared definition for in-session dedupe and cross-session intersection). */
 export function normalizeTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-/** 一条动作留痕（平台记录的 ground truth，非模型自述）。
- *  会话级（exploration_sessions.actions_trail）存整场动作序列；
- *  缺陷级（exploration_findings.actions_trail）存"自上一条 finding 起"的片段。 */
+/** One action-trail step (platform-recorded ground truth, not the model's self-report).
+ *  Session level (exploration_sessions.actions_trail) stores the whole run's action sequence;
+ *  finding level (exploration_findings.actions_trail) stores the fragment "since the previous finding". */
 export interface ExplorationStep {
   type: string;
   target: string;
   ok: boolean;
-  /** sql 步骤的结果摘要（行数 + 首行）；其余动作无。 */
+  /** Result summary of a sql step (row count + first row); absent for other actions. */
   detail?: string;
-  /** 这一步的结果摘要（人话：看到了什么 / 改变了什么 / 为什么失败）——
-   *  「会话过程」列表的正文。工具层产出（details.summary），runner 落库；
-   *  没有它的话 observe/截图/页内脚本这类步骤在详情页只有 target="-"，用户看不到价值。 */
+  /** This step's result summary (plain language: what was seen / what changed / why it failed) —
+   *  the body of the 「会话过程」 list. Produced by the tool layer (details.summary), persisted by the runner;
+   *  without it, observe/screenshot/in-page-script steps show only target="-" on the detail page and the user sees no value. */
   outcome?: string;
-  /** fill 的输入值（模型输出的原值：占位符字面量或普通文本，绝不是替换后的真实凭据——
-   *  valueSub 替换发生在执行器内部，onAction 收到的动作仍是原值）。升格用例时机械映射需要。 */
+  /** fill's input value (the model's raw output: placeholder literal or plain text, never the substituted real credential —
+   *  valueSub substitution happens inside the executor; onAction still receives the raw action). Needed for the promoted case's mechanical mapping. */
   value?: string;
-  /** wait 的毫秒数（升格时折进前一步 waitFor）。 */
+  /** wait's millisecond count (folded into the previous step's waitFor at promote time). */
   ms?: number;
-  /** press 的键名（无对应机械 DSL，升格时该步回落自然语言）。 */
+  /** press's key name (no mechanical DSL equivalent; falls back to natural language at promote time). */
   key?: string;
 }
 
-/** 老会话回落：会话级留痕列为空时，把各 finding 的片段按 order 拼回整场动作序列。 */
+/** Legacy-session fallback: when the session-level trail column is empty, stitches each finding's fragments back into the whole run's action sequence by order. */
 export function mergeExplorationTrails(
   findings: Array<{ actionsTrail?: Array<Partial<ExplorationStep>> | null }>,
 ): ExplorationStep[] {
@@ -214,8 +214,8 @@ export function mergeExplorationTrails(
   return out;
 }
 
-/** 动作留痕 → 复现步骤文本：平台自己记的动作序列 = ground truth（模型脑补的步骤靠不住）。
- *  升格用例与详情展示共用这一份口径。 */
+/** Action trail → repro-step text: the platform's own recorded action sequence = ground truth (the model's imagined steps can't be trusted).
+ *  Case promotion and detail display share this one definition. */
 export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown; detail?: unknown }>): ExplorationReproStep[] {
   const steps: ExplorationReproStep[] = [];
   for (const a of trail) {
@@ -230,9 +230,9 @@ export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown; de
       case 'navigate': steps.push({ action: `访问 ${target}` }); break;
       case 'screenshot': steps.push({ action: `截图 ${target}` }); break;
       case 'inject_fault': steps.push({ action: `注入故障 ${target}` }); break;
-      // 查库取证：expected 带平台记录的行数/摘要——reviewer 不用再自己去查一遍库。
+      // DB evidence probe: expected carries the platform-recorded row count/summary — the reviewer doesn't have to query the DB again.
       case 'sql': steps.push({ action: `查库 ${target}`, ...(detail ? { expected: detail } : {}) }); break;
-      // 读码取证：expected 带平台记录的结果摘要（命中数/文件行数）。
+      // Code-reading evidence: expected carries the platform-recorded result summary (hit count/file line count).
       case 'repo': steps.push({ action: `读代码 ${target}`, ...(detail ? { expected: detail } : {}) }); break;
       default:
         if (target) steps.push({ action: `${type} ${target}`.trim() });
@@ -242,16 +242,16 @@ export function trailToSteps(trail: Array<{ type?: unknown; target?: unknown; de
   return steps;
 }
 
-/** 升格用例的步骤草稿：instruction 恒为人话文本；compiled 非空 = 机械 DSL（回放不走 AI）。 */
+/** Step drafts for the promoted case: instruction is always plain-language text; compiled non-empty = mechanical DSL (replay skips the AI). */
 export interface ExplorationCaseStep {
   instruction: string;
   compiled: StepAction[] | null;
 }
 
-/** 坐标形态 target（"(320,180)"）——坐标动作未解析回唯一 selector，不可机械映射。 */
+/** Coordinate-shaped target ("(320,180)") — a coordinate action not resolved back to a unique selector can't be mechanically mapped. */
 const COORD_TARGET_RE = /^\(\d+,\d+\)$/;
 
-/** 升格用例时跳过的动作类型（取证与观察/判定记账——证据在详情页，复现路径不含它们）。 */
+/** Action types skipped when promoting a case (evidence and observe/verdict bookkeeping — evidence stays on the detail page; the repro path excludes them). */
 const SKIP_CASE_STEP_TYPES = new Set([
   'sql',
   'repo',
@@ -265,17 +265,18 @@ const SKIP_CASE_STEP_TYPES = new Set([
 ]);
 
 /**
- * finding 级动作留痕 → 升格用例步骤（best-effort DSL，2026-11-11 与用户确认的口径）：
- *  - 步骤源 = 平台留痕（ground truth），一条动作一个用例步骤；模型 reproSteps 不再参与
- *    步骤构造（可能脑补，且与机械动作数量对不上）——它只在整条留痕不可用时兜底（路由侧）。
- *  - click/fill/navigate 逐条喂 mapAiActionsToCompiled（单动作数组）复用固化管线全部防线
- *    （唯一 selector / 激活态 class / 裸标签 / Playwright 专有语法 / 凭据占位符），任一命中即该步回落 NL。
- *  - wait 折进前一步 compiled 尾部（waitFor 空 locator = 睡满时长，与固化管线同形态）。
- *  - press 回落 NL（平台 press DSL 是带 locator 的元素级动作，探索的 press 是页面级键盘）。
- *  - sql/repo 取证与 screenshot 观察动作不进用例（证据留在 finding 详情页）。
- *  - ok=false 的动作被滤掉：用例步骤 = 实际成功走过的路径，失败重试的探路动作不是复现路径。
- *  - **不保证回放必绿**：机械失效的步骤由人工在用例详情页重新编译——best-effort 的既定取舍。
- * instruction 文本复用 trailToSteps（详情页展示同一口径）。
+ * finding-level action trail → promoted-case steps (best-effort DSL, the definition confirmed with the user on 2026-11-11):
+ *  - Step source = the platform trail (ground truth), one action per case step; the model's reproSteps no longer participates
+ *    in step construction (it may be imagined, and its count doesn't match the mechanical actions) — it only serves as
+ *    a fallback when the whole trail is unavailable (route side).
+ *  - click/fill/navigate are fed one by one to mapAiActionsToCompiled (single-action arrays), reusing every safeguard of the solidify pipeline
+ *    (unique selector / active-state classes / bare tags / Playwright proprietary syntax / credential placeholders); any hit drops that step back to NL.
+ *  - wait folds into the previous step's compiled tail (waitFor with an empty locator = sleep the full duration, same shape as the solidify pipeline).
+ *  - press falls back to NL (the platform's press DSL is an element-level action with a locator; exploration's press is page-level keyboard).
+ *  - sql/repo evidence and screenshot observation actions don't enter the case (evidence stays on the finding detail page).
+ *  - Actions with ok=false are filtered out: case steps = the path actually walked successfully; failed retry probes are not the repro path.
+ *  - **No guarantee the replay goes green**: mechanically broken steps are recompiled by hand on the case detail page — the established best-effort tradeoff.
+ * instruction text reuses trailToSteps (the detail page shows the same view).
  */
 export function trailToCaseSteps(
   trail: Array<{ type?: unknown; target?: unknown; ok?: unknown; detail?: unknown; value?: unknown; ms?: unknown; key?: unknown }>,
@@ -287,14 +288,14 @@ export function trailToCaseSteps(
     const type = typeof o.type === 'string' ? o.type : '';
     const target = typeof o.target === 'string' ? o.target : '';
     if (!type || o.ok !== true) continue;
-    // 不进用例的动作：取证（sql/repo/evaluate/screenshot）与观察/判定记账（pi 链路的
-    // observe/read_text/report_finding/note_excluded/finish）——证据留在 finding 详情页，
-    // 复现路径只需要会改变页面状态的动作。
+    // Actions that don't enter the case: evidence (sql/repo/evaluate/screenshot) and observe/verdict bookkeeping (the pi chain's
+    // observe/read_text/report_finding/note_excluded/finish) — evidence stays on the finding detail page,
+    // the repro path only needs actions that change page state.
     if (SKIP_CASE_STEP_TYPES.has(type)) continue;
     const detail = typeof o.detail === 'string' && o.detail ? o.detail : undefined;
     const text = trailToSteps([{ type, target, ...(detail ? { detail } : {}) }])[0]?.action;
     if (!text) continue;
-    // 逐条构造单动作数组喂机械映射；坐标形态 target / fill 缺 value（老会话数据）不喂，直接回落。
+    // Build single-action arrays one by one for the mechanical mapping; coordinate-shaped targets / fill missing value (legacy session data) aren't fed — fall back directly.
     let action: AiAction | null = null;
     if ((type === 'click' || type === 'fill') && target && target !== '-' && !COORD_TARGET_RE.test(target)) {
       if (type === 'fill') {
@@ -310,7 +311,7 @@ export function trailToCaseSteps(
       out.push({ instruction: text, compiled: mapped.compiled });
       continue;
     }
-    // wait 且上一步是机械步 → 折进尾部（dispatch 对 compiled 数组按序执行）
+    // wait and the previous step is a mechanical step → fold into its tail (dispatch executes the compiled array in order)
     if (type === 'wait' && typeof o.ms === 'number' && o.ms > 0 && out.length > 0) {
       const prev = out[out.length - 1]!;
       if (prev.compiled) {
@@ -323,17 +324,17 @@ export function trailToCaseSteps(
   return out;
 }
 
-// —— 形状容错：真实模型常把字段写成别的名字/别的判级词，形状漂移不该让整条 finding 消失 ——
-// 2026-11-10 prod 实录：模型输出 {title,severity:"中",location,evidence}，
-// 旧实现只认 description → 5 条全被 safeParse 静默丢弃（摘要说 5 条、库里 0 条）。
-// 同日二次实录：另一模型输出 {type,描述,证据} → title/description 双缺全灭（8 条 0 落库）。
+// —— Shape tolerance: real models often write fields under other names / other severity words; shape drift must not make the whole finding vanish ——
+// 2026-11-10 prod record: the model output {title,severity:"中",location,evidence},
+// the old implementation accepted only description → all 5 entries silently dropped by safeParse (summary said 5, DB had 0).
+// Second record the same day: another model output {type,描述,证据} → both title/description missing, all wiped (8 entries, 0 persisted).
 const DESCRIPTION_KEYS = ['description', 'evidence', 'detail', 'details', 'desc', 'analysis', 'content', '描述', '现象', '详情', '说明', '证据'];
 const TITLE_KEYS = ['title', 'name', 'issue', 'bug', 'summary', '标题', '缺陷', '问题', 'type'];
 const LOCATION_KEYS = ['location', 'position', 'where', 'page', '位置', '所在位置', '页面'];
 const STEPS_KEYS = ['reproSteps', 'repro', 'steps', 'reproduceSteps', '复现步骤', '操作步骤', '步骤'];
 const SEVERITY_KEYS = ['severity', 'priority', 'level', '严重程度', '级别', '优先级'];
 
-/** 中文/英文判级词 → P0-P3（未知判级 → P2 兜底）。 */
+/** Chinese/English severity words → P0-P3 (unknown severity → P2 fallback). */
 const SEVERITY_ALIASES: Record<string, 'P0' | 'P1' | 'P2' | 'P3'> = {
   p0: 'P0', blocker: 'P0', critical: 'P0', 致命: 'P0', 阻塞: 'P0',
   p1: 'P1', high: 'P1', 高: 'P1', 严重: 'P1', 高危: 'P1',
@@ -373,15 +374,15 @@ function normalizeSteps(raw: unknown): ExplorationReproStep[] {
   return out;
 }
 
-// —— 近义标题合并：同一缺陷被模型换措辞重报，只留第一条 ——
-// 2026-11-10 prod 实录：一次探索落了 7 条 ≈ 3 个真缺陷（字体方框 ×3、名称误报 ×2、undefined/NaN ×2）。
-// 口径 = 字符集 Dice 相似度（借 explorbot similarityScore 的集合交并）≥ 阈值，
-// 且「定位细节 / 主体词」不冲突——相似度高但指代不同对象的（不同行/不同按钮/不同字段）必须分开。
+// —— Near-duplicate title merging: the same defect re-reported by the model with different wording keeps only the first entry ——
+// 2026-11-10 prod record: one exploration landed 7 entries ≈ 3 real defects (字体方框 ×3, 名称误报 ×2, undefined/NaN ×2).
+// Definition = character-set Dice similarity (borrowing explorbot similarityScore's set intersection/union) ≥ threshold,
+// and position details / subject words must not conflict — highly similar but referring to different objects (different rows/buttons/fields) must stay separate.
 
-/** 相似度阈值：标定自 prod 7 条近义标题（聚成 3 组）+ 合成必须分开的对（0 误并）。 */
+/** Similarity threshold: calibrated on the 7 prod near-duplicate titles (3 clusters) plus synthetic pairs that must stay separate (0 false merges). */
 const SIMILARITY_MERGE_THRESHOLD = 0.72;
 
-/** 定位细节：数字 / 第N行列项页条 / 引号内文本——指代不同对象即视为不同缺陷。 */
+/** Position details: numbers / 第N行列项页条 ordinal terms / text in quotes — different referenced objects means a different defect. */
 function positionTokens(title: string): string[] {
   const out = new Set<string>();
   for (const m of title.matchAll(/\d+(?:\.\d+)*/g)) out.add(m[0]);
@@ -390,16 +391,16 @@ function positionTokens(title: string): string[] {
   return [...out].sort();
 }
 
-/** 主体词：字段名 / 操作对象 / 值特征——同句式换主体词 = 另一个缺陷（保存按钮 vs 删除按钮、用户名 vs 密码）。 */
+/** Subject words: field names / operation targets / value traits — same sentence pattern with a different subject = another defect (保存按钮 vs 删除按钮, 用户名 vs 密码). */
 const SUBJECT_TOKENS = [
-  // 字段
+  // field names
   '用户名', '密码', '手机号', '手机', '邮箱', '验证码', '姓名', '名称', '标题', '金额', '价格', '数量',
   '日期', '时间', '地址', '备注', '描述', '类型', '状态', '编号', '角色', '部门', '文件', '图片',
-  // 操作对象
+  // operation targets
   '保存', '删除', '提交', '导出', '导入', '上传', '下载', '搜索', '筛选', '排序', '分页', '新增',
   '编辑', '复制', '粘贴', '撤销', '重置', '刷新', '登录', '退出', '注册', '勾选', '全选', '展开',
   '折叠', '切换', '关闭', '打开', '确认', '取消', '审批', '支付', '打印',
-  // 值特征
+  // value traits
   '负数', '正数', '小数', '整数', '超大值', '超长', '为空', '空值', '边界值', '特殊字符',
   '中文', '英文', '重复值', '空格', '全角', '半角',
 ];
@@ -408,7 +409,7 @@ function subjectTokens(title: string): string[] {
   return SUBJECT_TOKENS.filter((t) => title.includes(t)).sort();
 }
 
-/** 字符集 Dice 相似度。 */
+/** Character-set Dice similarity. */
 function diceSimilarity(a: string, b: string): number {
   const A = new Set([...a.replace(/\s/g, '')]);
   const B = new Set([...b.replace(/\s/g, '')]);
@@ -418,7 +419,7 @@ function diceSimilarity(a: string, b: string): number {
   return (2 * inter) / (A.size + B.size);
 }
 
-/** 形状指纹：被拒条目的键名/类型——形状漂移时一眼看出模型写了什么（不落全文）。 */
+/** Shape fingerprint: the rejected entry's keys/types — at a glance what the model wrote when shapes drift (not the full text). */
 export function shapeFingerprint(item: unknown): string {
   if (typeof item === 'string') return `string:${item.slice(0, 40)}`;
   if (Array.isArray(item)) return `array:${item.length}`;
@@ -426,8 +427,8 @@ export function shapeFingerprint(item: unknown): string {
   return `type:${typeof item}`;
 }
 
-/** 两条标题是否同一缺陷（近义重报）。跨会话交集判定复用这一份口径——两处漂移会让
- *  「多视角共同发现」的数字对不上会话内去重的结果。 */
+/** Whether two titles are the same defect (near-duplicate re-report). Cross-session intersection judgment reuses this one definition —
+ *  drift between the two places would make the 「多视角共同发现」 numbers disagree with in-session dedupe. */
 export function isNearDuplicate(a: string, b: string): boolean {
   if (a === b) return true;
   if (positionTokens(a).join(' ') !== positionTokens(b).join(' ')) return false;
@@ -437,8 +438,8 @@ export function isNearDuplicate(a: string, b: string): boolean {
   return diceSimilarity(a, b) >= SIMILARITY_MERGE_THRESHOLD;
 }
 
-/** 原始条目 → 契约形状；标题或描述双缺（或非对象）判废条目返回 null。
- *  字符串条目也收：模型有时直接把缺陷写成一句话（当标题兼描述）。 */
+/** Raw entry → contract shape; both title and description missing (or a non-object) → judged invalid, returns null.
+ *  String entries are also accepted: the model sometimes writes the defect as a single sentence (title doubles as description). */
 function canonicalizeFinding(raw: unknown): CoercedFinding | null {
   if (typeof raw === 'string') {
     const text = raw.trim();
@@ -452,7 +453,7 @@ function canonicalizeFinding(raw: unknown): CoercedFinding | null {
   if (!title || !description) return null;
   const location = pickString(o, LOCATION_KEYS);
   let desc = location && !description.includes(location) ? `${description}\n位置：${location}` : description;
-  // 高优先级描述键（如 描述）赢了位次时，证据文本不能丢——并作补充段（同 location 合并法）。
+  // When a high-priority description key (e.g. 描述) wins the position race, the evidence text must not be lost — merge it as a supplementary section (same method as location).
   const evidence = pickString(o, ['证据']);
   if (evidence && !desc.includes(evidence)) desc = `${desc}\n证据：${evidence}`;
   const severityRaw = SEVERITY_KEYS.map((k) => o[k]).find((v) => typeof v === 'string' && v.trim());
@@ -460,9 +461,9 @@ function canonicalizeFinding(raw: unknown): CoercedFinding | null {
   return { title, description: desc, severity: normalizeSeverity(severityRaw), reproSteps: normalizeSteps(stepsRaw) };
 }
 
-/** 模型 findings 原始数组 → 可落库形态：字段截断兜底（脏 severity→P2/超长→slice）、
- *  仅空标题/空描述判非法丢弃、剩余配额截断、跨轮按标题去重（逐字 + 近义）。
- *  dropped = 被拒总数（重复/超配额/非法）；invalid = 其中字段实在不可救的非法条数。 */
+/** The model's raw findings array → persistable shape: field truncation fallback (dirty severity→P2/overlong→slice),
+ *  only empty title/empty description judged invalid and dropped, remaining-quota truncation, cross-turn title dedupe (verbatim + near-duplicate).
+ *  dropped = total rejected (duplicate/over-quota/invalid); invalid = how many of those had unsalvageable fields. */
 export function coerceFindings(
   raw: unknown[],
   opts?: { existingTitles?: string[]; max?: number },
@@ -493,7 +494,7 @@ export function coerceFindings(
       continue;
     }
     const key = normalizeTitle(parsed.data.title);
-    // 逐字重复 + 近义重报（同一缺陷换措辞）都算重复
+    // Verbatim duplicates + near-duplicate re-reports (the same defect reworded) both count as duplicates
     if (seen.some((t) => isNearDuplicate(t, key))) {
       dropped += 1;
       continue;

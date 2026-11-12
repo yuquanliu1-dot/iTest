@@ -1,23 +1,23 @@
 /**
- * manage_cases:读 + 分组创建/改名/删除 + 跨版本复制。
- * 归属校验(实体 ∈ ctx.projectId;版本读写面见各 action)在这里;per-user 可见性在 HTTP 边界。
+ * manage_cases: read + group create/rename/delete + cross-version copy.
+ * Ownership validation (entity ∈ ctx.projectId; per-action version read/write surfaces) lives here; per-user visibility lives at the HTTP boundary.
  *
- * 设计变更:用例/步骤的一切修改统一走 stage_case_op 暂存 → StagePanel 勾选 → 落库。
- * 本工具七类：
- *   - search:版本内检索(可传 versionId 检索同项目其它版本,为跨版本复制找源)
- *   - get:caseId 拿完整详情(同项目内可跨版本读,复制前核对源用例;绑定了数据集时附 dataset 结构)
- *   - list_versions:项目版本列表(拿源/目标 versionId)
- *   - copy_to_version:复制用例到目标分组(可跨版本,实时写——与 create_group 同级的容器类操作)
- *   - create_group:分组容器创建仍实时写(分组是用例的容器,不属于"对用例的修改")
- *   - rename_group / delete_group:分组改名/删除(删除仅限空分组,走确认卡)
+ * Design change: every modification of cases/steps goes uniformly through stage_case_op staging → StagePanel check-off → persistence.
+ * This tool has seven actions:
+ *   - search: in-version search (versionId can search other versions of the same project, finding a source for cross-version copy)
+ *   - get: caseId → full detail (cross-version reads within the same project, verifying the source case before copying; attaches the dataset structure when one is bound)
+ *   - list_versions: project version list (get source/target versionIds)
+ *   - copy_to_version: copy a case into a target group (cross-version allowed, writes in real time — a container-level operation on par with create_group)
+ *   - create_group: group container creation still writes in real time (groups are cases' containers, not "modifications of a case")
+ *   - rename_group / delete_group: group rename/delete (delete restricted to empty groups, goes through the confirmation card)
  *
- * 旧 action 迁移：
- *   - create          → stage_case(payload 带 groupId,落库时 stageRoute 校验 groupId 归属)
- *   - update          → stage_case_op(action=update_case)
- *   - delete          → stage_case_op(action=delete_case)
- *   - move_group      → stage_case_op(action=move_case)
- *   - 一切步骤级操作   → stage_case_op(update_step/insert_step/delete_step/move_step)
- *   - list_datasets   → manage_datasets(数据集读/改/删独立工具)
+ * Old-action migration:
+ *   - create          → stage_case (payload carries groupId; stageRoute validates group ownership at persistence time)
+ *   - update          → stage_case_op (action=update_case)
+ *   - delete          → stage_case_op (action=delete_case)
+ *   - move_group      → stage_case_op (action=move_case)
+ *   - all step-level operations   → stage_case_op (update_step/insert_step/delete_step/move_step)
+ *   - list_datasets   → manage_datasets (datasets read/write/delete as an independent tool)
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
@@ -43,7 +43,7 @@ const Actions = z.object({
   groupId: z.string().uuid().optional(),
   groupName: z.string().min(1).max(200).optional(),
   groupDefaultUrl: z.string().max(2000).optional(),
-  /** search:源版本(缺省当前版本);copy_to_version:目标版本(缺省当前线程版本)。 */
+  /** search: source version (default: current version); copy_to_version: target version (default: the current thread's version). */
   versionId: z.string().uuid().optional(),
   targetGroupId: z.string().uuid().optional(),
 });
@@ -96,7 +96,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
         try {
           switch (v.action) {
             case 'search': {
-              // 缺省检索当前版本;传 versionId 时可检索同项目其它版本(跨版本复制找源用例)
+              // Defaults to searching the current version; with versionId, other versions of the same project are searchable (finding the source case for cross-version copy)
               let versionId = ctx.versionId;
               if (v.versionId) {
                 const vp = await resolveVersionProjectId(v.versionId);
@@ -114,11 +114,11 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (!v.caseId) return { ok: false, error: 'get 需要 caseId' };
               const detail = await svc.getCaseDetail(v.caseId);
               if (!detail) return { ok: false, error: '用例不存在' };
-              // 同项目内可跨版本读(复制前核对源用例);跨项目拒绝
+              // Cross-version reads within the same project (verify the source case before copying); cross-project is rejected
               const pid = await resolveCaseProjectId(v.caseId);
               if (pid !== ctx.projectId) return { ok: false, error: '用例不存在或不属于当前项目' };
-              // 绑定数据集 → 附结构(列名即回放初始变量);仅结构,行值/敏感值永不外泄
-              // rowIndexes = 该用例当前的数据集行选择(启用行下标);[] = 所有启用行
+              // Bound dataset → attach the structure (column names are the replay initial variables); structure only, row values/sensitive values never leak out
+              // rowIndexes = the case's current dataset row selection (enabled-row indexes); [] = all enabled rows
               let dataset: { id: string; name: string; columns: Array<{ name: string; sensitive: boolean }>; enabledRowCount: number; rowIndexes: number[] } | null = null;
               if (detail.datasetId) {
                 const ds = (await db.select().from(datasets).where(eq(datasets.id, detail.datasetId)).limit(1))[0];
@@ -136,7 +136,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (srcPid !== ctx.projectId) return { ok: false, error: '源用例不存在或不属于当前项目' };
               const gPid = await svc.groupProjectId(v.targetGroupId);
               if (gPid !== ctx.projectId) return { ok: false, error: '目标分组不存在或不属于当前项目' };
-              // 缺省复制到当前线程版本;显式传 versionId 时也必须 ∈ 当前项目
+              // Defaults to copying into the current thread's version; an explicit versionId must also ∈ the current project
               let targetVersionId = ctx.versionId;
               if (v.versionId) {
                 const vp = await resolveVersionProjectId(v.versionId);
@@ -177,7 +177,7 @@ export function buildCasesTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (!v.groupId) return { ok: false, error: 'delete_group 需要 groupId' };
               const pid = await svc.groupProjectId(v.groupId);
               if (pid !== ctx.projectId) return { ok: false, error: '分组不存在或不属于当前项目' };
-              // 对齐 web 端 not_empty 409 语义:非空分组直接拒绝,不发确认卡
+              // Aligned with the web side's not_empty 409 semantics: reject non-empty groups outright, no confirmation card
               const caseCount = await svc.countGroupCases(v.groupId);
               if (caseCount > 0) return { ok: false, error: `分组下还有 ${caseCount} 条用例,禁止删除;请先移动或删除这些用例` };
               const before = await svc.getGroup(v.groupId);

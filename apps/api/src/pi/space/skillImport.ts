@@ -1,22 +1,22 @@
 /**
- * skill_import 共用层：从 GitHub 拉取 skill 仓库 → 校验 → 解析 → （预览 | 落库）。
+ * skill_import shared layer: fetch a skill repo from GitHub → validate → parse → (preview | persist).
  *
- * 安全设计：
- *  - SSRF 结构性规避：URL 解析后 host 必须精确 ∈ {github.com, www.github.com}，否则拒绝——
- *    不解析任何用户可控的宿主机名，DNS rebinding / 私网探测面直接不存在。
- *  - 拉取走 `git clone --depth 1`（spawn 数组参数，无 shell），branch/ref 经词法正则白名单
- *    （^[A-Za-z0-9._/-]+$ 且不以 - 开头），杜绝参数注入。
- *  - clone 到 mkdtemp 临时目录，finally 清理；超时 60s SIGKILL 进程组。
- *  - 解耦：parseSkillRepo 是纯函数（本地可单测，不碰网络）；fetch 层做薄。
+ * Security design:
+ *  - Structural SSRF avoidance: after URL parsing, host must be exactly ∈ {github.com, www.github.com}, otherwise rejected —
+ *    no user-controllable hostnames are ever resolved, so the DNS rebinding / private-network probing surface simply does not exist.
+ *  - Fetching uses `git clone --depth 1` (spawn array args, no shell); branch/ref passes a lexical regex whitelist
+ *    (^[A-Za-z0-9._/-]+$ and not starting with -), eliminating argument injection.
+ *  - Clones into an mkdtemp temp dir, cleaned up in finally; 60s timeout SIGKILLs the process group.
+ *  - Decoupling: parseSkillRepo is a pure function (locally unit-testable, no network); the fetch layer stays thin.
  *
- * 仓库布局（2026-10-19 起为**整棵目录树原样落盘**）：
- *  - 根目录 SKILL.md（必需）→ 目录里的第一份文件；frontmatter 的 name/description 仍走 DB 元数据列
- *  - 其余文件递归全收：agents/ references/ assets/ eval-viewer/ scripts/ …（官方 skill-creator
- *    的 19 个文件正是这个形态，旧实现只收 scripts/ 下的平级文件，另外 4 个目录 9 个文件全丢）
- *  - 剔除 .git / node_modules / 隐藏文件 / 软链；单文件 >1MB 或总文件数 >200 → 记 skipped 后继续
- *  - runtime 不再存储也不再作为准入条件（执行时按 shebang 推断），故 .md/.html 一律能装
+ * Repo layout (since 2026-10-19: **the entire directory tree is persisted as-is**):
+ *  - Root SKILL.md (required) → the first file in the directory; frontmatter name/description still go through DB metadata columns
+ *  - All other files are collected recursively: agents/ references/ assets/ eval-viewer/ scripts/ … (the official skill-creator's
+ *    19 files are exactly this shape; the old implementation only collected flat files under scripts/, dropping the other 4 directories and 9 files entirely)
+ *  - Excluded: .git / node_modules / hidden files / symlinks; a single file >1MB or >200 total files → record skipped and continue
+ *  - runtime is no longer stored nor an admission condition (inferred from shebang at execution time), so .md/.html can all be installed
  *
- * name 取值次序：frontmatter name（须为合法 slug）→ 仓库短名 sanitize → 仍无效则报错请用户给 name= 覆盖。
+ * name resolution order: frontmatter name (must be a valid slug) → repo short name sanitized → still invalid → error asking the user to provide a name= override.
  */
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -41,15 +41,15 @@ export interface ParsedSkillImport {
   name: string;
   description: string;
   body: string;
-  /** 相对技能根的完整文件树（posix 分隔），含 SKILL.md 本身。 */
+  /** Full file tree relative to the skill root (posix separators), including SKILL.md itself. */
   files: SkillImportFile[];
   skipped: SkillImportSkipped[];
-  /** name 来源：frontmatter 命中 / 仓库名 sanitize / 用户 name 覆盖（install 侧）。 */
+  /** Where name came from: frontmatter hit / repo name sanitized / user name override (install side). */
   nameKind: 'frontmatter' | 'sanitized';
 }
 
-/** URL → (cloneUrl, branch?)。非法 URL/非 github.com/路径结构不对 → null。
- *  host 白名单硬编码，端口缺省 443；userinfo/非 https/非 443 端口一律拒绝。 */
+/** URL → (cloneUrl, branch?). Invalid URL / not github.com / wrong path structure → null.
+ *  Host whitelist is hardcoded, default port 443; userinfo / non-https / non-443 ports are all rejected. */
 export function parseSkillUrl(raw: string): { cloneUrl: string; branch: string | null } | null {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > 300) return null;
   let u: URL;
@@ -69,14 +69,14 @@ export function parseSkillUrl(raw: string): { cloneUrl: string; branch: string |
   return { cloneUrl: `https://github.com/${owner}/${repo}.git`, branch };
 }
 
-/** 把不可信名称 sanitize 成合法 slug：小写、非法字符→-、折叠连续 -、去首尾 -。空 → null。 */
+/** Sanitize an untrusted name into a valid slug: lowercase, illegal chars → -, collapse consecutive -, trim leading/trailing -. Empty → null. */
 export function sanitizeSlug(raw: string): string | null {
   const s = (raw || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
   return s.length > 0 && s.length <= 64 ? s : null;
 }
 
-/** 解析 YAML-like frontmatter 的 name/description 标量（简单实现，够覆盖自产 + 常见第三方）。
- *  返回值闭区间，解析不出就 undefined（不因 frontmatter 细节 fail 整个导入）。 */
+/** Parse the name/description scalars of YAML-like frontmatter (simple implementation, enough for self-produced + common third-party skills).
+ *  Return values are a closed set; unparseable → undefined (frontmatter details never fail the whole import). */
 function parseFrontmatter(content: string): { name?: string; description?: string; bodyStart: number; hasFrontmatter: boolean } {
   if (!content.startsWith('---')) return { bodyStart: 0, hasFrontmatter: false };
   const firstNl = content.indexOf('\n', 3);
@@ -91,7 +91,7 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
     if (!m) continue;
     const key = m[1] as 'name' | 'description';
     let value = (m[2] ?? '').trim();
-    if (value.startsWith('>') || value.startsWith('|')) continue; // 折叠/块标量，不解析
+    if (value.startsWith('>') || value.startsWith('|')) continue; // folded/block scalar, not parsed
     if (value.length >= 2 && value[0] === '"' && value.endsWith('"')) {
       value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim();
     } else if (value.length >= 2 && value[0] === "'" && value.endsWith("'")) {
@@ -104,8 +104,8 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
 }
 
 /**
- * 纯解析：只读 repoDir 目录，不碰网络。返回解析结果；SKILL.md 缺失/过大抛 Error。
- *  递归收整棵树：剔除 .git/node_modules/隐藏文件/软链，文件数或总字节触顶即停并记 skipped。
+ * Pure parsing: reads only the repoDir directory, no network. Returns the parse result; throws Error when SKILL.md is missing/too large.
+ *  Recursively collects the whole tree: excludes .git/node_modules/hidden files/symlinks; stops and records skipped when the file count or total bytes hit the cap.
  */
 export async function parseSkillRepo(repoDir: string, repoDisplayName: string): Promise<ParsedSkillImport> {
   const mdPath = path.join(repoDir, 'SKILL.md');
@@ -143,14 +143,14 @@ export async function parseSkillRepo(repoDir: string, repoDisplayName: string): 
       if (e.name.startsWith('.') || e.name === 'node_modules') continue;
       const childAbs = path.join(absDir, e.name);
       const childRel = relDir ? `${relDir}/${e.name}` : e.name;
-      // 软链不进树：指向树外即逃逸面，指向树内也会让文件树与实际读取产生两套视图。
+      // Symlinks don't enter the tree: pointing outside is an escape surface; pointing inside would give the file tree and actual reads two divergent views.
       if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) {
         await walk(childAbs, childRel, depth + 1);
         continue;
       }
       if (!e.isFile()) continue;
-      // 路径先过守卫再读：仓库是 GitHub 白名单来源，但仍逐段验一遍，杜绝 .. 段/隐藏段。
+      // Paths pass the guard before reading: the repo is a GitHub-whitelisted source, but every segment is still verified, ruling out .. segments/hidden segments.
       if (!resolveInSkill(repoDir, childRel)) { skipped.push({ path: childRel, reason: '路径非法' }); continue; }
       let st;
       try { st = await fs.stat(childAbs); } catch { continue; }
@@ -166,7 +166,7 @@ export async function parseSkillRepo(repoDir: string, repoDisplayName: string): 
   return { name, description, body, files, skipped, nameKind };
 }
 
-/** git clone --depth 1 到临时目录；返回 tmp 目录路径（调用方负责 finally 清理）。超时/失败抛 Error。 */
+/** git clone --depth 1 into a temp dir; returns the tmp dir path (the caller cleans up in finally). Throws Error on timeout/failure. */
 export async function cloneSkillRepo(cloneUrl: string, branch: string | null): Promise<string> {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-skill-'));
   const args = ['clone', '--depth', '1', '--single-branch'];
@@ -177,7 +177,7 @@ export async function cloneSkillRepo(cloneUrl: string, branch: string | null): P
     let err = '';
     child.stderr.on('data', (d) => { err += d.toString(); });
     const timer = setTimeout(() => {
-      try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } }
+      try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* already exited */ } }
       reject(new Error('git clone 超时（60s）'));
     }, CLONE_TIMEOUT_MS);
     child.on('error', (e) => { clearTimeout(timer); reject(new Error(`git 启动失败: ${e.message}`)); });
@@ -195,7 +195,7 @@ export interface ImportResult {
   description: string;
   fileCount: number;
   totalBytes: number;
-  /** 前若干个文件路径，给 preview 用（不吐正文，免得撑爆模型上下文）。 */
+  /** First few file paths, for preview (no content, to avoid blowing up the model context). */
   files: Array<{ path: string; size: number }>;
   skipped: SkillImportSkipped[];
   nameKind: ParsedSkillImport['nameKind'];
@@ -204,7 +204,7 @@ export interface ImportResult {
 
 const PREVIEW_FILE_LIMIT = 30;
 
-/** 编排：validate → clone → parse → （预览 | 落盘）。install=false 或缺省 = 预览（不写盘）。 */
+/** Orchestration: validate → clone → parse → (preview | persist). install=false or omitted = preview (no disk writes). */
 export async function importSkillFromGithub(
   url: string,
   opts: { install?: boolean; name?: string; repoDisplayName?: string } = {},
@@ -231,8 +231,8 @@ export async function importSkillFromGithub(
       const dir = skillDirOf(finalName);
       await fs.mkdir(dir, { recursive: true });
       try {
-        // 先建全部子目录再逐文件写：resolveInSkill 的 requireParentExisting 会拒新建父目录，
-        // 而导入是唯一允许建目录的地方（来源是 GitHub 白名单，不是人在设置页敲的路径）。
+        // Create all subdirectories before writing files one by one: resolveInSkill's requireParentExisting rejects newly created parent directories,
+        // while import is the only place allowed to create directories (the source is the GitHub whitelist, not paths typed by a person in the settings page).
         for (const f of parsedSkill.files) {
           const i = f.path.lastIndexOf('/');
           if (i > 0) await fs.mkdir(path.join(dir, f.path.slice(0, i)), { recursive: true });

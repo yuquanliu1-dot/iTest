@@ -12,9 +12,9 @@ export interface RecorderTabEvent {
 }
 
 /**
- * 可序列化会话元数据（不含 steps/tabs/ws）。steps/tabs 走追加式存储（Redis LIST），meta 才是
- * 被缓存/跨副本共享的对象——旧实现的「整记录缓存」会在 B 副本 persistSession 时用 hydrate 出的
- * 旧 steps 数组整包覆盖 Redis（录制 REST 与 WS 本就常落不同副本 → 静默丢步骤）。
+ * Serializable session metadata (no steps/tabs/ws). steps/tabs use append-style storage (Redis LIST); only meta is
+ * the cached/cross-replica-shared object — the old implementation's "whole-record cache" would overwrite Redis wholesale at B-replica
+ * persistSession time with a hydrated stale steps array (recording REST and WS already routinely land on different replicas → silent step loss).
  */
 export interface RecorderMeta {
   sessionId: string;
@@ -22,19 +22,19 @@ export interface RecorderMeta {
   mode?: 'fresh' | 'append' | 'resume' | 'incognito';
   incognito?: boolean;
   resumeFromOrder?: number;
-  /** web 中台启动录制时传入的目标 URL；finish() 用作 test_cases.url 的来源之一。 */
+  /** Target URL passed in by the web console when starting recording; finish() uses it as one source for test_cases.url. */
   targetUrl?: string | null;
   /** test_sessions audit row id, set by the route that persisted it. */
   dbSessionId?: string;
 }
 
-/** 进程内视图 = meta + 本副本 WS 句柄（ws 不序列化；finish 落在其他副本时拿不到，现状语义）。 */
+/** In-process view = meta + this replica's WS handle (ws isn't serializable; unreachable when finish lands on another replica — current semantics). */
 export interface RecorderSession extends RecorderMeta {
   ws?: WebSocket;
 }
 
 const sessions = new Map<string, RecorderSession>();
-/** 无 Redis（单容器/dev/测试）时的 steps/tabs 兜底：与 Redis 版同构的追加语义。 */
+/** steps/tabs fallback without Redis (single container/dev/tests): append semantics isomorphic to the Redis version. */
 const localSteps = new Map<string, unknown[]>();
 const localTabs = new Map<string, RecorderTabEvent[]>();
 const secret = process.env.RECORDER_TOKEN_SECRET ?? 'dev-secret-change-me';
@@ -56,7 +56,7 @@ function getRedisIfReady(): Redis | null {
   return _redis;
 }
 
-/** 测试缝（仿 cache.ts）：注入/清除 Redis 客户端与全部进程内状态。 */
+/** Test seam (modeled on cache.ts): inject/clear the Redis client and all in-process state. */
 export function __setRecorderClientForTests(c: Redis | null): void {
   _redis = c;
 }
@@ -74,8 +74,8 @@ function metaOf(s: RecorderSession): RecorderMeta {
   return meta;
 }
 
-/** 读会话 meta：内存命中直接返回（同 replica 热路径）；miss 时回落 redis 并 hydrate 进内存缓存。
- *  无 redis → 纯内存（单容器/dev/测试）。 */
+/** Read session meta: memory hit returns directly (same-replica hot path); on miss, fall back to redis and hydrate into the in-memory cache.
+ *  No redis → pure in-memory (single container/dev/tests). */
 const _sessionLoads = new Map<string, Promise<RecorderSession | undefined>>();
 
 export async function getSession(id: string): Promise<RecorderSession | undefined> {
@@ -83,7 +83,7 @@ export async function getSession(id: string): Promise<RecorderSession | undefine
   if (cached) return cached;
   const r = getRedisIfReady();
   if (!r) return undefined;
-  // single-flight：并发的首次 cold miss 共享同一 Promise,避免两次 hydrate 出不同对象引用。
+  // single-flight: concurrent first cold misses share one Promise, avoiding two hydrates producing different object references.
   const inflight = _sessionLoads.get(id);
   if (inflight) return inflight;
   const p = (async () => {
@@ -112,12 +112,12 @@ function hydrateMeta(meta: RecorderMeta): RecorderSession {
     targetUrl: meta.targetUrl ?? null,
     dbSessionId: meta.dbSessionId,
   };
-  sessions.set(s.sessionId, s); // hydrate:WS 落本 replica 后消息处理直接命中内存
+  sessions.set(s.sessionId, s); // hydrate: after the WS lands on this replica, message handling hits memory directly
   return s;
 }
 
-/** meta 写回（write-through）：dbSessionId 回填等 meta 变更后调用。steps/tabs 不在这里——
- *  它们走追加式 appendStep/appendTabEvent，整包写回正是旧实现的跨副本覆盖缺陷。无 redis → no-op。 */
+/** meta write-back (write-through): called after meta changes such as dbSessionId backfill. steps/tabs are not here —
+ *  they go through append-style appendStep/appendTabEvent; whole-package write-back is precisely the old implementation's cross-replica overwrite defect. No redis → no-op. */
 export async function persistSession(s: RecorderSession): Promise<void> {
   const r = getRedisIfReady();
   if (!r) return;
@@ -128,7 +128,7 @@ export async function persistSession(s: RecorderSession): Promise<void> {
   }
 }
 
-/** 追加一步（RPUSH 而非整包覆盖，跨副本并存）；顺手续期三键，活跃录制不中途过期。 */
+/** Append one step (RPUSH rather than whole-package overwrite, coexisting across replicas); also renews all three keys' TTLs so an active recording doesn't expire mid-flight. */
 export async function appendStep(id: string, step: unknown): Promise<void> {
   const r = getRedisIfReady();
   if (!r) {
@@ -194,8 +194,8 @@ export interface FinishedSession {
   tabs: RecorderTabEvent[];
 }
 
-/** 终局读取：meta + steps + tabs 一次取齐并删除全部键（含进程内缓存）。二次 finish → undefined
- *  （路由层转 404，杜绝旧实现的重复插步）。meta 优先取本副本缓存对象——保留 ws 句柄供路由收尾关闭。 */
+/** Terminal read: fetch meta + steps + tabs in one shot and delete all keys (including in-process caches). A second finish → undefined
+ *  (the route layer turns it into 404, blocking the old implementation's duplicate step insertion). meta prefers this replica's cached object — keeping the ws handle for the route's final close. */
 export async function finishSession(id: string): Promise<FinishedSession | undefined> {
   const r = getRedisIfReady();
   const local = sessions.get(id);
@@ -245,7 +245,7 @@ export function attachRecorderWs(server: Server) {
       return;
     }
     void (async () => {
-      // createSession 的 redis 写是异步的;WS 可能被 nginx 路由到另一副本,短暂重试避免「新建即被销毁」。
+      // createSession's redis write is async; the WS may be routed by nginx to another replica — brief retries avoid "created then instantly destroyed".
       let session: RecorderSession | undefined;
       for (let i = 0; i < 3 && !session; i++) {
         session = await getSession(sessionId);

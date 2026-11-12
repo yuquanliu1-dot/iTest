@@ -3,7 +3,7 @@ import type { QueryPool } from '../src/execute/envContext.js';
 import { runSql } from '../src/execute/sqlQuery.js';
 import { STEP_DSL_SPEC } from '../src/agent/prompts/step-dsl-spec.js';
 
-/** 假池：记录被执行的 sql / params，按需抛错。 */
+/** Fake pool: records the executed sql / params, throws on demand. */
 function fakePool(
   rows: Record<string, unknown>[],
   opts: { fail?: Error; dialect?: 'postgres' | 'mysql' | 'gauss100' } = {},
@@ -58,7 +58,7 @@ describe('runSql', () => {
     expect(g.calls[0]!.sql).toBe('SELECT ?, ?');
     expect(g.calls[0]!.params).toEqual(['x', 'y']);
 
-    // 显式 ? 与模板变量混用 → 冲突拒绝（与 mysql 同语义）
+    // Explicit ? mixed with template variables → conflict rejection (same semantics as mysql)
     const g2 = fakePool([], { dialect: 'gauss100' });
     await expect(
       runSql({ pool: g2, action: { ...base, sql: 'SELECT ? , {{v}}', params: ['p'] }, vars: { v: 'k' } }),
@@ -172,13 +172,13 @@ describe('runSql', () => {
 });
 
 /**
- * 文档-代码一致性守卫：STEP_DSL_SPEC 是给 LLM 看的 sql 步规格，
- * 它的绑定规则必须与 runSql 的真实语义一致。
+ * Doc-vs-code consistency guard: STEP_DSL_SPEC is the sql-step spec the LLM reads,
+ * so its binding rules must match runSql's real semantics.
  *
- * 旧文案说「{{变量}} 必须写在 params 里配 ? 占位符，不能写进 sql 文本」——与代码相反：
- * runSql 的受测主路径就是「{{var}} 直接写在 sql 文本里」，按出现顺序替换成位置占位符并绑定值
- * （sql-query.test.ts 已钉）；被拒的只是两种写法混用（sql-params-conflict）。
- * 文案错了 AI 就永远写不出带变量的 sql 步。
+ * The old copy said "{{var}} must be written into params with ? placeholders, not into the sql text" — the opposite of the code:
+ * runSql's tested main path is exactly "{{var}} written directly into the sql text", replaced in order of appearance with positional
+ * placeholders bound to values (pinned in sql-query.test.ts); only mixing the two styles is rejected (sql-params-conflict).
+ * With wrong copy the AI could never write a sql step carrying variables.
  */
 describe('STEP_DSL_SPEC 与 sql 执行器语义一致', () => {
   const SPEC = STEP_DSL_SPEC;

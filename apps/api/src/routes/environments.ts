@@ -94,9 +94,9 @@ environmentsRoute.delete('/environment-objects/:id', async (req, res) => {
 
 type SecretTriple = { c?: string; i?: string; t?: string } | null | undefined;
 
-/** objectId 回退：取该对象已存密文解出明文（凭据留空走旧密文，与保存语义一致）。
- *  对象不存在 → 404；无密文 → ''；解密失败 → error（调用方回 200 ok:false）。
- *  连同原始 payload 一起返回——调用方还要用其中的 url（jdbc 前缀）推断库型。 */
+/** objectId fallback: decrypt the stored ciphertext of that object (empty credentials reuse the old ciphertext, same semantics as saving).
+ *  Object missing → 404; no ciphertext → ''; decryption failure → error (caller returns 200 ok:false).
+ *  Returns the original payload too — the caller still needs its url (jdbc prefix) to infer the DB type. */
 async function storedSecret(objectId: string, req: Request): Promise<{ secret: string; error?: string; payload: Record<string, unknown> }> {
   const row = (await db.select().from(environmentObjects).where(eq(environmentObjects.id, objectId)).limit(1))[0];
   if (!row) throw new HttpError(404, 'not_found', 'environment object not found');
@@ -112,7 +112,7 @@ async function storedSecret(objectId: string, req: Request): Promise<{ secret: s
   return { secret: '', payload: p };
 }
 
-// mysql2/ssh2 的网络错误常只有 code（如 ETIMEDOUT/ECONNREFUSED）而 message 为空 → 拼接保证可读
+// mysql2/ssh2 network errors often only carry code (e.g. ETIMEDOUT/ECONNREFUSED) with an empty message → concatenate to keep it readable
 function probeErrorText(e: unknown): string {
   if (e instanceof Error) {
     return [e.message, (e as NodeJS.ErrnoException).code].filter(Boolean).join(' ') || '未知错误';
@@ -121,17 +121,17 @@ function probeErrorText(e: unknown): string {
 }
 
 const TestDbBody = z.object({
-  objectId: z.string().uuid().optional(), // 编辑态：密码留空时回退该对象已存密文
+  objectId: z.string().uuid().optional(), // Edit mode: when the password is left empty, fall back to the object's stored ciphertext
   host: z.string().min(1),
   port: z.number().int().min(1).max(65535).optional(),
   dbName: z.string().min(1),
   user: z.string().min(1),
-  password: z.string().optional(), // 明文留空 → 沿用旧密文（与保存语义一致）
+  password: z.string().optional(), // Plaintext left empty → keep the old ciphertext (same semantics as saving)
   dbType: z.enum(['postgres', 'mysql', 'gauss100']).optional(),
-  url: z.string().optional(), // jdbc url：缺 dbType 时用它推断库型（与运行期 resolveDbDialect 同一份逻辑）
+  url: z.string().optional(), // jdbc url: used to infer DB type when dbType is missing (same logic as runtime resolveDbDialect)
 });
 
-// 用表单当前值（未保存也可）探测 DB 连通性；HTTP 200 + ok:false 表示探测失败（与 /settings/llm/test 约定一致）
+// Probe DB connectivity using the form's current values (unsaved is fine); HTTP 200 + ok:false means the probe failed (same convention as /settings/llm/test)
 environmentsRoute.post('/environments/test-db', async (req, res) => {
   const body = TestDbBody.parse(req.body);
   let password = body.password ?? '';
@@ -143,12 +143,12 @@ environmentsRoute.post('/environments/test-db', async (req, res) => {
       return;
     }
     password = stored.secret;
-    // 表单不展示 url，但已存对象的 url 是「缺 dbType 时判定库型」的兜底信号——回填它。
+    // The form doesn't show url, but the stored object's url is the fallback signal for "infer DB type when dbType is missing" — backfill it.
     const storedUrl = stored.payload.url;
     url = url ?? (typeof storedUrl === 'string' ? storedUrl : undefined);
   }
-  // 库型判定与运行期一致（apps/api/src/execute/envContext.ts）：dbType 优先，
-  // 没有就从 jdbc url 前缀推断，都没有才回落 postgres。
+  // DB type resolution matches runtime (apps/api/src/execute/envContext.ts): dbType takes priority;
+  // otherwise infer from the jdbc url prefix; only fall back to postgres when neither is available.
   const dialect = resolveDbDialect({ dbType: body.dbType, url });
   const pool = createQueryPool({
     dialect,
@@ -170,9 +170,9 @@ environmentsRoute.post('/environments/test-db', async (req, res) => {
 });
 
 const TestSyslogBody = z.object({
-  objectId: z.string().uuid().optional(), // 编辑态：凭据留空时回退该对象已存密文
+  objectId: z.string().uuid().optional(), // Edit mode: when credentials are left empty, fall back to the object's stored ciphertext
   host: z.string().min(1),
-  sshPort: z.number().int().min(1).max(65535).optional(), // 与 payload.sshPort 同名：表单同一映射共用
+  sshPort: z.number().int().min(1).max(65535).optional(), // Same name as payload.sshPort: shared by the same form mapping
   user: z.string().min(1),
   filePath: z.string().min(1),
   authType: z.enum(['key', 'password']),
@@ -180,7 +180,7 @@ const TestSyslogBody = z.object({
   password: z.string().optional(),
 });
 
-// 用表单当前值（未保存也可）探测 syslog（SSH tail 校验文件可读）；200 + ok:false 表示探测失败
+// Probe syslog using the form's current values (unsaved is fine; SSH tail verifies the file is readable); 200 + ok:false means the probe failed
 environmentsRoute.post('/environments/test-syslog', async (req, res) => {
   const body = TestSyslogBody.parse(req.body);
   let secret = body.authType === 'password' ? (body.password ?? '') : (body.privateKey ?? '');

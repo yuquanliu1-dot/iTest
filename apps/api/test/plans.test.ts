@@ -22,8 +22,8 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
-  // 注入种子组织管理员身份（跳过真实登录；可见性判定依赖 managerOrgPaths 子树）。
-  // helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后再动态加载。
+  // Inject the seeded org manager identity (skips real login; visibility checks depend on the managerOrgPaths subtree).
+  // helpers/auth depends on the src service chain (which loads the db client), so it must be dynamically imported after DATABASE_URL points at the test container.
   const { managerUserOf } = await import('./helpers/auth.js');
   app.use('/api', (req, _res, next) => {
     req.user = managerUserOf(userId, username, orgId, orgPath);
@@ -34,7 +34,7 @@ beforeAll(async () => {
   app.use('/api/plan-runs', planRunsRoute);
   app.use('/api/executions', executionsRoute);
   app.use('/api/cases', casesRoute);
-  // 数据集路由（行选择校验/联动清空测试用）：挂载形状同 plan-run-datasets.test.ts
+  // Dataset routes (for row-selection validation / cascading-clear tests): mounted the same way as plan-run-datasets.test.ts
   const { datasetsRoute } = await import('../src/routes/datasets.js');
   app.use('/api', datasetsRoute);
   app.use(errorHandler);
@@ -77,8 +77,8 @@ describe('execution plans', () => {
   });
 
   it('PUT group cases rejects cross-product-line case with 409', async () => {
-    // R2 起项目无组织列，计划的成员范围是「计划所在项目 + 同产品线的兄弟项目」。
-    // 所以要 409 必须让那条外案落在**另一条**产品线上（同线内引用是合法的）。
+    // Since R2 projects have no org column, a plan's membership scope is "the plan's project + sibling projects on the same product line".
+    // So a 409 requires the foreign case to sit on **another** product line (references within the same line are legal).
     const a = await seedProject(pool);
     const plan = await request(app).post(`/api/projects/${a.projectId}/plans`).send({ name: 'P', versionId: a.versionId });
     const otherLineId = await seedOtherProductLine(pool);
@@ -131,7 +131,7 @@ describe('plan execution extras', () => {
     const detail = await request(app).get(`/api/plans/${planId}`);
     expect(detail.body.strategy).toBe('fail_fast');
     expect(detail.body.rcaEnabled).toBe(true);
-    // 环境/登录字段由 zod 剥离,不再落计划(计划级列已删,响应不再携带;组级配置走 /groups 端点)
+    // Environment/login fields are stripped by zod, no longer stored on the plan (plan-level columns dropped, response no longer carries them; group-level config goes through the /groups endpoint)
     expect(detail.body.loginPrepareEnabled).toBeUndefined();
     expect(detail.body.loginCaseId).toBeUndefined();
     expect(detail.body.environment).toBeUndefined();
@@ -156,7 +156,7 @@ describe('plan execution extras', () => {
     await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
     const d0 = await request(app).get(`/api/plans/${plan.body.id}`);
     const gid = d0.body.groups[0].id as string;
-    // 缺 groupId → 400（zod 校验失败）
+    // Missing groupId → 400 (zod validation failure)
     const noGroup = await request(app).put(`/api/plans/${plan.body.id}/cases/order`).send({ caseIds: [c3, c1, c2] });
     expect(noGroup.status).toBe(400);
     const r = await request(app).put(`/api/plans/${plan.body.id}/cases/order`).send({ groupId: gid, caseIds: [c3, c1, c2] });
@@ -178,7 +178,7 @@ describe('plan execution extras', () => {
     expect(r.body.message).toContain('登录组');
   });
 
-  // 0041 起登录凭据并入 web 对象:enqueue 的自登录源判定查「组环境的默认 web 服务对象」内嵌凭证。
+  // Since 0041 login credentials live inside the web object: enqueue's self-login source check looks at the default web service object of the group environment for embedded credentials.
   it('组登录无登录用例:组环境默认 web 对象带内嵌凭据 → run 通过 enqueue（200）', async () => {
     const { projectId, versionId } = await seedProject(pool);
     const { encrypt } = await import('../src/lib/secret-crypto.js');
@@ -201,7 +201,7 @@ describe('plan execution extras', () => {
     expect(g.status).toBe(200);
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
-    // 等后台 run 收敛，避免与 afterAll 的 pool.end 竞争
+    // Wait for the background run to settle, avoiding a race with afterAll's pool.end
     for (let i = 0; i < 50; i++) {
       const detail = await request(app).get(`/api/plan-runs/${r.body.runId}`);
       if (detail.body.status !== 'running') break;
@@ -243,15 +243,15 @@ describe('plan execution extras', () => {
   });
 
   it('plan 运行中成员用例（report 未回填）不出现在执行历史；回填后仍不出现；手动运行照常显示', async () => {
-    // 回归：runCase 一开跑就插 report，report_id 到用例跑完才回填 plan_run_cases——瞬态窗口内
-    // report 无 plan 链接，登录用例又排在最前跑，最容易让用户在执行历史里看到"长得像独立执行"的行。
-    // plan_run_cases 行以 status=running 先行存在，执行历史应据此精确排除运行中成员的报告。
+    // Regression: runCase inserts the report as soon as it starts; report_id is backfilled onto plan_run_cases only after the case finishes. During that transient window
+    // the report has no plan link, and since login cases run first this is the easiest way for users to see rows "that look like standalone executions" in execution history.
+    // plan_run_cases rows exist up front with status=running; execution history must exclude running members' reports precisely on that basis.
     const { projectId, groupId, versionId } = await seedProject(pool);
     const member = await makeCase(groupId, versionId, 'plan-member');
     const manual = await makeCase(groupId, versionId, 'manual-run');
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     const planId = plan.body.id as string;
-    // 构造与 runPlan 一致的运行中 shape：plan_runs(running) + member 的 running report + 未回填的 member 行
+    // Build the running shape that matches runPlan: plan_runs(running) + member's running report + member row with report_id not yet backfilled
     const run = await pool.query(
       `INSERT INTO plan_runs(plan_id, project_id, status, strategy) VALUES ($1, $2, 'running', 'run_all') RETURNING id`,
       [planId, projectId],
@@ -270,14 +270,14 @@ describe('plan execution extras', () => {
       [runId, member],
     );
 
-    // 瞬态窗口：运行中的成员报告被排除，手动运行不受影响
+    // Transient window: the running member's report is excluded; the manual run is unaffected
     const list1 = await request(app).get(`/api/executions?projectId=${projectId}&kind=case`);
     expect(list1.status).toBe(200);
     const ids1 = list1.body.map((e: { id: string }) => e.id);
     expect(ids1).not.toContain(memberRep.rows[0].id);
     expect(ids1).toContain(manualRep.rows[0].id);
 
-    // 执行完成：report_id 回填 + 状态收敛 → 既有链接过滤继续排除（无缝衔接，无第二个泄漏窗口）
+    // Execution finished: report_id backfilled + status settled → the existing link filter keeps excluding it (seamless handoff, no second leak window)
     await pool.query(
       `UPDATE plan_run_cases SET status = 'passed', report_id = $1, finished_at = now()
        WHERE plan_run_id = $2 AND case_id = $3`,
@@ -291,9 +291,9 @@ describe('plan execution extras', () => {
   });
 
   it('caseId 深链在 plan tab 上继续过滤：只列出把该用例作为成员跑过的计划运行', async () => {
-    // 回归：用例详情页「查看报告」深链带 caseId 进入报告页（默认 tab=case）。用户切到「计划运行」
-    // tab 时 caseId 必须继续生效，否则 URL 里的过滤器静默失效、页面退化成全项目计划列表，
-    // 用户会误以为看到的就是该用例参与过的运行。
+    // Regression: the case detail page's "view report" deep link carries caseId into the reports page (default tab=case). When the user
+    // switches to the "plan runs" tab the caseId must keep working, otherwise the URL filter silently dies, the page degrades into
+    // a project-wide plan list, and the user believes they are looking at runs that case actually took part in.
     const { projectId, groupId, versionId } = await seedProject(pool);
     const member = await makeCase(groupId, versionId, 'deep-linked-member');
     const other = await makeCase(groupId, versionId, 'unrelated-case');
@@ -322,13 +322,13 @@ describe('plan execution extras', () => {
     expect(ids).toContain(runA.rows[0].id);
     expect(ids).not.toContain(runB.rows[0].id);
 
-    // 不带 caseId 时两个计划运行都在——证明上面确实是过滤而非"只返回一条"
+    // Without caseId both plan runs are there — proving the above really is filtering, not "returning just one row"
     const unfiltered = await request(app).get(`/api/executions?projectId=${projectId}&kind=plan`);
     const allIds = unfiltered.body.map((e: { id: string }) => e.id);
     expect(allIds).toContain(runA.rows[0].id);
     expect(allIds).toContain(runB.rows[0].id);
 
-    // 该用例从未作为成员跑过时，过滤结果为空而非回退到全量
+    // When the case has never run as a member, the filtered result is empty rather than falling back to everything
     const never = await makeCase(groupId, versionId, 'never-in-plan');
     const none = await request(app).get(`/api/executions?projectId=${projectId}&kind=plan&caseId=${never}`);
     expect(none.status).toBe(200);
@@ -344,19 +344,19 @@ describe('plan execution extras', () => {
       .post(`/api/projects/${projectId}/plans`)
       .send({ name: 'P', versionId, strategy: 'fail_fast' });
     await request(app).post(`/api/plans/${plan.body.id}/cases`).send({ caseIds: [c1, c2, c3] });
-    // 两级失败语义：组内跳过由组级 fail_fast 决定（计划级只在组边界评估）
+    // Two-level failure semantics: in-group skips are decided by group-level fail_fast (plan-level is evaluated only at group boundaries)
     const detail0 = await request(app).get(`/api/plans/${plan.body.id}`);
     const firstGroup = detail0.body.groups[0] as { id: string };
     await request(app).patch(`/api/plans/${plan.body.id}/groups/${firstGroup.id}`).send({ failFast: true });
 
-    // 强制的现在是第一条：forceFail 在 CDP 前短路，行为与有无 chromium 环境无关
+    // The forced failure is now the first case: forceFail short-circuits before CDP, independent of whether a chromium environment exists
     process.env.FORCE_FAIL_CASE_IDS = c1;
     try {
       const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
       expect(r.status).toBe(200);
       const runId = r.body.runId as string;
 
-      // 等待 plan_run 收敛到终态
+      // Wait for plan_run to settle into a terminal state
       let detail: { body: { status: string; failedCases: number; skippedCases: number; passedCases: number; cases: Array<{ order: number; status: string }> } };
       for (let i = 0; i < 50; i++) {
         detail = await request(app).get(`/api/plan-runs/${runId}`);
@@ -377,8 +377,8 @@ describe('plan execution extras', () => {
   });
 
   it('plan run 成员用例落真实执行耗时（durationMs 不再 NULL/0）', async () => {
-    // 回归：业务用例收尾时从不写 plan_run_cases.duration_ms（NULL → 前端 c.durationMs ?? 0 显示 0 ms），
-    // 登录用例写死 0 —— 计划运行时间线的「用例耗时」列恒为 0。修复后按 runCase 实际执行时长回填。
+    // Regression: business cases never wrote plan_run_cases.duration_ms on completion (NULL → frontend showed 0 ms via c.durationMs ?? 0),
+    // and login cases hardcoded 0 — the "case duration" column on the plan-run timeline was always 0. After the fix it is backfilled with runCase's actual duration.
     const { projectId, groupId, versionId } = await seedProject(pool);
     const c1 = await makeCase(groupId, versionId, 'c1');
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
@@ -396,7 +396,7 @@ describe('plan execution extras', () => {
     }
     expect(detail!.body.status).not.toBe('running');
     const row = detail!.body.cases[0]!;
-    // 用例真实执行过（无环境配置 → failed report，但已跑完收尾）：耗时必须是正数而非 NULL/0
+    // The case really executed (no environment config → failed report, but it ran to completion): duration must be a positive number, not NULL/0
     expect(typeof row.durationMs).toBe('number');
     expect(row.durationMs!).toBeGreaterThan(0);
   });
@@ -439,11 +439,11 @@ describe('plan execution extras', () => {
     expect(r.status).toBe(200);
     const runId = r.body.runId as string;
 
-    // 立即 cancel；每条 case 执行极快，需在 finalize 之前命中
+    // Cancel immediately; each case executes extremely fast, so we must land before finalize
     const cancel = await request(app).post(`/api/plan-runs/${runId}/cancel`);
     expect(cancel.status).toBe(200);
 
-    // 等待收敛
+    // Wait for convergence
     let detail: { body: { status: string; cancelRequested: boolean } };
     for (let i = 0; i < 50; i++) {
       detail = await request(app).get(`/api/plan-runs/${runId}`);
@@ -477,7 +477,7 @@ describe('plan execution extras', () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
     const login = await makeCase(groupId, versionId, 'login');
     const mob = await makeCase(groupId, versionId, 'mob');
-    // 直写列造 mobile shape（路由建 mobile 用例需整套 mobileOs/deviceTarget/appRef 配置）
+    // Write the column directly to build a mobile shape (creating a mobile case via the route requires the full mobileOs/deviceTarget/appRef configuration)
     await pool.query(`UPDATE test_cases SET platform = 'mobile' WHERE id = $1`, [mob]);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId });
     const g = await request(app)
@@ -499,7 +499,7 @@ describe('plan execution extras', () => {
     const r = await request(app).post(`/api/plans/${plan.body.id}/run`);
     expect(r.status).toBe(200);
     expect(typeof r.body.runId).toBe('string');
-    // 等待后台 run 收敛到终态，避免与 afterAll 的 pool.end 竞争
+    // Wait for the background run to reach terminal state, avoiding a race with afterAll's pool.end
     for (let i = 0; i < 50; i++) {
       const detail = await request(app).get(`/api/plan-runs/${r.body.runId}`);
       if (detail.body.status !== 'running') break;
@@ -531,11 +531,11 @@ describe('plan execution extras', () => {
     expect(groups[1]!.loginPrepareEnabled).toBe(true);
     expect(groups[1]!.loginCaseId).toBe(login);
     expect(groups[1]!.failFast).toBe(true);
-    // 旧 UI 兼容标量：任一组开启登录即 true；细粒度配置只在 groups 快照里
+    // Legacy-UI compat scalar: true if any group enables login; fine-grained config lives only in the groups snapshot
     expect(row.rows[0].login_prepare_enabled).toBe(true);
     expect(row.rows[0].login_case_id).toBeNull();
     expect(row.rows[0].detection_url).toBeNull();
-    // 等后台 run 收敛，避免与 afterAll 的 pool.end 竞争
+    // Wait for the background run to settle, avoiding a race with afterAll's pool.end
     for (let i = 0; i < 50; i++) {
       const detail = await request(app).get(`/api/plan-runs/${r.body.runId}`);
       if (detail.body.status !== 'running') break;
@@ -552,7 +552,7 @@ describe('plan case groups (HTTP)', () => {
     const c1 = await makeCase(groupId, versionId, 'c1');
     const c2 = await makeCase(groupId, versionId, 'c2');
 
-    // 建组：order 递增
+    // Create groups: order increments
     const g1 = await request(app).post(`/api/plans/${planId}/groups`).send({ name: 'G1' });
     expect(g1.status).toBe(200);
     expect(g1.body.name).toBe('G1');
@@ -561,7 +561,7 @@ describe('plan case groups (HTTP)', () => {
     expect(g2.status).toBe(200);
     expect(g2.body.order).toBe(2);
 
-    // PATCH 组：改组名 + failFast
+    // PATCH group: rename + failFast
     const patched = await request(app)
       .patch(`/api/plans/${planId}/groups/${g1.body.id}`)
       .send({ name: 'G1x', failFast: true });
@@ -569,18 +569,18 @@ describe('plan case groups (HTTP)', () => {
     expect(patched.body.name).toBe('G1x');
     expect(patched.body.failFast).toBe(true);
 
-    // 组内用例整包替换
+    // Replace the group's cases wholesale
     const setCases = await request(app)
       .put(`/api/plans/${planId}/groups/${g1.body.id}/cases`)
       .send({ caseIds: [c1, c2] });
     expect(setCases.status).toBe(200);
 
-    // 删非空组 → 409
+    // Delete a non-empty group → 409
     const del = await request(app).delete(`/api/plans/${planId}/groups/${g1.body.id}`);
     expect(del.status).toBe(409);
     expect(del.body.error).toBe('group_not_empty');
 
-    // 组排序翻转，GET :id 验组序
+    // Flip group order, verify group order via GET :id
     const reorderGroups = await request(app)
       .put(`/api/plans/${planId}/groups/order`)
       .send({ groupIds: [g2.body.id, g1.body.id] });
@@ -588,20 +588,20 @@ describe('plan case groups (HTTP)', () => {
     const d1 = await request(app).get(`/api/plans/${planId}`);
     expect(d1.body.groups.map((g: { id: string }) => g.id)).toEqual([g2.body.id, g1.body.id]);
 
-    // POST /cases 带 groupId → 追加到指定组（跨组重复合法）
+    // POST /cases with groupId → appended to that group (duplicates across groups are legal)
     const add = await request(app)
       .post(`/api/plans/${planId}/cases`)
       .send({ caseIds: [c1], groupId: g2.body.id });
     expect(add.status).toBe(200);
     expect(add.body.added).toBe(1);
 
-    // cases/order 组内重排：G1 [c1,c2] → [c2,c1]
+    // cases/order in-group resequencing: G1 [c1,c2] → [c2,c1]
     const reorderCases = await request(app)
       .put(`/api/plans/${planId}/cases/order`)
       .send({ groupId: g1.body.id, caseIds: [c2, c1] });
     expect(reorderCases.status).toBe(200);
 
-    // 跨组移动：G1 的 c2 行 → G2 尾部
+    // Cross-group move: G1's c2 row → tail of G2
     const d2 = await request(app).get(`/api/plans/${planId}`);
     const g1Before = d2.body.groups.find((g: { id: string }) => g.id === g1.body.id);
     const c2Row = g1Before.cases.find((c: { id: string }) => c.id === c2);
@@ -615,7 +615,7 @@ describe('plan case groups (HTTP)', () => {
     expect(g1After.cases.map((c: { id: string }) => c.id)).toEqual([c1]);
     expect(g2After.cases.map((c: { id: string }) => c.id)).toEqual([c1, c2]);
 
-    // 越组：用另一计划 id 打本计划的组 → 404 group_not_found
+    // Cross-plan: hit this plan's group using another plan's id → 404 group_not_found
     const planB = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'PB', versionId });
     const cross = await request(app)
       .patch(`/api/plans/${planB.body.id}/groups/${g1.body.id}`)
@@ -635,7 +635,7 @@ describe('plan case groups (HTTP)', () => {
 });
 
 describe('executions 数据集批次卷起', () => {
-  /** 插入一条 report（可带批次键 / 行号 / 耗时 / 状态）。 */
+  /** Insert one report (optionally with batch key / row index / duration / status). */
   async function insertReport(
     caseId: string,
     opts: { batchId?: string; rowIndex?: number; status?: string; durationMs?: number } = {},
@@ -661,12 +661,12 @@ describe('executions 数据集批次卷起', () => {
     const rows = list.body.filter((e: { kind: string }) => e.kind === 'case');
     expect(rows).toHaveLength(1);
     const row = rows[0];
-    expect(row.id).toBe(r0); // 锚点 = 行号最小者
-    expect(row.status).toBe('failed'); // 有失败成员 → 整批 failed
+    expect(row.id).toBe(r0); // anchor = smallest row index
+    expect(row.status).toBe('failed'); // a failed member → whole batch failed
     expect(row.batchSize).toBe(3);
     expect(row.batchPassed).toBe(2);
     expect(row.batchFailed).toBe(1);
-    expect(row.durationMs).toBe(600); // 成员耗时之和
+    expect(row.durationMs).toBe(600); // sum of member durations
     expect(new Set(row.memberReportIds)).toEqual(new Set([r0, r1, r2]));
   });
 
@@ -709,12 +709,12 @@ describe('executions 数据集批次卷起', () => {
     await insertReport(c, { batchId, rowIndex: 1, status: 'passed' });
     await insertReport(c, { batchId, rowIndex: 2, status: 'failed' });
 
-    // 只筛 failed：命中批内第 3 行，批本身出现
+    // Filter failed only: matches the batch's 3rd row, the batch itself appears
     const list = await request(app).get(`/api/executions?projectId=${projectId}&kind=case&statuses=failed`);
     expect(list.status).toBe(200);
     const rows = list.body.filter((e: { kind: string }) => e.kind === 'case');
     expect(rows).toHaveLength(1);
-    // 统计按全批算：不能因为只命中失败行就把通过数报成 0
+    // Stats are computed over the whole batch: matching only the failed row must not report passed as 0
     expect(rows[0].batchSize).toBe(3);
     expect(rows[0].batchPassed).toBe(2);
     expect(rows[0].batchFailed).toBe(1);
@@ -732,7 +732,7 @@ describe('executions 数据集批次卷起', () => {
     const batchId = randomUUID();
     const r0 = await insertReport(c, { batchId, rowIndex: 0 });
     const r1 = await insertReport(c, { batchId, rowIndex: 1 });
-    // r1 挂到计划运行成员下 → 不进单用例执行历史
+    // r1 is linked under a plan-run member → excluded from single-case execution history
     await pool.query(
       `INSERT INTO plan_run_cases(plan_run_id, case_id, "order", status, step_kind, report_id)
        VALUES ($1, $2, 1, 'passed', 'business', $3)`,
@@ -747,7 +747,7 @@ describe('executions 数据集批次卷起', () => {
   });
 });
 
-/** 建项目/计划/分组 + 绑数据集用例（2 启用行），把用例加进组并返回各 id 与 planCaseId。 */
+/** Create project/plan/group + a dataset-bound case (2 enabled rows), add the case to the group, and return the ids plus planCaseId. */
 async function seedSelection(): Promise<{
   projectId: string; planId: string; caseId: string; datasetId: string; planCaseId: string;
 }> {
@@ -856,8 +856,8 @@ describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId�
     expect(row.datasetId).toBe(s.datasetId);
     expect(row.datasetName).toBe('行选择数据');
     expect(row.datasetEnabledRowCount).toBe(2);
-    expect(row.caseRowIndexes).toEqual([]); // 用例级选择：[] = 全部
-    expect(row.planRowIndexes).toEqual([0]); // 计划级覆盖
+    expect(row.caseRowIndexes).toEqual([]); // case-level selection: [] = all rows
+    expect(row.planRowIndexes).toEqual([0]); // plan-level override
   });
 
   it('detail 启用行数只数启用行（含 disabled 行的数据集）', async () => {
@@ -881,7 +881,7 @@ describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId�
     const row = detail.body.groups[0].cases[0];
     expect(row.datasetId).toBe(ds.body.id);
     expect(row.datasetName).toBe('含禁用行数据');
-    expect(row.datasetEnabledRowCount).toBe(2); // 3 行里 1 行被禁用 → 只数 2 个启用行
+    expect(row.datasetEnabledRowCount).toBe(2); // 1 of 3 rows disabled → only 2 enabled rows counted
   });
 
   it('detail：未绑数据集的用例四字段回退（null/null/0/[]）', async () => {
@@ -902,12 +902,12 @@ describe('计划级数据集行选择（PATCH /plans/:id/plan-cases/:planCaseId�
   it('404：planCaseId 属于另一个计划（跨计划隔离）', async () => {
     const a = await seedSelection();
     const b = await seedSelection();
-    // 用 A 的计划 id + B 的 planCaseId → 定位不到（planId+planCaseId 联合不匹配）
+    // Plan A's id + plan B's planCaseId → not found (planId+planCaseId pair doesn't match)
     const r = await request(app)
       .patch(`/api/plans/${a.planId}/plan-cases/${b.planCaseId}`)
       .send({ datasetRowIndexes: [0] });
     expect(r.status).toBe(404);
-    // B 的覆盖不被误写
+    // B's override is not mistakenly written
     const pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [b.planCaseId]);
     expect(pc.rows[0].dataset_row_indexes).toBeNull();
   });
@@ -929,7 +929,7 @@ describe('计划行覆盖联动清空', () => {
     expect(del.status).toBe(200);
     const pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [s.planCaseId]);
     expect(pc.rows[0].dataset_row_indexes).toBeNull();
-    // 用例级选择同时被清空（既有行为，一并守住）
+    // Case-level selection is cleared too (existing behavior, guarded together)
     const c = await pool.query(`SELECT dataset_row_indexes, dataset_id FROM test_cases WHERE id = $1`, [s.caseId]);
     expect(c.rows[0].dataset_row_indexes).toEqual([]);
     expect(c.rows[0].dataset_id).toBeNull();
@@ -947,7 +947,7 @@ describe('计划行覆盖联动清空', () => {
   it('校验失败的换绑请求不清计划覆盖（404 → 零副作用）', async () => {
     const s = await seedSelection();
     await request(app).patch(`/api/plans/${s.planId}/plan-cases/${s.planCaseId}`).send({ datasetRowIndexes: [0] });
-    // tagIds 校验晚于清空点：不存在的 tag → 404，此时用例应零改动、计划覆盖原样保留
+    // tagIds validation runs after the clearing point: a nonexistent tag → 404, the case must be unchanged and the plan override preserved
     const bad = await request(app).patch(`/api/cases/${s.caseId}`).send({ datasetId: null, tagIds: [randomUUID()] });
     expect(bad.status).toBe(404);
     const pc = await pool.query(`SELECT dataset_row_indexes FROM plan_cases WHERE id = $1`, [s.planCaseId]);
@@ -955,7 +955,7 @@ describe('计划行覆盖联动清空', () => {
   });
 });
 
-/** 建项目/计划 + 绑数据集登录用例（2 启用行）+ 开登录准备的组；另备一个换绑目标用例。 */
+/** Create project/plan + a dataset-bound login case (2 enabled rows) + a login-prepare-enabled group; also prepare a rebind target case. */
 async function seedLoginSelection(): Promise<{
   projectId: string; planId: string; groupId: string; caseId: string; datasetId: string; otherCaseId: string;
 }> {
@@ -1015,7 +1015,7 @@ describe('登录用例数据集行选择（组级 loginPrepare.datasetRowIndexes
     await request(app)
       .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
       .send({ loginPrepare: { enabled: true, caseId: s.caseId, datasetRowIndexes: [0] } });
-    // 换到未绑数据集的用例 + 带陈旧越界下标 → 不校验直接置 null
+    // Switch to a case with no dataset bound + carry a stale out-of-range index → no validation, directly set to null
     const r = await request(app)
       .patch(`/api/plans/${s.planId}/groups/${s.groupId}`)
       .send({ loginPrepare: { enabled: true, caseId: s.otherCaseId, datasetRowIndexes: [9] } });
@@ -1034,8 +1034,8 @@ describe('登录用例数据集行选择（组级 loginPrepare.datasetRowIndexes
     expect(g.loginCaseTitle).toBe('登录用例');
     expect(g.loginCaseDatasetId).toBe(s.datasetId);
     expect(g.loginCaseEnabledRowCount).toBe(2);
-    expect(g.loginCaseRowIndexes).toEqual([]); // 用例级：[] = 全部
-    expect(g.loginDatasetRowIndexes).toEqual([1]); // 组级覆盖
+    expect(g.loginCaseRowIndexes).toEqual([]); // case-level: [] = all rows
+    expect(g.loginDatasetRowIndexes).toEqual([1]); // group-level override
   });
 
   it('运行快照 groups 带登录行覆盖；执行层三态判别同 plan_cases 口径', async () => {

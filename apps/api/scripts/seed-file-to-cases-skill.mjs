@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-/** file-to-cases skill 种子：落盘目录树 + upsert 元数据；缺失才铺，改文案须手动重铺（删目录或手动 cp）。
- *  结构与 seed-word-report-skill.mjs 一致（存储翻转后内容以文件系统为真源，DB 只留元数据）。 */
+/** file-to-cases skill seed: lay down the on-disk directory tree + upsert metadata; only seed when missing. Changing the copy requires manual re-seeding (delete the directory or cp manually).
+ *  Structurally identical to seed-word-report-skill.mjs (after the storage flip the filesystem is the source of truth for content; the DB keeps only metadata). */
 import { readFile, cp, rm, mkdir, readdir, access } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import pg from 'pg';
 const CONTENT_DIR = join(dirname(fileURLToPath(import.meta.url)), 'file-to-cases-content');
 const NAME = 'file-to-cases';
 
-/** 与 skillImport.parseFrontmatter 同源的极简 frontmatter 取值（够覆盖自产 + 常见第三方）。 */
+/** Minimal frontmatter value extraction with the same semantics as skillImport.parseFrontmatter (enough to cover self-produced + common third-party skills). */
 function parseFrontmatter(raw) {
   const m = /^---\n([\s\S]*?)\n---/.exec(raw);
   if (!m) return {};
@@ -25,7 +25,7 @@ function parseFrontmatter(raw) {
   return out;
 }
 
-/** 递归数文件数（只发计数，不打内容）。 */
+/** Recursively count files (emit only the count, never the content). */
 async function countFiles(dir) {
   let n = 0;
   for (const e of await readdir(dir, { withFileTypes: true })) {
@@ -35,8 +35,8 @@ async function countFiles(dir) {
   return n;
 }
 
-/** 递归删除 AppleDouble 残骸（`._xxx`）：macOS 打包会把扩展属性落成 `._xxx`，
- *  被 read_skill 文件树当真实文件列出。铺目录前清源，铺完再清目标（真实文件不动）。 */
+/** Recursively remove AppleDouble leftovers (`._xxx`): macOS packaging lands extended attributes as `._xxx`,
+ *  which get listed as real files in read_skill's file tree. Clean the source before laying, and clean the target after (real files untouched). */
 async function pruneAppleDouble(dir) {
   let removed = 0;
   let entries;
@@ -67,7 +67,7 @@ async function main() {
     : '/repo/apps/api/.data/skills';
   const target = join(root, NAME);
 
-  // 目录是发布物，但尊重用户编辑：只有缺失/空才铺。
+  // The directory is a release artifact, but respect user edits: only seed when missing/empty.
   let seeded = false;
   try {
     await access(join(target, 'SKILL.md'));
@@ -88,8 +88,8 @@ async function main() {
     : new pg.Client({ host: 'itest-pg', user: 'itest', password: 'itest', database: 'itest' });
   await client.connect();
   try {
-    // 合并迁移：docx-to-cases / xlsx-to-cases 已并入 file-to-cases（2026-11），清掉旧元数据行。
-    // 回滚安全：旧版 seed 脚本重跑时 INSERT ON CONFLICT DO NOTHING 会重新补回元数据行（目录仍在磁盘）。
+    // Merge migration: docx-to-cases / xlsx-to-cases were merged into file-to-cases (2026-11); clear the old metadata rows.
+    // Rollback-safe: when the old seed scripts re-run, INSERT ON CONFLICT DO NOTHING re-adds the metadata rows (directories remain on disk).
     const legacy = await client.query(
       `DELETE FROM assistant_skills WHERE name IN ('docx-to-cases', 'xlsx-to-cases')`,
     );

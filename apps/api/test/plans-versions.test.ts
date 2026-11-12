@@ -95,11 +95,11 @@ describe('plan versionId', () => {
     expect(env.status).toBe(200);
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId: defaultVersionId });
     expect(plan.status).toBe(200);
-    // 同项目环境：字段被 zod 剥离，不落计划（列已删，响应不再携带该键）
+    // Same-project environment: the field is stripped by zod, not stored on the plan (column dropped, response no longer carries the key)
     const r = await request(app).patch(`/api/plans/${plan.body.id}`).send({ environmentId: env.body.id });
     expect(r.status).toBe(200);
     expect(r.body.environmentId).toBeUndefined();
-    // 跨项目环境：同样剥离，不再触发 env_project_mismatch
+    // Cross-project environment: stripped the same way, env_project_mismatch no longer fires
     const other = await seedProject(pool);
     const env2 = await request(app).post(`/api/projects/${other.projectId}/environments`).send({ name: 'other-env' });
     expect(env2.status).toBe(200);
@@ -109,15 +109,15 @@ describe('plan versionId', () => {
   });
 
   it('POST cases 跨版本引用允许', async () => {
-    // 创建两个版本下的用例
+    // Create cases under the two versions
     const c1 = await request(app).post('/api/cases').send({ title: 'v0', groupId, versionId: defaultVersionId });
     const c2 = await request(app).post('/api/cases').send({ title: 'v1', groupId, versionId: v1Id });
     expect(c1.status).toBe(200);
     expect(c2.status).toBe(200);
-    // 计划绑定到 v0（defaultVersionId）
+    // Plan bound to v0 (defaultVersionId)
     const plan = await request(app).post(`/api/projects/${projectId}/plans`).send({ name: 'P', versionId: defaultVersionId });
     expect(plan.status).toBe(200);
-    // 跨版本引用 c2（v1）到 plan（v0 → 允许）
+    // Cross-version reference of c2 (v1) onto the plan (v0 → allowed)
     const r = await request(app)
       .post(`/api/plans/${plan.body.id}/cases`)
       .send({ caseIds: [c1.body.id, c2.body.id] });

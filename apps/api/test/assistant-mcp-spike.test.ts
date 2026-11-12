@@ -15,7 +15,7 @@ beforeAll(async () => {
   process.env.DATABASE_URL = pgDb.uri;
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // LLM settings：工厂要求 readLlmConfig 非空（spike 不触发任何 LLM 调用，只建会话 + 断言工具注册）
+  // LLM settings: the factory requires readLlmConfig to be non-empty (the spike triggers no LLM calls; it only builds a session + asserts tool registration)
   await seedLlmChannel(pool, { provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o-mini' });
 }, 60_000);
 
@@ -49,13 +49,13 @@ describe('MCP spike: registerMcpServer + createMcpExtension 真实链路', () =>
       lang: 'zh-CN',
     });
     try {
-      // 轮询以「工具真正注册」为准：MCP 连接是后台异步链（initialize → tools/list → registerTools），
-      // marker 文件只在 initialize 落盘，早于工具注册，用它当就绪信号会在窗口内误炸核心断言。
-      // marker 留作失败诊断：区分「session_start 未触发（bindExtensions 缺失）」与「tools/list 未跟上」。
+      // Poll on "the tool is truly registered": MCP connection is a background async chain (initialize -> tools/list -> registerTools),
+      // and the marker file lands at initialize, before tool registration -- using it as the readiness signal would falsely blow up core assertions within the window.
+      // Keep the marker for failure diagnosis: distinguish "session_start never fired (bindExtensions missing)" from "tools/list never followed".
       let tools: string[] = [];
       let markerSeen = false;
       for (let i = 0; i < 60; i++) {
-        try { await fs.access(marker); markerSeen = true; } catch { /* 未落盘，继续等 */ }
+        try { await fs.access(marker); markerSeen = true; } catch { /* not written yet, keep waiting */ }
         tools = (session as unknown as { getAllTools(): { name: string }[] }).getAllTools().map((t) => t.name);
         if (tools.includes('mcp__echo__echo')) break;
         await new Promise((r) => setTimeout(r, 250));
@@ -65,7 +65,7 @@ describe('MCP spike: registerMcpServer + createMcpExtension 真实链路', () =>
         `mcp__echo__echo 未在 15s 内注册（initialize marker=${markerSeen}：session_start 或 tools/list 链路未走通）`,
       ).toContain('mcp__echo__echo');
     } finally {
-      // pi v0.99.2 的 AgentSession.dispose 是同步 void（agent-session.d.ts:362），非 Promise。
+      // pi v0.99.2's AgentSession.dispose is synchronous void (agent-session.d.ts:362), not a Promise.
       (session as unknown as { dispose(): void }).dispose();
       setMcpServersLoader(null);
       await fs.rm(marker, { force: true }).catch(() => undefined);
@@ -105,7 +105,7 @@ describe('MCP DB 加载 + 守卫（getMcpServersForThread 默认翻 DB）', () =
   it('loadEnabledMcpServers：scope 过滤跟随线程归属——project/version 行不跨组织泄漏，无 ctx 只加载 global', async () => {
     const { loadEnabledMcpServers } = await import('../src/pi/space/mcp.js');
     try {
-      // FK 父行：organizations → product_lines → projects → project_versions（scope 过滤测试引用真实归属）
+      // FK parent rows: organizations -> product_lines -> projects -> project_versions (the scope filter test references real ownership)
       await pool.query(`INSERT INTO organizations(id, name, path) VALUES
         ('00000000-0000-0000-0000-0000000000aa', 'spike-org', '/spike-org/')`);
       await pool.query(`INSERT INTO product_lines(id, organization_id, name) VALUES
@@ -124,9 +124,9 @@ describe('MCP DB 加载 + 守卫（getMcpServersForThread 默认翻 DB）', () =
          '00000000-0000-0000-0000-0000000000e2', '00000000-0000-0000-0000-0000000000aa',
          '00000000-0000-0000-0000-0000000000e3', '00000000-0000-0000-0000-0000000000bb',
          '00000000-0000-0000-0000-0000000000e4', '00000000-0000-0000-0000-0000000000cc']);
-      // 无 ctx：只加载 global（安全默认，绝不全量抓 scoped 行）
+      // No ctx: only global is loaded (safe default; never grab all scoped rows)
       expect((await loadEnabledMcpServers()).map((s) => s.name)).toEqual(['g']);
-      // 线程归属 = 项目 A + 版本 a：global + 匹配的 project/version 行
+      // Thread ownership = project A + version a: global + matching project/version rows
       const scoped = (await loadEnabledMcpServers({ projectId: '00000000-0000-0000-0000-0000000000aa', versionId: '00000000-0000-0000-0000-0000000000bb' }))
         .map((s) => s.name).sort();
       expect(scoped).toEqual(['g', 'p-a', 'v-a']);

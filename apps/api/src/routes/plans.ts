@@ -26,7 +26,7 @@ export const plansRoute = Router({ mergeParams: true });
 
 const StrategyEnum = z.enum(['run_all', 'fail_fast']);
 
-/** 组级登录准备配置（环境凭据自动登录 / 登录用例前置）。计划级已退役。 */
+/** Group-level login-prepare config (environment-credential auto login / login-case pre-run). Plan level is retired. */
 const GroupLoginPrepareBody = z
   .object({
     enabled: z.boolean(),
@@ -34,12 +34,12 @@ const GroupLoginPrepareBody = z
     detectionUrl: z.string().url().optional().nullable(),
     successSelector: z.string().max(500).optional().nullable(),
     unauthorizedKeywords: z.array(z.string().max(80)).max(20).optional().nullable(),
-    /** 登录用例数据行覆盖三态：null/缺省 = 跟随用例级；[] = 全部行；非空 = 子集 */
+    /** Login-case dataset row override, three states: null/absent = follow case level; [] = all rows; non-empty = subset */
     datasetRowIndexes: z.array(z.number().int().min(0)).max(500).optional().nullable(),
   })
   .optional();
 
-/** planCases 行级覆盖：加进计划时可改写用例的 device_target / 浏览器上下文；不传/置 null = 沿用例自带值。 */
+/** planCases row-level override: when adding to a plan, may rewrite the case's device_target / browser context; absent/null = keep the case's own value. */
 const TargetOverrideBody = z
   .object({
     deviceTargetId: z.string().uuid().optional(),
@@ -48,7 +48,7 @@ const TargetOverrideBody = z
   .nullable()
   .optional();
 
-/** 组级统一设备/浏览器上下文（与 planCases 行级覆盖同形状）。 */
+/** Group-level unified device/browser context (same shape as the planCases row-level override). */
 const TargetConfigBody = TargetOverrideBody;
 
 const CreateGroupBody = z.object({
@@ -67,7 +67,7 @@ const PatchGroupBody = z.object({
   targetConfig: TargetConfigBody,
 });
 
-// 计划级 Create/Patch 已瘦身：环境/登录准备配置移到组级(/groups 端点)，未知字段由 zod 剥离。
+// Plan-level Create/Patch has been slimmed: environment/login-prepare config moved to group level (/groups endpoint); unknown fields stripped by zod.
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
   versionId: z.string().uuid().optional(),
@@ -93,7 +93,7 @@ plansRoute.get('/', async (req, res) => {
       .where(eq(executionPlans.projectId, projectId))
       .orderBy(asc(executionPlans.createdAt));
   } else {
-    // 直挂载：按可见项目过滤
+    // Direct mount: filter by visible projects
     const visiblePids = await visibleProjectIds(req.user!);
     ps = visiblePids.length
       ? await db.select().from(executionPlans).where(inArray(executionPlans.projectId, visiblePids)).orderBy(asc(executionPlans.createdAt))
@@ -102,7 +102,7 @@ plansRoute.get('/', async (req, res) => {
   const pcs = await db.select().from(planCases);
   const countByPlan = new Map<string, number>();
   for (const pc of pcs) countByPlan.set(pc.planId, (countByPlan.get(pc.planId) ?? 0) + 1);
-  // 取 version 名称
+  // Fetch version names
   const vIds = Array.from(new Set(ps.map((p) => p.versionId).filter((v): v is string => !!v)));
   const vRows = vIds.length ? await db.select().from(projectVersions).where(inArray(projectVersions.id, vIds)) : [];
   const vName = new Map(vRows.map((v) => [v.id, v.name] as const));
@@ -118,14 +118,14 @@ plansRoute.post('/', async (req, res) => {
   if (!projectId) throw new HttpError(400, 'bad_request', 'projectId is required');
   const body = CreateBody.parse(req.body);
   await assertProjectVisible(projectId, req.user!);
-  // versionId 必填：前端所有入口都显式带版本，无隐式回退；传了则必须同 project
+  // versionId is required: every frontend entry passes the version explicitly, no implicit fallback; if passed it must be the same project
   const versionId = body.versionId;
   if (!versionId) throw new HttpError(400, 'version_required', 'versionId is required');
   {
     const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
     if (vp !== projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to this project');
   }
-  // 归属校验在 service 内重复一遍(有意冗余):AI 工具绕过 HTTP 层直调时无路由校验兜底
+  // Ownership validation repeated inside the service (intentional redundancy): AI tools bypassing the HTTP layer have no route validation as fallback
   res.json(await createPlan(projectId, { ...body, versionId }, req.user!.userId));
 });
 
@@ -141,12 +141,12 @@ plansRoute.patch('/:id', async (req, res) => {
   if (!existing) throw new HttpError(404, 'not_found', 'plan not found');
   await assertProjectVisible(existing.projectId, req.user!);
   const body = PatchBody.parse(req.body);
-  // version 归属(∈ 计划所属 project)由 service 兜底
+  // Version ownership (∈ the plan's project) is enforced by the service as fallback
   res.json(await updatePlan(req.params.id!, body));
 });
 
-/** 计划删除统一语义：连运行历史一起删（runs + 成员报告 + 截图）。reports 无 FK（plan_run_cases.report_id → SET NULL），
- *  只删计划行会让孤儿报告以「独立用例执行」形态回流执行历史，故必须先走 deleteRunsWithReports。 */
+/** Plan deletion unified semantics: delete run history too (runs + member reports + screenshots). reports has no FK (plan_run_cases.report_id → SET NULL);
+ *  deleting only the plan row would let orphan reports flow back into execution history as "independent case executions", so deleteRunsWithReports must run first. */
 async function deletePlansWithRuns(planIds: string[]): Promise<void> {
   const runRows = await db.select({ id: planRuns.id }).from(planRuns).where(inArray(planRuns.planId, planIds));
   const runIds = runRows.map((r) => r.id);
@@ -180,11 +180,11 @@ plansRoute.post('/batch-delete', async (req, res) => {
   res.json({ count: deleted.length });
 });
 
-// caseIds 归属(∈ 计划所属 project,409 cross_project)由 service assertCasesInProject 承接;
-// 路由仅保留计划级 per-user 可见性。
-// 整包替换已收口到组级(PUT /:id/groups/:groupId/cases);计划级 PUT /:id/cases 已退役。
+// caseIds ownership (∈ the plan's project, 409 cross_project) is handled by the service's assertCasesInProject;
+// the route keeps only plan-level per-user visibility.
+// Whole-package replacement has been consolidated to group level (PUT /:id/groups/:groupId/cases); plan-level PUT /:id/cases is retired.
 
-// 追加用例：groupId 缺省 = 追加到第一个组/自动建默认分组（service 默认行为）。
+// Append cases: groupId absent = append to the first group / auto-create a default group (the service's default behavior).
 plansRoute.post('/:id/cases', async (req, res) => {
   const { caseIds, groupId } = z.object({
     caseIds: z.array(z.string().uuid()).min(1),
@@ -196,7 +196,7 @@ plansRoute.post('/:id/cases', async (req, res) => {
   res.json({ added: await addPlanCases(req.params.id!, caseIds, groupId) });
 });
 
-// 组内重排：必传 groupId，caseIds 必须恰为该组当前用例集合。
+// In-group reorder: groupId is required, and caseIds must be exactly the group's current case set.
 plansRoute.put('/:id/cases/order', async (req, res) => {
   const { groupId, caseIds } = z.object({
     groupId: z.string().uuid(),
@@ -208,7 +208,7 @@ plansRoute.put('/:id/cases/order', async (req, res) => {
   res.json(await reorderPlanGroupCases(req.params.id!, groupId, caseIds));
 });
 
-// 跨组移动：按 planCaseId（plan_cases 行 id）移动到目标组尾，源组自动重排。
+// Cross-group move: move by planCaseId (plan_cases row id) to the target group's tail; the source group reorders automatically.
 plansRoute.put('/:id/cases/move', async (req, res) => {
   const { planCaseIds, toGroupId } = z.object({
     planCaseIds: z.array(z.string().uuid()).min(1),
@@ -229,8 +229,8 @@ plansRoute.delete('/:id/cases', async (req, res) => {
   res.json({ ok: true });
 });
 
-// planCases 行级 PATCH:目前只支持 targetOverride（device_target / 浏览器上下文覆盖）。
-// body 形如 { caseId, targetOverride }：caseId 必填，targetOverride 可为对象/null/undefined。
+// planCases row-level PATCH: currently only supports targetOverride (device_target / browser context override).
+// The body looks like { caseId, targetOverride }: caseId is required; targetOverride may be an object/null/undefined.
 plansRoute.patch('/:id/cases/:caseId', async (req, res) => {
   const { caseId } = req.params as { caseId?: string };
   if (!caseId) throw new HttpError(400, 'bad_request', 'caseId is required');
@@ -243,9 +243,9 @@ plansRoute.patch('/:id/cases/:caseId', async (req, res) => {
   res.json(await updatePlanCase(req.params.id!, caseId, { targetOverride: body.targetOverride }));
 });
 
-// 计划级数据集行选择：按 plan_cases.id 定位（同用例跨组=多行，各改各的）。
-// null = 清覆盖（执行回落用例级）；[] = 全部启用行；非空 = 启用行下标子集。
-// 不复用 PATCH /:id/cases/:caseId——那个按 caseId+limit(1) 定位，跨组重复用例有歧义。
+// Plan-level dataset row selection: located by plan_cases.id (the same case in multiple groups = multiple rows, each edited independently).
+// null = clear the override (execution falls back to case level); [] = all enabled rows; non-empty = subset of enabled row indexes.
+// Does not reuse PATCH /:id/cases/:caseId — that one locates by caseId+limit(1), ambiguous for cases duplicated across groups.
 plansRoute.patch('/:id/plan-cases/:planCaseId', async (req, res) => {
   const { datasetRowIndexes } = z.object({
     datasetRowIndexes: z.array(z.number().int().min(0)).max(500).nullable(),
@@ -256,9 +256,9 @@ plansRoute.patch('/:id/plan-cases/:planCaseId', async (req, res) => {
   res.json(await updatePlanCaseDatasetRows(req.params.id!, req.params.planCaseId!, datasetRowIndexes));
 });
 
-// ---- 计划分组端点：每组独立配置环境/登录准备/failFast/设备浏览器上下文。 ----
+// ---- Plan group endpoints: each group independently configures environment/login-prepare/failFast/device browser context. ----
 
-/** zod 组登录准备 body → service 输入（null 收口缺省字段）。 */
+/** zod group login-prepare body → service input (null consolidates absent fields). */
 function toGroupLoginPrepare(b?: z.infer<typeof GroupLoginPrepareBody>) {
   return b && {
     enabled: b.enabled,

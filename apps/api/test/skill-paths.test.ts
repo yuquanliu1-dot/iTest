@@ -1,9 +1,9 @@
 /**
- * resolveInSkill：skill 目录树路径守卫。
+ * resolveInSkill: path guard for the skill directory tree.
  *
- * 现有 runSkillScript 的 safeResolve 是纯词法的（normalize + startsWith），
- * 只挡 ../ 与绝对路径；<skill>/scripts 若是软链则直接穿透到 /etc。本文件专门
- * 覆盖 realpath 解析那一类，以及逐段（而非整串）校验的差异。
+ * The existing runSkillScript safeResolve is purely lexical (normalize + startsWith),
+ * only blocking ../ and absolute paths; if <skill>/scripts is a symlink it goes straight through to /etc. This file
+ * specifically covers the realpath-resolution class, plus the difference of validating segment-by-segment (rather than the whole string).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -16,7 +16,7 @@ describe('resolveInSkill', () => {
 
   beforeEach(async () => {
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'itest-skillpaths-'));
-    // resolveInSkill 返回 realpath 规范化后的路径（/var → /private/var），故 root 也要规范化后比对
+    // resolveInSkill returns the realpath-normalized path (/var → /private/var), so root must be normalized too before comparing
     root = await fs.promises.realpath(dir);
     await fs.promises.mkdir(path.join(root, 'scripts'), { recursive: true });
     await fs.promises.writeFile(path.join(root, 'scripts', 'a.py'), 'x');
@@ -39,7 +39,7 @@ describe('resolveInSkill', () => {
     expect(resolveInSkill(root, 'scripts\\..\\..\\x')).toBeNull();
     expect(resolveInSkill(root, 'a\0b')).toBeNull();
     expect(resolveInSkill(root, '')).toBeNull();
-    expect(resolveInSkill(root, '   ')).toBe(path.join(root, '   ')); // 空格是合法文件名，不额外拒
+    expect(resolveInSkill(root, '   ')).toBe(path.join(root, '   ')); // spaces are legal filenames; not rejected extra
   });
 
   it('拒绝：隐藏文件 / .git / node_modules（逐段判，不只判首段）', () => {
@@ -55,7 +55,7 @@ describe('resolveInSkill', () => {
     try {
       await fs.promises.symlink('/tmp', link);
     } catch {
-      return; // Windows 无权限时跳过
+      return; // skipped when Windows lacks the permission
     }
     expect(resolveInSkill(root, 'evil/passwd')).toBeNull();
   });

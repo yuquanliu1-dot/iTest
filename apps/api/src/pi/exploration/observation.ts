@@ -1,32 +1,34 @@
 /**
- * 错误信号采集（pi 链路 D3）：console error / pageerror / HTTP 4xx-5xx 的页面侧监听。
+ * Error signal collection (pi chain D3): page-side listeners for console error / pageerror / HTTP 4xx-5xx.
  *
- * 与「模型主动报 finding」互补：模型没报但页面在报错（控制台异常、静默 500）是探索
- * 最容易漏的一类。采集是平台侧机械行为，不依赖模型自觉——增量随 observe 回灌给模型
- * （drain），全量封顶留档（all → error_signals 列），「模型没报但页面在报」可据此审计。
+ * Complementary to "the model actively reporting a finding": errors the model did not report but the page is
+ * raising (console exceptions, silent 500s) are the class explorations most easily miss. Collection is platform-side
+ * mechanical behavior and does not rely on model self-discipline — increments feed back to the model with observe
+ * (drain), and the capped full set is archived (all → error_signals column), so "the model stayed silent while the
+ * page was screaming" can be audited from it.
  */
 import type { Page } from 'playwright-core';
 
-/** 错误信号（留档形状 = schema error_signals 列）。 */
+/** Error signal (archived shape = the schema's error_signals column). */
 export interface ErrorSignal {
   at: string;
   kind: 'console' | 'pageerror' | 'http';
-  /** 单条文本封顶（console 参数拼接 / error message / status 行）。 */
+  /** Per-item text cap (concatenated console args / error message / status line). */
   text: string;
-  /** http 类的资源 URL。 */
+  /** Resource URL for the http kind. */
   url?: string;
 }
 
-/** 全量留档封顶：超过后丢弃新条目（留档是审计辅助，不是无限日志）。 */
+/** Full-archive cap: beyond it, new entries are dropped (the archive is an audit aid, not an unbounded log). */
 export const ERROR_SIGNALS_MAX = 200;
 
-/** 单条文本封顶：console 参数可能是超长堆栈。 */
+/** Per-item text cap: console args can be very long stacks. */
 const SIGNAL_TEXT_MAX = 300;
 
 export interface ErrorSignalCollector {
-  /** 取走自上次 drain 起的新信号（observe 增量回灌用；已渲染文本 + 条数）。 */
+  /** Takes the new signals since the last drain (for observe incremental feedback; rendered text + count). */
   drainRendered(): { text: string; count: number };
-  /** 全量（封顶内）留档快照。 */
+  /** Full (within-cap) archive snapshot. */
   all(): ErrorSignal[];
   close(): void;
 }

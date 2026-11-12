@@ -1,12 +1,12 @@
 /**
- * BullMQ worker 的 processor：到点把 plan_schedules 行 → enqueuePlanRun → 写入审计字段。
+ * The BullMQ worker's processor: at fire time turns a plan_schedules row → enqueuePlanRun → writes audit fields.
  *
- * 流程：
- *   1. SELECT 计划行；若不存在 / enabled=false → return（job 已被 UI 删除，吞掉）。
+ * Flow:
+ *   1. SELECT the plan row; if missing / enabled=false → return (job was deleted in the UI, swallow it).
  *   2. enqueuePlanRun({ callerUser: null, trigger: { source: 'schedule', scheduleId, userId } })
- *      callerUser=null 跳过项目可见性校验（schedule 行已存 = 创建时已校验）。
- *   3. UPDATE last_run_at=now() + 用 cron-parser 算一次 next_run_at 写回,
- *      不依赖 BullMQ 内部 key,便于 UI 立即显示。
+ *      callerUser=null skips project visibility checks (the schedule row exists = validated at creation).
+ *   3. UPDATE last_run_at=now() + compute next_run_at once with cron-parser and write it back,
+ *      without depending on BullMQ's internal keys, so the UI can show it immediately.
  */
 import { eq } from 'drizzle-orm';
 import cronParser from 'cron-parser';
@@ -47,7 +47,7 @@ export async function processScheduleFire(scheduleId: string): Promise<void> {
     logger.info({ scheduleId, runId, planId: row.planId }, 'scheduled plan run enqueued');
   } catch (e) {
     logger.error({ err: (e as Error).message, scheduleId }, 'scheduled run enqueue failed');
-    // 不抛：避免 BullMQ 进入死信；用户可在 UI 看 schedule.last_run_at 是否推进
+    // Don't throw: avoids BullMQ dead-lettering; users can watch schedule.last_run_at advance in the UI
   }
 
   const nextRunAt = computeNextRunAt(row);

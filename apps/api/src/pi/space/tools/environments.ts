@@ -1,7 +1,7 @@
 /**
- * manage_environments:环境列表/详情/upsert(含对象,但拒绝明文凭据;更新标量字段走阻塞确认)/set_secret(阻塞确认)/删除(阻塞确认)。
- * 明文凭据只能走 set_secret:summary 不回显值;工具返回与 stage 事件均只有掩码。
- * findEnvironmentObject 返回含密文的原始行,仅限内部定位 id,严禁序列化进任何输出。
+ * manage_environments: environment list/detail/upsert (objects included but plaintext credentials rejected; updating scalar fields goes through blocking confirmation) /set_secret (blocking confirmation) /delete (blocking confirmation).
+ * Plaintext credentials only flow through set_secret: the summary never echoes the value; both the tool return and stage events carry only masks.
+ * findEnvironmentObject returns the raw row including ciphertext, solely for internal id location — it must never be serialized into any output.
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
@@ -27,9 +27,9 @@ const Actions = z.object({
     payload: z.record(z.unknown()),
     isDefault: z.boolean().optional(),
   })).max(10).optional(),
-  objectType: z.enum(['db', 'syslog', 'web']).optional(), // set_secret 用
-  label: z.string().max(120).optional(), // set_secret 用(缺省「默认」)
-  value: z.string().min(1).max(8000).optional(), // set_secret 明文(仅进加密,不进任何输出)
+  objectType: z.enum(['db', 'syslog', 'web']).optional(), // for set_secret
+  label: z.string().max(120).optional(), // for set_secret (default 「默认」)
+  value: z.string().min(1).max(8000).optional(), // set_secret plaintext (goes only into encryption, never into any output)
 });
 
 export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
@@ -99,7 +99,7 @@ export function buildEnvironmentsTools(ctx: SpaceToolsContext): ToolExecutor[] {
                 if (v.name !== undefined) patch.name = v.name;
                 if (v.isDefault !== undefined) patch.isDefault = v.isDefault;
                 if (Object.keys(patch).length > 0) {
-                  // 更新路径走阻塞确认:挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
+                  // The update path goes through blocking confirmation: precompute the diff (old values vs synthesized new values) before suspending; the confirmation card and the actual execution share one copy of the data
                   const before = await svc.getEnvironment(v.environmentId);
                   upsertDiff = diffText(before ?? {}, { ...(before ?? {}), ...patch });
                   if (upsertDiff !== undefined) {

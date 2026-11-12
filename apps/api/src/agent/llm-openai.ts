@@ -11,8 +11,8 @@ export class OpenAIClient implements LLMClient {
   }
   async complete(req: LLMRequest): Promise<LLMResult> {
     const model = this.cfg.model || 'gpt-4o-mini';
-    // 多轮累积：req.messages 存在时按历史回传，否则退化为单轮形态。
-    // 两种形态等价（单轮只是长度为 1 的历史），不会丢上下文。
+    // Multi-turn accumulation: when req.messages exists, replay the history; otherwise degrade to the single-turn form.
+    // The two forms are equivalent (single turn is just a history of length 1), no context is lost.
     type Block =
       | { type: 'text'; text: string }
       | { type: 'image_url'; image_url: { url: string } };
@@ -33,7 +33,7 @@ export class OpenAIClient implements LLMClient {
     const systemPrompt = req.lang ? `${req.systemPrompt}\n${langDirective(req.lang)}` : req.systemPrompt;
     const resp = await this.client.chat.completions.create({
       model,
-      // 未配置不传参（走服务商默认，与既有行为一致）
+      // Don't pass the parameter when unconfigured (use the provider default, consistent with existing behavior)
       ...(this.cfg.maxTokens ? { max_tokens: this.cfg.maxTokens } : {}),
       messages: [
         ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
@@ -46,9 +46,9 @@ export class OpenAIClient implements LLMClient {
     const text = resp.choices[0]?.message?.content ?? '';
     const json = tryParseJson(text);
     const base: LLMCompleteResult = json ? { kind: 'json', value: json } : { kind: 'text', value: text };
-    // OpenAI 口径：prompt_tokens 含 cached_tokens（后者是它的子集）。平台统一口径是
-    // 「promptTokens = 本次新计算的、cacheReadTokens = 命中缓存的」（见 LLMUsage 注释，
-    // 与 Anthropic 原生口径一致），故这里减去 cached_tokens，否则命中率会重复计数。
+    // OpenAI semantics: prompt_tokens includes cached_tokens (the latter is a subset of it). The platform's unified convention is
+    // "promptTokens = newly computed this call, cacheReadTokens = cache hits" (see the LLMUsage comment,
+    // consistent with Anthropic's native convention), so subtract cached_tokens here, otherwise the hit rate would be double-counted.
     const cached = resp.usage?.prompt_tokens_details?.cached_tokens ?? 0;
     const usage = resp.usage ? { promptTokens: Math.max(0, (resp.usage.prompt_tokens ?? 0) - cached), completionTokens: resp.usage.completion_tokens ?? 0, cacheReadTokens: cached } : undefined;
     const hasImage = history.some((m) => m.content.some((b) => b.type === 'image_url'));

@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import type { Locator } from 'playwright-core';
 import { isDropdownFilterInput, isOpenDropdownFilter } from './dropdownFilter.js';
 
-/** 造一个最小 Element 替身：closest 按宿主类名命中选择器串时返回该宿主。
- *  hostClass 决定 closest 是否命中（模拟类名匹配），className 是宿主真实 class 串。 */
+/** Builds a minimal Element stand-in: closest returns the host when the selector string hits the host's class name.
+ *  hostClass decides whether closest hits (simulating class matching); className is the host's real class string. */
 function makeEl(opts: { hostClass?: string; className?: string; vue?: unknown }): Element {
   const host = opts.hostClass
     ? ({ className: opts.className ?? opts.hostClass, __vue__: opts.vue } as unknown as HTMLElement)

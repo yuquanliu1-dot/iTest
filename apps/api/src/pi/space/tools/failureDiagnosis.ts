@@ -1,18 +1,18 @@
 /**
- * verify_case / solidify_case 失败归因：把「这步为什么失败」的判别完全交给 LLM。
+ * verify_case / solidify_case failure attribution: the judgment of "why did this step fail" is handed entirely to the LLM.
  *
- * 动机：历史上归因靠硬编码判别——`expectIdsFromCompiled` 只认 css strategy 里的
- * `#id`/`[id=]` 形态 → `extractPageEvidence` 数 missingIds → `buildFailureTriage`
- * 产出固化文案。这是打地鼠：换 text=/role/xpath/testId 形态就提取不出、判别失效，
- * 每遇新形态就要再加硬编码。改为把「形态无关的现场证据」交给 LLM 推理，它理解语义
- * 能自己区分「页面没挂载到这一步（位置/流程断裂）」与「页面在但选择器不匹配（写错）」。
+ * Motivation: attribution was historically hardcoded — `expectIdsFromCompiled` only recognized the
+ * `#id`/`[id=]` shapes within the css strategy → `extractPageEvidence` counted missingIds → `buildFailureTriage`
+ * produced canned copy. That was whack-a-mole: switch to text=/role/xpath/testId shapes and extraction broke and the judgment failed,
+ * and every new shape demanded another hardcode. Instead, "shape-agnostic on-scene evidence" is handed to the LLM for reasoning; it understands
+ * semantics and can itself distinguish "the page never mounted to this step (position/process fracture)" from "the page is there but the selector doesn't match (written wrong)".
  *
- * 关键设计（与 assertionJudge.ts 同范式）：best-effort + 不静默丢信息。
- * - 证据是形态无关的：每条 locator 候选在失败页的实时命中数 + 可见浮层清单 +
- *   可交互元素清单 + URL/标题。css/text/role/xpath/testId 一律可探，不再解析字符串形态。
- * - 任何异常（LLM 未配置/网络失败/非法 JSON）都返回 null，调用方回退既有一般文案，
- *   绝不把失败信息静默吃掉。
- * - 页面文本/元素清单是不可信的被测页面数据（可能含诱饵/指令），prompt 里明令只当数据。
+ * Key design (same paradigm as assertionJudge.ts): best-effort + never silently drop information.
+ * - The evidence is shape-agnostic: each locator candidate's live hit count on the failed page + the visible-overlay list +
+ *   the interactive-element list + URL/title. css/text/role/xpath/testId are all probeable; string shapes are no longer parsed.
+ * - On any exception (LLM unconfigured / network failure / invalid JSON) it returns null and the caller falls back to the existing generic copy;
+ *   failure information is never silently swallowed.
+ * - Page text/element lists are untrusted SUT page data (may contain decoys/instructions); the prompt explicitly orders treating them as data only.
  */
 import type { Page } from 'playwright-core';
 import type { Locator, ConsoleLogEntry } from '@itest/shared';
@@ -22,8 +22,8 @@ import { aiLangFrom, type AiLang } from '../../../agent/langDirective.js';
 import type { PageElementSnapshot } from '../../inspectPage.js';
 import type { EffectiveStep } from './case-ops-tools.js';
 
-/** 一条 locator 候选在失败页的实时命中数（形态无关证据）。
- *  hitCount<0：该 locator 全部候选都无可探测 count()，按「命中容忍」处理（与回放 tryFirstMatch 一致）。 */
+/** A locator candidate's live hit count on the failed page (shape-agnostic evidence).
+ *  hitCount<0: none of the locator's candidates expose a probeable count(); treated as "hit tolerance" (same as replay's tryFirstMatch). */
 export interface LocatorProbeHit {
   strategy: string;
   value: string;
@@ -31,11 +31,12 @@ export interface LocatorProbeHit {
 }
 
 /**
- * 逐条 locator 在已打开的页面上探测实时命中数。失败页此时已稳定（执行中止后），
- * 单轮 count() 即可；不轮询——checkCompiledLocators 的轮询是为「执行中元素还在挂载」设的，
- * 归因场景页面已落定。命中数取该 locator 展开的所有候选的最大值（回放短路按首命中候选走，
- * 对归因而言「是否能命中」比「哪个候选」更关键；具体的候选级差异交给 failure.page.elements 佐证）。
- * 复用 buildCandidates 保证与回放同一套候选展开与探测语义。
+ * Probe each locator's live hit count on the already-opened page. The failed page is stable at this point (after execution aborted),
+ * so a single count() round suffices; no polling — checkCompiledLocators polls for "elements still mounting mid-execution",
+ * whereas in the attribution scenario the page has settled. The hit count takes the maximum over all candidates the locator expands into
+ * (replay short-circuits on the first hitting candidate, but for attribution "can it hit at all" matters more than "which candidate";
+ * candidate-level differences are left to failure.page.elements as corroboration).
+ * Reuses buildCandidates so candidate expansion and probing semantics are identical to replay's.
  */
 export async function probeLocatorHits(page: Page, locators: Locator[]): Promise<LocatorProbeHit[]> {
   const out: LocatorProbeHit[] = [];
@@ -49,26 +50,26 @@ export async function probeLocatorHits(page: Page, locators: Locator[]): Promise
       const probe = c.loc as unknown as { count?: () => Promise<number> };
       if (!probe || typeof probe.count !== 'function') {
         hasNonCount = true;
-        continue; // 无 count() 的候选：不贡献命中计数，见下
+        continue; // candidates without count(): contribute no hit count, see below
       }
       probedAny = true;
       try {
         maxHit = Math.max(maxHit, await probe.count());
       } catch {
-        // 探测异常（选择器不合法）按该候选落空处理
+        // Probe exceptions (invalid selector) are treated as that candidate missing
       }
     }
-    if (!probedAny && hasNonCount) maxHit = -1; // 全部候选不可探测 → 容忍命中
+    if (!probedAny && hasNonCount) maxHit = -1; // all candidates unprobeable → tolerate hits
     out.push({ strategy: l.strategy, value: l.value, hitCount: maxHit });
   }
   return out;
 }
 
-/** 运行时实例 id 形态：id 片段里带 3 位以上连续数字（如 Element-UI 级联的 #cascader-menu-502-0-0）。
- *  这类 id 由前端运行时分配（浮层/级联面板每次挂载都换号），当唯一锚点必然下一轮命中 0。 */
+/** Runtime instance-id shape: id fragments carrying 3+ consecutive digits (e.g. Element-UI cascader's #cascader-menu-502-0-0).
+ *  Such ids are assigned by the frontend at runtime (overlays/cascader panels renumber on every mount); used as a unique anchor they are guaranteed to hit 0 next round. */
 const RUNTIME_ID_RE = /#[^\s"'()]*\d{3,}/;
 
-/** 本步 compiled 里用了运行时实例 id 的 locator（供证据行提醒 LLM 别再建议这类 id）。 */
+/** Locators in this step's compiled that used runtime instance ids (feeds the evidence line reminding the LLM not to suggest such ids again). */
 export function runtimeIdLocators(step: EffectiveStep | null): string[] {
   const out: string[] = [];
   const actions = (Array.isArray(step?.compiled) ? step.compiled : []) as Array<{
@@ -107,7 +108,7 @@ const DIAG_PROMPT = `你是 Web 测试用例失败诊断员。测试用例某一
 只输出 JSON，不要 markdown 包裹：{"diagnosis":"position-fracture"|"conditional-overlay"|"locator-fix"|"other","note":"≤150字中文修正指引，引用具体证据"}
 证据不足以确定时 diagnosis=other，note 给出最稳妥的下一步（如实汇报/检查环境与前置数据）。`;
 
-/** 把现场证据序列化为 userMessage（截断防爆）。 */
+/** Serialize the on-scene evidence into the userMessage (truncated to avoid blowing up). */
 function buildEvidenceText(o: {
   step: EffectiveStep | null;
   assertion: unknown;
@@ -145,8 +146,8 @@ function buildEvidenceText(o: {
 }
 
 /**
- * 对失败步骤做 LLM 归因诊断。best-effort：任何异常都返回 null，调用方回退一般文案。
- * 返回唯一用途是拼进失败 note 的「⚠ 归因:」段；diagnosis 字段仅供告警/潜在分流，不改失败原因分类。
+ * LLM attribution diagnosis for a failed step. best-effort: any exception returns null and the caller falls back to the generic copy.
+ * The return value's sole use is being spliced into the failed note's 「⚠ 归因:」 section; the diagnosis field is only for alerting/potential triage and does not change the failure-reason classification.
  */
 export async function diagnoseFailure(o: {
   client: LLMClient;
@@ -155,7 +156,7 @@ export async function diagnoseFailure(o: {
   probes: LocatorProbeHit[];
   overlays: Array<{ tag: string; selector: string; text: string }>;
   elements: PageElementSnapshot;
-  /** 失败步窗口内的浏览器 JS 错误（step_results 的 console 字段透传；缺省不展示该证据行）。 */
+  /** Browser JS errors within the failed step's window (passed through from step_results' console field; omitted → the evidence line is not shown). */
   consoleErrors?: ConsoleLogEntry[];
   extraHint?: string;
   lang?: AiLang;

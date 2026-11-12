@@ -1,10 +1,10 @@
 /**
- * 版本空间助手「暂存 → 落库」HTTP 端点：
- *   POST /assistant/threads/:id/stage/list   返回该线程下所有暂存对象(含 caseOps)
- *   POST /assistant/threads/:id/stage/save   用户勾选后调用,把暂存对象落正式表并删 stage 行
+ * Version-space assistant "stage → persist" HTTP endpoints:
+ *   POST /assistant/threads/:id/stage/list   returns every staged object under this thread (incl. caseOps)
+ *   POST /assistant/threads/:id/stage/save   called after the user checks items; persists staged objects into the real tables and deletes the stage rows
  *
- * 落库顺序：先 datasets（cases 的 datasetLocalId 依赖真实 id）→ scenarios（含 requirement 解析）→ cases（含 groupId）→ environments → plans → caseOps。
- * 任一阶段失败整体回滚（DELETE 不入库,但 stage 写入本身不回退 —— 用户可重新勾选重试）。
+ * Persist order: datasets first (cases' datasetLocalId depends on the real id) → scenarios (incl. requirement resolution) → cases (incl. groupId) → environments → plans → caseOps.
+ * Any stage failing rolls back the whole transaction (DELETEs don't reach the DB, but stage-row writes themselves don't roll back — the user can re-check and retry).
  */
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { Router } from 'express';
@@ -53,7 +53,7 @@ stageRoute.post('/threads/:id/stage/list', async (req, res) => {
 stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   const threadId = req.params.id!;
   const versionId = await assertSpaceThreadVisible(threadId, req.user as never);
-  // 暂存落库对象以当前操作用户为创建人（AI 代建路径的归属）。
+  // Persisted staged objects get the current operating user as creator (ownership for the AI proxy-build path).
   const creatorId = (req.user as { userId?: string } | undefined)?.userId ?? null;
   const body = (req.body ?? {}) as Partial<SaveBody>;
   const cases = body.cases ?? [];
@@ -66,13 +66,13 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     throw new HttpError(400, 'bad_request', '至少选择一项');
   }
 
-  // 1. 先在事务外解析所有局部映射；失败立即抛错、不删 stage 行（用户可重选）。
+  // 1. Resolve all local mappings outside the transaction first; on failure throw immediately without deleting stage rows (the user can re-select).
   const pid = await resolveVersionProjectId(versionId);
   if (!pid) throw new HttpError(500, 'invariant', 'version project missing');
 
-  // 1z. caseOps 预检（只读）：勾选的 op 先整批过一遍「形状 + 引用存在性」，全过才允许写。
-  //  必须在任何写之前——一条必然失败的 op 排在批次中段时，前面的 insert 已落库、
-  //  stage 行又不删（失败不回滚），用户重试就重复插入（prod228 2026-11-11 实测：3 份重复步骤）。
+  // 1z. caseOps preflight (read-only): the checked ops first go through the whole batch's "shape + reference existence" checks; only if all pass may writes begin.
+  //  Must happen before any write — when a doomed op sits mid-batch, the earlier inserts are already persisted and
+  //  stage rows aren't deleted (failure doesn't roll back), so a user retry duplicates the insert (observed live on prod228 2026-11-11: 3 duplicate step sets).
   const stageCaseOpRows = caseOps.length
     ? (await db.select().from(aiStageCaseOps)
         .where(and(eq(aiStageCaseOps.threadId, threadId), inArray(aiStageCaseOps.localId, caseOps.map((c) => c.localId))))
@@ -85,13 +85,13 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     repo: emptyRepoState(),
     emit: (e: unknown) => emitThreadEvent(threadId, e as Record<string, unknown>),
     createdByUserId: creatorId,
-    manager: false, // stage 落库不涉及管理类工具
+    manager: false, // stage persistence never touches manager-class tools
   };
   await preflightCaseOps(stageCaseOpRows, opCtx);
 
-  // 1a. datasets: 先于 cases 落库（stage_case.datasetLocalId 需要真实 datasetId 回填）。
-  //  rows 是明文草稿（含 sensitive 列）→ createDataset/normalizeDataset 在这里完成加密。
-  //  名称冲突 409 由 service 抛出,用户改名后可重试。
+  // 1a. datasets: persist before cases (stage_case.datasetLocalId needs the real datasetId back-filled).
+  //  rows are plaintext drafts (incl. the sensitive column) → createDataset/normalizeDataset complete the encryption here.
+  //  Name-conflict 409 is thrown by the service; the user can rename and retry.
   const stageDatasetRows = datasets.length
     ? await db.select().from(aiStageDatasets)
         .where(and(eq(aiStageDatasets.threadId, threadId), inArray(aiStageDatasets.localId, datasets.map((d) => d.localId))))
@@ -109,11 +109,12 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     createdDatasetIds.set(sel.localId, created.id);
   }
 
-  // 1b. cases: 拉 stage 行 → 校验 groupId 归属 → 调 createCaseWithSteps 落库
-  //  P1-3 落库闸门：① 死步骤（无 compiled 且无指令）直接 422 拦截并点名——落库后回放只能报
-  //  compile-missing，暂存期拦住让 AI 当轮补写。注意不能拦「自然语言草稿」（compiled 为空 +
-  //  有指令是助手边跑边讨论的正规形态），只拦真死步。② 纯 NL 草稿 + 字符串断言 → advisory
-  //  warnings（字符串断言未编译时不参与逐步判定，终态以 expectedOutcome 判定为准），不阻断。
+  // 1b. cases: fetch stage rows → validate groupId ownership → call createCaseWithSteps to persist
+  //  P1-3 persist gate: ① dead steps (no compiled and no instruction) are rejected outright with a 422 naming them — after persist,
+  //  replay could only report compile-missing; catching them at stage time lets the AI fill them in during the current turn. Note that NL drafts
+  //  (empty compiled + an instruction is the normal form while the assistant runs and discusses) must NOT be blocked — only true dead steps are.
+  //  ② Pure NL draft + string assertion → advisory
+  //  warnings (uncompiled string assertions don't take part in per-step judgment; the final state is judged by expectedOutcome), non-blocking.
   const saveWarnings: string[] = [];
   const stageCaseRows = cases.length
     ? await db.select().from(aiStageCases)
@@ -142,7 +143,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     if (!hasCompiled && hasStringAssertion) {
       saveWarnings.push(`用例「${row.title}」当前是自然语言草稿：步骤级断言不参与逐步判定（机械回放会跳过整页模糊断言），终态以用例级预期结果（expectedOutcome）的判定为准`);
     }
-    // 配套数据集绑定：datasetLocalId 仅在本批 datasets 里解析;未勾选/未找到则跳过绑定（沿 plans caseLocalIds 先例）。
+    // Companion dataset binding: datasetLocalId resolves only within this batch's datasets; unchecked/not found → skip binding (following the plans caseLocalIds precedent).
     const datasetId = row.datasetLocalId ? createdDatasetIds.get(row.datasetLocalId) : undefined;
     const created = await casesSvc.createCaseWithSteps({
       groupId: gid,
@@ -165,7 +166,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     createdCaseIds.set(sel.localId, created.id);
   }
 
-  // 1c. scenarios: 直接落正式表
+  // 1c. scenarios: straight into the real tables
   const stageScenarioRows = scenarios.length
     ? await db.select().from(aiStageScenarios)
         .where(and(eq(aiStageScenarios.threadId, threadId), inArray(aiStageScenarios.localId, scenarios.map((s) => s.localId))))
@@ -176,7 +177,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     await scenariosSvc.createScenario(row.requirementId, { title: row.title, description: row.description });
   }
 
-  // 1d. environments: name 冲突 → 409（其余场景 service 内部已经抛 HttpError）
+  // 1d. environments: name conflict → 409 (other failure paths already throw HttpError inside the service)
   const stageEnvRows = environments.length
     ? await db.select().from(aiStageEnvironments)
         .where(and(eq(aiStageEnvironments.threadId, threadId), inArray(aiStageEnvironments.localId, environments.map((e) => e.localId))))
@@ -187,15 +188,15 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     const insertedEnv = await environmentsSvc.createEnvironment(pid, {
       name: row.name,
       objects: ((row.objects as unknown[]) ?? [])
-        // 0041 起 login 已并入 web;残留的暂存 login 草稿跳过(否则落成新代码永不读取的孤儿对象)
+        // Since 0041 login has been merged into web; skip leftover staged login drafts (otherwise they persist as orphan objects the new code never reads)
         .filter((o) => (o as { objectType?: string }).objectType !== 'login')
         .map((o) => {
           const x = o as { objectType: 'db' | 'syslog' | 'web'; label?: string; payload: Record<string, unknown>; isDefault?: boolean };
           return { objectType: x.objectType, label: x.label, payload: x.payload, isDefault: x.isDefault };
         }),
     }, creatorId);
-    // staged.baseUrl 绝对地址 → 派生默认 web 服务对象(尽力而为:解析失败跳过,不阻塞 save)。
-    // 用例 url 相对化后靠 web 对象 origin 拼接,老数据仍在 baseUrl 的暂存环境需要这个兜底。
+    // staged.baseUrl absolute address → derive a default web service object (best-effort: skip on parse failure, don't block save).
+    // After case urls become relative they're joined against the web object's origin; staged environments whose old data still lives in baseUrl need this fallback.
     if (insertedEnv && row.baseUrl && /^https?:\/\//.test(row.baseUrl)) {
       try {
         const u = new URL(row.baseUrl);
@@ -206,15 +207,15 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
           isDefault: true,
         });
       } catch {
-        /* 尽力而为:解析失败跳过,不阻塞 save */
+        /* best-effort: skip on parse failure, don't block save */
       }
     }
   }
 
-  // 1e. plans: 先建计划,再按 caseLocalIds 解析真实 caseId。
-  //  - caseLocalIds 允许两种来源：①本批暂存的用例（localId 来自 1b）→ createdCaseIds 映射；
-  //    ②LLM 直接给的真实 caseId（来自 manage_cases search/get）→ 在 project 内 lookup。
-  //  这样「引用已有用例」与「暂存用例」混用都能正确落库；解析失败的 localId 抛错并点名。
+  // 1e. plans: create the plan first, then resolve real caseIds from caseLocalIds.
+  //  - caseLocalIds accepts two sources: ① cases staged in this batch (localId from 1b) → the createdCaseIds map;
+  //    ② real caseIds handed directly by the LLM (from manage_cases search/get) → looked up within the project.
+  //  This way mixes of "reference existing cases" and "staged cases" all persist correctly; a localId that fails to resolve throws with it named.
   const stagePlanRows = plans.length
     ? await db.select().from(aiStagePlans)
         .where(and(eq(aiStagePlans.threadId, threadId), inArray(aiStagePlans.localId, plans.map((p) => p.localId))))
@@ -246,24 +247,24 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     const plan = await plansSvc.createPlan(pid, {
       name: row.name,
       versionId,
-      // 环境配置已下沉组级(计划级字段退役);暂存单组级环境待后续任务接组端点
+      // Environment config has sunk to group level (the plan-level field is retired); wiring staged single-group environments to the group endpoint is a follow-up task
     }, creatorId);
     if (realCaseIds.length > 0) {
-      // 临时桥接(replacePlanCases 退役,Task 9 收口):新计划无组,先建默认分组再整包写入
+      // Temporary bridge (replacePlanCases retired, closed out by Task 9): a new plan has no groups, so create a default group first then write the full case set
       const g = await plansSvc.createPlanGroup(plan.id, { name: '默认分组' });
       await plansSvc.setPlanGroupCases(plan.id, g.id, realCaseIds);
     }
   }
 
-  // 1f. caseOps:按 stagedAt 升序应用(用户勾选顺序之外的"全局意图顺序")。
-  //  - 步骤级 op（update_step/insert_step/delete_step/move_step）天然在同一 case 内,顺序按 stagedAt 即可;
-  //    跨 case 不保证事务(失败回退不跨用例)—— 单 case 内 insert/delete/move_step 由 case-ops-tools.applyCaseOp 包 transaction。
-  //  - 用例级 op(update_case/delete_case/move_case):delete 会级联删 steps,后续对已删 case 的 step op 会失败(用户应在前置勾选里把 step op 一起勾)—— 不做复杂重排。
+  // 1f. caseOps: apply in stagedAt ascending order (the "global intent order" beyond the user's check order).
+  //  - Step-level ops (update_step/insert_step/delete_step/move_step) are naturally within one case; stagedAt ordering suffices.
+  //    Cross-case transactions aren't guaranteed (failure rollback doesn't span cases) — within a single case, insert/delete/move_step are wrapped in a transaction by case-ops-tools.applyCaseOp.
+  //  - Case-level ops (update_case/delete_case/move_case): delete cascades step deletion, so later step ops on a deleted case fail (the user should check the step ops together up front) — no complex reordering is attempted.
   for (const row of stageCaseOpRows) {
     await applyCaseOp(row.op, row.payload, opCtx);
   }
 
-  // 2. 全部成功后删 stage 行 + 广播 remove 事件（前端清空勾选状态）
+  // 2. After everything succeeds, delete the stage rows + broadcast remove events (the frontend clears its checked state)
   const localIdsByKind: Array<{ kind: StageKind; localIds: string[] }> = [
     { kind: 'case', localIds: cases.map((c) => c.localId) },
     { kind: 'scenario', localIds: scenarios.map((s) => s.localId) },
@@ -278,12 +279,12 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
     for (const lid of localIds) emitStageRemove(threadId, kind, lid);
   }
 
-  // R2 轨迹库：确认落库的用例投递轨迹蒸馏（fire-and-forget；verify 判据由 worker 在
-  // transcript 核实，未实测的确认用例不会产轨迹）。绝不影响落库主流程。
+  // R2 trajectory store: confirmed persisted cases get trajectory distillation enqueued (fire-and-forget; the verify verdict is checked by the worker
+  // against the transcript, so confirmed-but-never-executed cases produce no trajectory). Must never affect the persist main flow.
   if (createdCaseIds.size > 0) {
     try {
       const { enqueueTrajectoryDistill } = await import('../../scheduler/trajectoryQueue.js');
-      // 2s 上限：Redis 连接挂死时也不许拖住落库主流程（超时=放弃投递，丢弃语义）
+      // 2s cap: even a hung Redis connection must not stall the persist main flow (timeout = give up the enqueue, drop semantics)
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         enqueueTrajectoryDistill({
@@ -314,7 +315,7 @@ stageRoute.post('/threads/:id/stage/save', async (req, res) => {
   });
 });
 
-/** 静默清理孤儿占位 stage 行（兜底,正常路径用不到）。 */
+/** Silently cleans up orphan placeholder stage rows (fallback; the normal path never needs it). */
 export async function purgeStaleStages(threadId: string): Promise<number> {
   const removed = await Promise.all([
     db.delete(aiStageCases).where(eq(aiStageCases.threadId, threadId)).returning({ id: aiStageCases.localId }),
@@ -327,5 +328,5 @@ export async function purgeStaleStages(threadId: string): Promise<number> {
   return removed.reduce((acc, r) => acc + r.length, 0);
 }
 
-// 保留 sql 占位防止 import 被 unused-strip;drizzle import 实际有用（and/eq/inArray）
+// Keep the sql placeholder so the import isn't unused-stripped; the drizzle imports are actually used (and/eq/inArray)
 void sql;

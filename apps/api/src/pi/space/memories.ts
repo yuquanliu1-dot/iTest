@@ -1,7 +1,8 @@
 /**
- * 短期记忆体（产品线级）核心服务：加载/渲染/upsert/模糊查。
- * 设计：docs/superpowers/specs/2026-10-31-assistant-shortterm-memory-design.md
- * 注入走 buildSpaceSystemPrompt 记忆索引段（线程冷构建时快照；会话内新鲜数据走 read_memory 实时查库）。
+ * Short-term memory (product-line level) core service: load/render/upsert/fuzzy search.
+ * Design: docs/superpowers/specs/2026-10-31-assistant-shortterm-memory-design.md
+ * Injection goes through buildSpaceSystemPrompt's memory-index section (snapshotted at thread cold-build;
+ * fresh in-session data goes through read_memory's live DB query).
  */
 import { and, desc, eq, ilike, isNull, or } from 'drizzle-orm';
 import { db } from '../../db/client.js';
@@ -9,17 +10,17 @@ import { assistantMemories, projects } from '../../db/schema.js';
 
 export type AssistantMemoryRow = typeof assistantMemories.$inferSelect;
 
-/** 注入预算（硬编码常量；膨胀治理归 R3 退役机制，不做配置项）。 */
+/** Injection budget (hardcoded constants; bloat governance belongs to R3's retirement mechanism — not a config item). */
 export const MEMORY_MAX_ENTRIES = 50;
 export const MEMORY_SECTION_MAX_CHARS = 4_000;
 
-/** 项目 → 产品线解析（save_memory 与会话工厂注入共用）。项目必归线（结构不变式）。 */
+/** Project → product line resolution (shared by save_memory and the session factory injection). Projects always belong to a line (structural invariant). */
 export async function resolveProductLineId(projectId: string): Promise<string | null> {
   const rows = await db.select({ id: projects.productLineId }).from(projects).where(eq(projects.id, projectId)).limit(1);
   return rows[0]?.id ?? null;
 }
 
-/** 加载某产品线可见的 active 记忆（global + 本线），updatedAt 降序，条数上限截断。 */
+/** Loads active memories visible to a product line (global + this line), updatedAt descending, capped by the entry limit. */
 export async function loadActiveMemories(productLineId: string): Promise<AssistantMemoryRow[]> {
   return db.select().from(assistantMemories)
     .where(and(
@@ -33,7 +34,7 @@ export async function loadActiveMemories(productLineId: string): Promise<Assista
     .limit(MEMORY_MAX_ENTRIES);
 }
 
-/** 渲染记忆索引段：`- [title] hook` 每条一行 + 脚注；超字符预算截到最近完整行；空 → ''。 */
+/** Renders the memory-index section: `- [title] hook` one line per entry + footer; over the char budget it truncates to the last complete line; empty → ''. */
 export function buildMemoriesSection(rows: Array<Pick<AssistantMemoryRow, 'title' | 'hook'>>): string {
   if (rows.length === 0) return '';
   const header = '# 产品线记忆（历史会话沉淀的经验）';
@@ -48,8 +49,8 @@ export function buildMemoriesSection(rows: Array<Pick<AssistantMemoryRow, 'title
   return `${header}\n${kept.join('\n')}\n${footer}`;
 }
 
-/** upsert：同 (scope, productLineId, title) 的 active 行存在则更新，否则插入。
- *  返回 'created' | 'updated'——工具据此告知模型，形成防重复写的反馈回路。 */
+/** upsert: when an active row with the same (scope, productLineId, title) exists it is updated, otherwise inserted.
+ *  Returns 'created' | 'updated' — the tool reports it back to the model, forming an anti-duplicate-write feedback loop. */
 export async function upsertMemory(input: {
   scope: 'product_line' | 'global';
   productLineId: string | null;
@@ -88,7 +89,7 @@ export async function upsertMemory(input: {
   return 'created';
 }
 
-/** read_memory 的模糊查：active + 可见作用域（global/本线）ILIKE %title%，updatedAt 降序。 */
+/** read_memory's fuzzy search: active + visible scopes (global/this line), ILIKE %title%, updatedAt descending. */
 export async function findMemoriesByTitle(productLineId: string, title: string): Promise<AssistantMemoryRow[]> {
   return db.select().from(assistantMemories)
     .where(and(

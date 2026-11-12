@@ -19,8 +19,8 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
-  // 注入种子组织管理员身份（跳过真实登录；可见性判定依赖 managerOrgPaths 子树）。
-  // helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后再动态加载。
+  // Inject the seeded org manager identity (skipping real login; visibility judgment depends on the managerOrgPaths subtree).
+  // helpers/auth depends on the src service chain (which loads the db client along the way), so it must be dynamically imported only after DATABASE_URL points at the test container.
   const { managerUserOf } = await import('./helpers/auth.js');
   app.use('/api', (req, _res, next) => {
     req.user = managerUserOf(userId, username, orgId, orgPath);
@@ -86,12 +86,12 @@ describe('case copy', () => {
     const bind = await request(app).patch(`/api/cases/${src.id}`).send({ datasetId: ds.rows[0].id });
     expect(bind.status).toBe(200);
 
-    // 同项目目标分组：绑定随拷贝携带
+    // Same-project target group: the binding travels with the copy
     const sameProject = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: a.groupId });
     expect(sameProject.status).toBe(200);
     expect(sameProject.body.datasetId).toBe(ds.rows[0].id);
 
-    // 跨项目目标分组：数据集不外带，置空（回退单次执行）
+    // Cross-project target group: the dataset isn't carried out; set to null (fall back to one-shot execution)
     const crossProject = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: b.groupId });
     expect(crossProject.status).toBe(200);
     expect(crossProject.body.datasetId).toBeNull();
@@ -117,13 +117,13 @@ describe('case copy', () => {
     expect(sel.status).toBe(200);
     expect(sel.body.datasetRowIndexes).toEqual([1]);
 
-    // 同项目目标分组：绑定 + 行选择一并携带
+    // Same-project target group: binding + row selection carried together
     const sameProject = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: a.groupId });
     expect(sameProject.status).toBe(200);
     expect(sameProject.body.datasetId).toBe(ds.rows[0].id);
     expect(sameProject.body.datasetRowIndexes).toEqual([1]);
 
-    // 跨项目目标分组：数据集不外带，行选择也一并丢弃
+    // Cross-project target group: the dataset isn't carried out, and row selection is dropped along with it
     const crossProject = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: b.groupId });
     expect(crossProject.status).toBe(200);
     expect(crossProject.body.datasetId).toBeNull();
@@ -144,7 +144,7 @@ describe('case copy', () => {
     });
     expect(patch.status).toBe(200);
 
-    // 同项目复制：语义字段随拷贝携带
+    // Same-project copy: semantic fields travel with the copy
     const same = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: a.groupId });
     expect(same.status).toBe(200);
     expect(same.body.expectedOutcome).toBe('登录后看到欢迎语');
@@ -152,10 +152,10 @@ describe('case copy', () => {
     expect(same.body.windowWidth).toBe(1280);
     expect(same.body.windowHeight).toBe(720);
     expect(same.body.incognito).toBe(true);
-    // 需求编号是本条用例自身的描述性属性，随拷贝携带
+    // The requirement number is a descriptive attribute of the case itself and travels with the copy
     expect(same.body.requirementNo).toBe('REQ-2024-001');
 
-    // 跨项目复制：环境类绑定不外带（否则副本指向别的项目的环境，执行期报「环境与项目不匹配」）
+    // Cross-project copy: environment-class bindings aren't carried out (otherwise the copy would point at another project's environment and execution would report "environment/project mismatch")
     const cross = await request(app).post(`/api/cases/${src.id}/copy`).send({ targetGroupId: b.groupId });
     expect(cross.status).toBe(200);
     expect(cross.body.defaultEnvId).toBeNull();
@@ -213,7 +213,7 @@ describe('case copy', () => {
       caseIds: [c1.id, '00000000-0000-0000-0000-000000000000'],
     });
     expect(r.status).toBe(404);
-    // 校验失败时 c1 仍然存在（未误删）
+    // When validation fails, c1 still exists (not mistakenly deleted)
     const list = await request(app).get(`/api/cases?groupId=${groupId}`);
     expect(list.body).toHaveLength(1);
   });

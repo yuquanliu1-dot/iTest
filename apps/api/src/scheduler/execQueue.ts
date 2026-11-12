@@ -1,7 +1,7 @@
 /**
- * 执行队列：计划运行 / 单用例执行统一入队,跨 api 副本经 redis 被任一 exec worker 消费。
- * 与 plan-schedule 队列同款守卫:REDIS_URL 缺失 → isExecutionQueueReady()=false,
- * 调用方回落同步(fire-and-forget)执行,单容器/dev 行为不变。 */
+ * Execution queue: plan runs / single-case executions all enqueue here; across api replicas any exec worker consumes via redis.
+ * Same guard as the plan-schedule queue: REDIS_URL missing → isExecutionQueueReady()=false,
+ * callers fall back to synchronous (fire-and-forget) execution; single-container/dev behavior unchanged. */
 import { Queue, Worker } from 'bullmq';
 import { getRedis } from './queue.js';
 
@@ -10,7 +10,7 @@ export const EXEC_QUEUE_NAME = 'exec';
 export type ExecJob =
   | { kind: 'plan'; planRunId: string }
   | { kind: 'case'; caseId: string; preseed: Array<{ reportId: string; rowIndex: number | null }>;
-      /** 预检时冻结的数据集行下标集合（启用行下标）。worker 按它过滤，保证与 preseed 行集一致。 */
+      /** Dataset row index set frozen at preflight (enabled row indexes). The worker filters by it, keeping consistent with the preseed row set. */
       datasetRowIndexes?: number[]; createdByUserId?: string | null }
   | { kind: 'solidify'; batchId: string; caseId: string }
   | { kind: 'exploration'; sessionId: string };
@@ -28,8 +28,8 @@ export function getExecutionQueue(): Queue<ExecJob> {
   return _queue;
 }
 
-/** 构造执行 worker。concurrency = 每容器 chromium 并发闸门(docker 用 EXEC_CONCURRENCY 控制)。
- *  峰值并发 chromium ≈ 副本数 × concurrency。 */
+/** Build the execution worker. concurrency = per-container chromium concurrency gate (docker controls it via EXEC_CONCURRENCY).
+ *  Peak concurrent chromium ≈ replica count × concurrency. */
 export function buildExecutionWorker(
   processor: (job: ExecJob) => Promise<void>,
 ): Worker<ExecJob> {
@@ -41,7 +41,7 @@ export function buildExecutionWorker(
   });
 }
 
-/** 仅供测试/teardown：断开连接、清空单例。 */
+/** For tests/teardown only: disconnect and clear the singleton. */
 export async function __closeExecutionQueue(): Promise<void> {
   if (_queue) await _queue.close();
   _queue = null;

@@ -1,8 +1,8 @@
 /**
- * 短期记忆工具对：save_memory（模型自写，门禁内置 description）+ read_memory（取正文+埋点）。
- * chat / rca 线程均注册（rca 发现的坑同样值得记，溯源靠 source_thread_id）。
- * 门禁与 Claude Code auto-memory 同语义：只记产品线级长期经验；
- * 未验证归因须 provenance=ai_inferred 且 hook 以「未验证：」开头；先读后写，更新优先于新建。
+ * Short-term memory tool pair: save_memory (written by the model itself, with gating baked into the description) + read_memory (fetch body + hit instrumentation).
+ * Registered on chat / rca threads alike (gotchas found by rca are worth recording too; provenance relies on source_thread_id).
+ * Gating shares semantics with Claude Code auto-memory: only product-line-level long-term experience;
+ * unverified attributions require provenance=ai_inferred and a hook starting with 「未验证：」; read before write, updates take priority over creating new.
  */
 import { Type } from '@earendil-works/pi-ai';
 import { eq, sql } from 'drizzle-orm';
@@ -65,8 +65,8 @@ export function buildReadMemoryTool(ctx: SpaceToolsContext): ToolExecutor {
         const names = all.map((m) => m.title).join('、') || '（无）';
         return { ok: false, error: `没有匹配「${title}」的记忆。可用标题：${names}` };
       }
-      // 多命中取 updatedAt 最新一条（findMemoriesByTitle 已降序）；R5 埋点：命中计数。
-      // SQL 表达式自增而非读-改-写：三副本并发读同一行不丢更新。
+      // On multiple hits take the newest updatedAt (findMemoriesByTitle already sorts descending); R5 instrumentation: hit count.
+      // Increment via a SQL expression instead of read-modify-write: three replicas reading the same row concurrently won't lose updates.
       const hit = hits[0]!;
       await db.update(assistantMemories)
         .set({ hitCount: sql`${assistantMemories.hitCount} + 1`, lastHitAt: new Date() })

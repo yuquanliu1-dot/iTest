@@ -27,8 +27,8 @@ const PatchBody = z.object({
   description: z.string().optional(),
 });
 
-// 直挂载：GET /api/scenarios?projectId=...
-// 列出该项目下 requirement 衍生的场景全集，让场景过滤下拉不被选中项收缩。
+// Direct mount: GET /api/scenarios?projectId=...
+// Lists the full set of requirement-derived scenarios under the project, so the scenario filter dropdown isn't shrunk by the selected item.
 scenariosRoute.get('/', async (req, res) => {
   const projectId = req.query.projectId as string | undefined;
   const rid = (req.params as { requirementId?: string }).requirementId;
@@ -71,7 +71,7 @@ scenariosRoute.patch('/:id', async (req, res) => {
   const body = PatchBody.parse(req.body);
   const updated = await updateScenario(req.params.id!, body);
   await cache.del(scenariosForProjectKey(pid));
-  // 通过 scenario → requirement 反查
+  // Reverse lookup via scenario → requirement
   await cache.del(scenariosForRequirementKey(updated.requirementId));
   res.json(updated);
 });
@@ -80,7 +80,7 @@ scenariosRoute.delete('/:id', async (req, res) => {
   const pid = await scenarioProjectId(req.params.id!);
   if (!pid) throw new HttpError(404, 'not_found', 'scenario not found');
   await assertProjectVisible(pid, req.user!);
-  // FK ON DELETE SET NULL: cases 自动解除绑定；不要 409
+  // FK ON DELETE SET NULL: cases unbind automatically; no 409
   await deleteScenario(req.params.id!);
   await cache.del(scenariosForProjectKey(pid));
   res.json({ ok: true });

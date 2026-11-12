@@ -14,7 +14,7 @@ beforeAll(async () => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-repo-read-'));
   root = path.join(parent, 'repo');
   await fs.mkdir(root);
-  // 沙箱外的真实文件：读它必须被拒（存在性不能替代越界判定）
+  // A real file outside the sandbox: reading it must be rejected (existence does not substitute for the out-of-bounds check)
   outsideFile = path.join(parent, 'outside.txt');
   await fs.writeFile(outsideFile, 'secret');
   const git = (cmd: string) => execSync(cmd, { cwd: root, stdio: 'pipe' });

@@ -125,7 +125,7 @@ describe('runObserveLog', () => {
     const { Client } = await import('ssh2');
     const Orig = (Client as unknown as { new (): EventEmitter });
     const originalExec = Orig.prototype.exec;
-    // 立即 close（无输出），避免等到命令超时
+    // close immediately (no output), so we do not wait until the command timeout
     (Orig.prototype as unknown as { exec: (cmd: string, cb: (err: null, ch: unknown) => void) => void }).exec = function (
       cmd: string,
       cb: (err: null, ch: unknown) => void,
@@ -206,10 +206,11 @@ describe('runObserveLog', () => {
     }
   });
 
-  // 回归：真实 ssh2 的 channel 是可读流，`close` 只在 stdout 被消费后才发。
-  // 旧实现没挂 stdout 的 data 监听（探测本就不关心内容），流被反压住 → close 永不触发
-  // → 每次探测都等满 15s 超时。prod228 实测：2026-10-22 ssh2 exec + tail 正常，
-  // 但 POST /environments/test-syslog 恒返回 "syslog command timeout"。
+  // Regression: a real ssh2 channel is a readable stream; `close` is only emitted after stdout is consumed.
+  // The old implementation attached no data listener on stdout (the probe does not care about content), so the
+  // stream stayed backpressured → close never fired → every probe waited out the full 15s timeout. Verified on
+  // prod228: ssh2 exec + tail worked on 2026-10-22, yet POST /environments/test-syslog kept returning
+  // "syslog command timeout".
   it('probeSyslog：channel 只在 stdout 被消费后才 close 时也能正常返回（挂 data 监听解除反压）', async () => {
     const { Client } = await import('ssh2');
     const Orig = (Client as unknown as { new (): EventEmitter });
@@ -221,9 +222,9 @@ describe('runObserveLog', () => {
       const stream = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
       (stream as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
       cb(null, stream);
-      // 复刻真流：只有挂了 data 监听（流进入 flowing 模式）才吐 data 并随后 close
+      // Mimic the real stream: only emits data and then closes once a data listener is attached (stream in flowing mode)
       queueMicrotask(() => {
-        if (stream.listenerCount('data') === 0) return; // 反压：没人读 → 永不 close
+        if (stream.listenerCount('data') === 0) return; // Backpressure: nobody reading → close never fires
         stream.emit('data', Buffer.from("2026-10-22T01:46:34+00:00 itest-syslog-verify probe line 2\n"));
         stream.emit('close', 0);
       });

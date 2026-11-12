@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * recorder 会话追加式存储单测（仿 live-view-bus.test.ts 的 REDIS_URL 开关 + vi.doMock('ioredis') 法）：
- * - 有状态 FakeRedis（数据面跨连接共享 = 模拟共享 Redis）+ 两个 ws 模块实例（vi.resetModules）
- *   = 两副本交错 appendStep → finishSession 见并集（旧整记录缓存实现会在此场景静默丢步骤）；
- * - finishSession 幂等：取齐即删三键，二次 finish → undefined；
- * - 无 REDIS_URL → 进程内 Map 兜底，行为同构。
- * 被测模块只走动态导入（顶部不静态 import，见 live-view-bus.test.ts 的原因说明）。 */
+ * Unit tests for the recorder session append-only store (mirrors live-view-bus.test.ts's REDIS_URL switch + vi.doMock('ioredis') technique):
+ * - a stateful FakeRedis (data plane shared across connections = a simulated shared Redis) + two ws module instances (vi.resetModules)
+ *   = two replicas interleave appendStep → finishSession sees the union (the old whole-record cache implementation silently dropped steps in this scenario);
+ * - finishSession idempotency: fetches everything then deletes the three keys, a second finish → undefined;
+ * - no REDIS_URL → in-process Map fallback, behaviorally isomorphic.
+ * The tested module is only ever dynamically imported (no static import at the top; see live-view-bus.test.ts for the reason). */
 
-/** 数据面：所有 FakeRedis 实例共享（= 共享 Redis）。 */
+/** Data plane: shared by all FakeRedis instances (= the shared Redis). */
 const store = {
   strings: new Map<string, string>(),
   lists: new Map<string, string[]>(),
@@ -26,7 +26,7 @@ class FakeRedis {
     FakeRedis.all.push(this);
   }
   on(_event: string, _cb: () => void): void {
-    // ioredis 接口面：ws.ts 建连后挂 error 监听
+    // ioredis interface surface: ws.ts attaches an error listener after connecting
   }
   async set(key: string, val: string, _mode: 'EX', ttl: number): Promise<'OK'> {
     store.strings.set(key, val);
@@ -52,7 +52,7 @@ class FakeRedis {
     return list.slice(from, to);
   }
   pipeline() {
-    // 每次 pipeline() 独立批次（ioredis 语义）：exec 不重放上一批的 ops
+    // Each pipeline() is an independent batch (ioredis semantics): exec does not replay the previous batch's ops
     const ops: Array<{ cmd: string; args: unknown[] }> = [];
     const api = {
       rpush: (key: string, ...vals: string[]) => {
@@ -91,14 +91,14 @@ class FakeRedis {
 
 type WsModule = typeof import('../src/recorder/ws.js');
 
-/** 动态载入挂共享 FakeRedis 的全新 ws 模块（= 一「副本」）。 */
+/** Dynamically load a fresh ws module wired to the shared FakeRedis (= one "replica"). */
 async function freshReplica(): Promise<WsModule> {
   vi.resetModules();
   vi.doMock('ioredis', () => ({ default: FakeRedis }));
   return import('../src/recorder/ws.js');
 }
 
-/** 载入不挂 Redis 的全新 ws 模块（= 无 REDIS_URL 部署形态；ioredis 构造器此时不应被触达）。 */
+/** Load a fresh ws module with no Redis attached (= the no-REDIS_URL deployment shape; the ioredis constructor must not be touched then). */
 async function freshLocalReplica(): Promise<WsModule> {
   vi.resetModules();
   return import('../src/recorder/ws.js');
@@ -121,7 +121,7 @@ describe('跨副本追加式（有状态 fake redis）', () => {
     const replicaA = await freshReplica();
     const session = replicaA.createSession('00000000-0000-0000-0000-000000000abc', { mode: 'fresh', targetUrl: 'https://x.example.com' });
 
-    const replicaB = await freshReplica(); // 另一「副本」（独立模块状态，共享 fake redis 数据面）
+    const replicaB = await freshReplica(); // another "replica" (independent module state, shared fake redis data plane)
     const hydrated = await replicaB.getSession(session.sessionId);
     expect(hydrated?.caseId).toBe('00000000-0000-0000-0000-000000000abc');
     expect(hydrated?.mode).toBe('fresh');
@@ -142,7 +142,7 @@ describe('跨副本追加式（有状态 fake redis）', () => {
     const session = replica.createSession('00000000-0000-0000-0000-000000000ttl');
     await replica.appendStep(session.sessionId, { action: { kind: 'click' } });
     const stepsKey = `itest:rec-steps:${session.sessionId}`;
-    // pexpire 存毫秒：appendStep 续期三键 → SESSION_TTL_S * 1000
+    // pexpire stores milliseconds: appendStep renews the three keys → SESSION_TTL_S * 1000
     expect(store.ttls.get(stepsKey)).toBe(3600_000);
     expect(store.ttls.get(`itest:rec:${session.sessionId}`)).toBe(3600_000);
     expect(store.ttls.get(`itest:rec-tabs:${session.sessionId}`)).toBe(3600_000);

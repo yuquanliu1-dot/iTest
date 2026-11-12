@@ -23,11 +23,11 @@ import { isManagerOfOrg } from '../middleware/auth.js';
 export const authRoute = Router();
 
 const COOKIE_NAME = 'authToken';
-const COOKIE_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 与 JWT 8h 对齐
+const COOKIE_MAX_AGE_MS = 8 * 60 * 60 * 1000; // Aligned with the JWT's 8h
 
 import type { Request, Response } from 'express';
 
-/** secure 跟随反向代理报告的协议；直连时按 NODE_ENV 决定。 */
+/** secure follows the protocol reported by the reverse proxy; on direct connections it's decided by NODE_ENV. */
 function cookieSecureFlag(req: Request): boolean {
   const xfpRaw = req.headers['x-forwarded-proto'];
   const xfp = (typeof xfpRaw === 'string' ? xfpRaw : Array.isArray(xfpRaw) ? xfpRaw[0] : undefined)
@@ -73,12 +73,12 @@ const ChangePasswordBody = z.object({
   newPassword: z.string().min(1).max(128),
 });
 
-// 首登强制改密：改密成功后自动登录（发新会话 cookie）
+// First-login forced password change: after a successful change, log in automatically (issuing a new session cookie)
 authRoute.post('/change-password', async (req, res) => {
   const body = ChangePasswordBody.parse(req.body);
   const payload = verifyPasswordChangeToken(body.passwordChangeToken);
   if (!payload) throw new HttpError(401, 'invalid_token', '改密链接已失效，请重新登录');
-  // 一次性消费：用户一旦完成过改密（已不在强制改密态），同一条改密 token 立即作废
+  // One-shot consumption: once the user has completed the change (no longer in the forced-change state), the same change token is immediately invalidated
   const pending = await db
     .select({ mustChangePassword: users.mustChangePassword, passwordUpdatedAt: users.passwordUpdatedAt })
     .from(users)
@@ -112,7 +112,7 @@ const SwitchOrgBody = z.object({
   organizationId: z.string().uuid(),
 });
 
-// 切换组织 = 重铸 cookie（新 JWT 携带新组织上下文）
+// Switch organization = re-mint the cookie (the new JWT carries the new org context)
 authRoute.post('/switch-org', requireAuth, async (req, res) => {
   const body = SwitchOrgBody.parse(req.body);
   const result = await switchOrganization(req.user!.userId, body.organizationId);
@@ -132,7 +132,7 @@ const UpdateMyPasswordBody = z.object({
   newPassword: z.string().min(1).max(128),
 });
 
-// 自助改密：改完 tokenVersion+1 旧会话吊销，客户端需重新登录
+// Self-service password change: on completion tokenVersion+1 revokes old sessions; the client must log in again
 authRoute.patch('/me/password', requireAuth, async (req, res) => {
   const body = UpdateMyPasswordBody.parse(req.body);
   const userRows = await db.select({ passwordHash: users.passwordHash }).from(users).where(eq(users.id, req.user!.userId)).limit(1);
@@ -159,8 +159,8 @@ const RegisterAdminBody = z.object({
   organizationId: z.string().uuid(),
 });
 
-/** POST /register-admin — Manager 在指定组织创建账号。后端生成临时密码 + 强制首登改密 + 加为该组织普通成员。
- *  与 /auth/login 同款 /api/auth 子路径；auth.ts 在 requireAuth 毯子守卫之前挂载于 /api/auth。 */
+/** POST /register-admin — a Manager creates an account in the given organization. The backend generates a temporary password + forces first-login change + adds the user as a plain member of that org.
+ *  Same /api/auth sub-path shape as /auth/login; auth.ts is mounted at /api/auth before the requireAuth blanket guard. */
 authRoute.post('/register-admin', requireAuth, async (req, res) => {
   const body = RegisterAdminBody.parse(req.body);
   const targetOrgPath = await getOrgPath(body.organizationId);
@@ -176,16 +176,16 @@ authRoute.post('/register-admin', requireAuth, async (req, res) => {
       password: generateRandomPassword(),
       languagePreference: 'zh-CN',
     });
-    // 加为该组织普通成员（不传 isManager=true）
+    // Add as a plain member of that org (isManager=true not passed)
     await db.insert(organizationMembers).values({
       organizationId: body.organizationId,
       userId: result.id,
       isManager: false,
       isUser: true,
     });
-    // 重新拉一次刚建好的 user（要拿到一次性密码返回）
-    // userService.createUser 已经返回 SafeUser 形状；直接取临时密码需要另存。
-    // 这里直接重置密码以拿到明文：generate → create 是浪费一次 hash，直接拼装：
+    // Re-fetch the just-created user (needed to return the one-time password)
+    // userService.createUser already returns the SafeUser shape; getting the temporary password directly would require storing it separately.
+    // Resetting the password here to get the plaintext: generate → create wastes one hash, so assemble directly:
     res.status(201).json({
       status: 'ok',
       user: result,

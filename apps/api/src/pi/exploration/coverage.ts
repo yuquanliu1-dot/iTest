@@ -1,13 +1,14 @@
 /**
- * 覆盖账本（pi 链路 C1）：已走路径 + 交互计数 + 子目标的机械累计。
+ * Coverage ledger (pi chain C1): mechanical accumulation of visited paths + interaction counts + sub-goals.
  *
- * 覆盖度靠模型自觉是 legacy 的结构性短板——账本把它变成平台侧机械事实：
- * - 每次工具调用后记录当前 URL 的 path（去重、封顶）、按 kind 累计交互次数；
- * - 摘要随 observe 回灌「已覆盖、别重复」（对抗原地打转）；
- * - 终态快照落库（coverage_ledger 列），人工可据此评估这场探索盖住了多少页面。
+ * Coverage relying on model self-discipline was legacy's structural shortcoming — the ledger turns it into
+ * platform-side mechanical facts:
+ * - After each tool call, record the current URL's path (deduplicated, capped) and accumulate interaction counts per kind;
+ * - The digest is fed back with observe as "already covered, do not repeat" (counters spinning in place);
+ * - The final-state snapshot is persisted (coverage_ledger column), letting humans assess how much of the site this exploration covered.
  *
- * goals（子目标）来自 C2 章程分解：开跑前 LLM 拆出 2~12 条，写进账本并进系统提示词；
- * 完成情况由模型在 finish 时回告（id + done）——平台不猜「做没做到」。
+ * goals (sub-goals) come from C2 charter decomposition: the LLM extracts 2~12 items before the run, written into the
+ * ledger and the system prompt; completion is reported back by the model at finish (id + done) — the platform does not guess "done or not".
  */
 import type { Page } from 'playwright-core';
 
@@ -18,30 +19,30 @@ export interface CoverageLedgerSnapshot {
   updatedAt: string;
 }
 
-/** 路径封顶：长会话无界增长没意义，留档与回灌都只关心「去过哪些」。 */
+/** Path cap: unbounded growth over long sessions is pointless; both archival and feedback only care about "which pages were visited". */
 export const COVERAGE_PATHS_MAX = 100;
 
-/** 回灌摘要里列出的最近路径条数（全量在库里）。 */
+/** Number of recent paths listed in the feedback digest (the full set lives in the DB). */
 const RENDER_PATHS_MAX = 8;
 
 export interface CoverageTracker {
-  /** 记录当前页面 path（去重）。 */
+  /** Records the current page path (deduplicated). */
   recordUrl(page: Page): void;
-  /** 交互计数（kind = 留痕的动作类型：click/fill/navigate/...）。 */
+  /** Interaction count (kind = the action-trail action type: click/fill/navigate/...). */
   recordInteraction(kind: string): void;
-  /** 写入章程分解出的子目标（开跑前一次；重复调用覆盖旧值）。 */
+  /** Writes the sub-goals decomposed from the charter (once before the run; repeated calls overwrite old values). */
   setGoals(goals: Array<{ id: string; text: string }>): void;
-  /** 模型在 finish 时回告子目标完成情况（按 id 合并；未知 id 忽略）。 */
+  /** The model reports sub-goal completion at finish (merged by id; unknown ids ignored). */
   markGoals(updates: Array<{ id: string; done: boolean }>): void;
-  /** observe 回灌摘要（空账本返回空串）。 */
+  /** Feedback digest for observe (returns an empty string for an empty ledger). */
   render(): string;
   snapshot(): CoverageLedgerSnapshot;
 }
 
 /**
- * 终态覆盖摘要：这探索到底盖住了多少、还差什么。
- * 账本是平台侧机械事实（去了哪些页面、动过多少次、子目标完成几个）——
- * 探索深度不能只由「跑了几轮」衡量，得让盖住/没盖住的东西可见。
+ * Final-state coverage digest: how much this exploration actually covered and what is missing.
+ * The ledger is platform-side mechanical fact (which pages were visited, how many actions taken, how many sub-goals done) —
+ * exploration depth cannot be measured by "how many rounds ran"; the covered/uncut things must be made visible.
  */
 export function coverageDigest(snapshot: CoverageLedgerSnapshot, maxUnfinished = 3): string {
   const interactions = snapshot.interactions.reduce((a, b) => a + b.count, 0);
@@ -70,7 +71,7 @@ export function createCoverageTracker(): CoverageTracker {
         const p = `${u.pathname}${u.search}`.slice(0, 200);
         if (p && p !== '/' && !paths.includes(p) && paths.length < COVERAGE_PATHS_MAX) paths.push(p);
       } catch {
-        // url 不可解析（about:blank 等）不记账
+        // Unparseable url (about:blank etc.) is not recorded
       }
     },
     recordInteraction(kind: string): void {
@@ -98,8 +99,8 @@ export function createCoverageTracker(): CoverageTracker {
       const parts = [`覆盖进度：去过 ${paths.length} 个页面：${recent}${more}｜交互 ${total} 次（${kinds}）。已看过的页面别原路重复探索，优先推进没去过的入口。`];
       if (goals.length > 0) {
         const done = goals.filter((g) => g.done).length;
-        // 回灌里的子目标文本截断：全文在系统提示词与账本里，这里只给「哪条没做」的轮廓
-        // （每次 observe 都回灌，条数多了不截会白烧 token）。
+        // Sub-goal text in the feedback is truncated: the full text lives in the system prompt and the ledger; this
+        // only outlines "which ones are not done" (it feeds back on every observe; untruncated lists would burn tokens for nothing).
         const list = goals.map((g) => `${g.id}[${g.done ? 'x' : ' '}]${g.text.slice(0, 40)}`).join('｜');
         parts.push(`子目标 ${done}/${goals.length} 已完成：${list}。未完成的子目标继续推进。`);
       }

@@ -21,9 +21,9 @@ beforeAll(async () => {
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
-  // recorder 路由链（含 db/client、assertCaseVisible）须等 DATABASE_URL 指向测试容器后再动态加载。
-  // 对比 recorder-route.test.ts：不 truncate orgs/users——中间件闭包绑定了 beforeAll 的种子 org 身份，
-  // seedProject 复用同一 org（WeakMap 缓存），项目可见性判定才能通过。
+  // The recorder route chain (incl. db/client, assertCaseVisible) must be dynamically imported after DATABASE_URL points at the test container.
+  // Unlike recorder-route.test.ts: orgs/users are NOT truncated — the middleware closure binds the beforeAll seeded org identity,
+  // and seedProject reuses the same org (WeakMap cache) so project visibility checks can pass.
   const { default: express } = await import('express');
   const { recorderRoute } = await import('../src/routes/recorder.js');
   const { casesRoute } = await import('../src/routes/cases.js');
@@ -55,7 +55,7 @@ beforeEach(async () => {
   versionId = s.versionId;
 });
 
-/** 在 projectId 项目下插一个默认 web 服务（name 缺省即未命名默认）。 */
+/** Insert a default web service under the projectId project (null name = the unnamed default). */
 const insertWebEnv = async (name: string | null, origin: { scheme: string; host: string; port?: number }) => {
   const e = await pool.query(
     `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认环境', true) RETURNING id`,
@@ -70,7 +70,7 @@ const insertWebEnv = async (name: string | null, origin: { scheme: string; host:
   return envId;
 };
 
-/** 建用例 + 开录制 session，返回 { caseId, session }。 */
+/** Create a case + open a recording session, returning { caseId, session }. */
 const openCaseSession = async (opts: { targetUrl?: string; title?: string } = {}) => {
   const c = await request(app).post('/api/cases').send({ title: opts.title ?? 'REL', groupId, versionId });
   expect(c.status).toBe(200);
@@ -90,7 +90,7 @@ describe('relativizeUrl 纯函数（来自 resolve-url）', () => {
   it('命中 origin 剥离 path，保留 query/hash 并返回 ref', () => {
     const m = new Map([['http://a.com:8080', 'frontend']]);
     expect(relativizeUrl('http://a.com:8080/admin/x?y=1#z', m)).toEqual({ path: '/admin/x?y=1#z', ref: 'frontend' });
-    // 纯 origin：WHATWG URL.pathname 归一为 '/'（T5 实现），非 spec 曾假设的 ''
+    // Pure origin: WHATWG URL normalizes pathname to '/' (T5 implementation), not the '' the spec once assumed
     expect(relativizeUrl('http://a.com:8080', m)).toEqual({ path: '/', ref: 'frontend' });
   });
 
@@ -159,7 +159,7 @@ describe('recorder finish 落库尽力相对化', () => {
   it('中途 navigate 命中 → 剥成相对路径落库；外站 navigate 保留绝对', async () => {
     await insertWebEnv('frontend', { scheme: 'http', host: 'a.com', port: 8080 });
     const { caseId, session } = await openCaseSession();
-    // 首步 navigate：action.url 是中途剥离对象；顶层 url 是初始导航来源（与扩展上报形状一致）
+    // First step navigate: action.url is the mid-run strip target; the top-level url is the initial-navigation source (same shape as extension reports)
     await appendStep(session.sessionId, { action: { kind: 'navigate', url: 'http://a.com:8080/setup?p=1' }, url: 'http://a.com:8080/setup?p=1' });
     await appendStep(session.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#a' }] }, url: 'http://a.com:8080/setup?p=1' });
     await appendStep(session.sessionId, { action: { kind: 'navigate', url: 'https://other.test/faq' } });
@@ -167,7 +167,7 @@ describe('recorder finish 落库尽力相对化', () => {
     const steps = await getSteps(caseId);
     expect(steps[0]!.compiled[0]).toEqual({ kind: 'navigate', url: '/setup?p=1' });
     expect(steps[2]!.compiled[0]).toEqual({ kind: 'navigate', url: 'https://other.test/faq' });
-    // 初始导航取首步 url（命中）→ 用例级相对 + 绑定
+    // Initial navigation takes the first step's url (hit) → case-level relative + binding
     expect(await getCase(caseId)).toEqual({ url: '/setup?p=1', web_service_ref: 'frontend' });
   });
 

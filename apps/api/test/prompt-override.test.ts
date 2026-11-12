@@ -1,7 +1,7 @@
 /**
- * R3 渲染红线：DB 零版本数据时 system prompt 与迁移前逐字节一致。
- * 三个常量是 session.ts 改造前(:650-652) 原文的硬拷贝——独立锚点，禁止 import 被测常量。
- * Task 3 会在此文件追加覆盖生效/DB 集成用例。
+ * R3 rendering redline: with zero version data in the DB, the system prompt must be byte-for-byte identical to pre-migration.
+ * The three constants are hard copies of the original text before the session.ts refactor (:650-652) — independent anchors; importing the tested constants is forbidden.
+ * Task 3 will append override-effectiveness / DB integration cases to this file.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
@@ -59,7 +59,7 @@ describe('R3 渲染红线：零覆盖 = 现状逐字节', () => {
     const p = buildSpaceSystemPrompt('s', 'zh-CN', [], '', '', { style: '## 新风格\n- 简洁' });
     expect(p).toContain('## 新风格\n- 简洁');
     expect(p).not.toContain(ZH_STYLE);
-    expect(p).toContain(WORKSPACE); // workspace 未覆盖仍为默认
+    expect(p).toContain(WORKSPACE); // workspace not overridden, still the default
   });
 
   it('workspace 覆盖生效', async () => {
@@ -75,7 +75,7 @@ describe('R3 渲染红线：零覆盖 = 现状逐字节', () => {
     const { loadPromptModuleOverridesSafe, textOverrideOf } = await import('../src/pi/space/promptModules.js');
     const ov = await loadPromptModuleOverridesSafe();
     expect(textOverrideOf(ov, 'space.style.zh')).toBe('## DB风格');
-    // 组装即注入：覆盖值进 buildSpaceSystemPrompt 后原文风格段被替换
+    // Assembly is injection: once the override value goes into buildSpaceSystemPrompt, the original style section is replaced
     const { buildSpaceSystemPrompt } = await import('../src/pi/space/session.js');
     const p = buildSpaceSystemPrompt('s', 'zh-CN', [], '', '', { style: textOverrideOf(ov, 'space.style.zh') });
     expect(p).toContain('## DB风格');

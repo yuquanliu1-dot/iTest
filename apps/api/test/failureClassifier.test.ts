@@ -42,7 +42,7 @@ describe('failureClassifier', () => {
     expect(classify(e).reason).toBe('LLMProviderError');
   });
   it('LLMProviderError + durationMs>15s → 仍是 LLMProviderError，不被 SlowLoad 兜底吞掉', () => {
-    // 回归动机:2026-10-13 prod228 网关缺 content 抛裸 TypeError,被 durationMs 兜底误报「页面加载过慢」。
+    // Regression motivation: on 2026-10-13 prod228 the gateway missing content threw a bare TypeError, which the durationMs fallback misreported as "page loading too slow".
     const e = new Error('LLM 网关返回空响应(无 content,可能被安全策略静默拦截)');
     e.name = 'LLMProviderError';
     expect(classify(e, { durationMs: 27992 }).reason).toBe('LLMProviderError');

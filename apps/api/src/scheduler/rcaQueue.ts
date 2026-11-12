@@ -1,7 +1,8 @@
 /**
- * RCA 队列：计划运行结束后的失败用例根因分析任务。全局并发 1——同一时间只有一个
- * 分析线程在跑，不与执行引擎抢 chromium 资源。REDIS_URL 缺失 → inline fire-and-forget
- * (dev/单容器)，与 exec 队列的降级模式一致。幂等判重由 worker 侧线程查重兜底。
+ * RCA queue: root-cause analysis tasks for failed cases after a plan run ends. Global concurrency 1 —
+ * only one analysis thread runs at a time, never contending with the execution engine for chromium.
+ * REDIS_URL missing → inline fire-and-forget (dev/single container), same degraded mode as the exec
+ * queue. Idempotency is guarded by the worker-side thread dedup check.
  */
 import { Queue, Worker } from 'bullmq';
 import { eq } from 'drizzle-orm';
@@ -27,7 +28,7 @@ export function getRcaQueue(): Queue<RcaJob> {
   return _queue;
 }
 
-/** 构造 RCA worker（由 scheduler 启动时调用）。concurrency=1：全局串行分析。 */
+/** Build the RCA worker (called at scheduler startup). concurrency=1: globally serial analysis. */
 export function buildRcaWorker(processor: (job: RcaJob) => Promise<void>): Worker<RcaJob> {
   return new Worker<RcaJob>(RCA_QUEUE_NAME, async (job) => processor(job.data), {
     connection: getRedis(),
@@ -35,8 +36,8 @@ export function buildRcaWorker(processor: (job: RcaJob) => Promise<void>): Worke
   });
 }
 
-/** 运行收尾调用：开关打开且有业务失败才投递。动态 import rcaWorker 防静态环
- *  (runPlan→rcaQueue→rcaWorker→session→…)；测试也靠它 mock rcaWorker。 */
+/** Called at run finish: enqueue only when the switch is on and there are business failures. Dynamic import of rcaWorker avoids the static cycle
+ *  (runPlan→rcaQueue→rcaWorker→session→…); tests also rely on it to mock rcaWorker. */
 export async function enqueueRcaForPlanRun(planRunId: string): Promise<void> {
   const run = (await db
     .select({ rcaEnabled: planRuns.rcaEnabled, failedCases: planRuns.failedCases })
@@ -57,7 +58,7 @@ export async function enqueueRcaForPlanRun(planRunId: string): Promise<void> {
   void processRcaJob(job).catch((err) => logger.error({ err, planRunId }, 'inline rca job crashed'));
 }
 
-/** 仅供测试/teardown。 */
+/** For tests/teardown only. */
 export async function __closeRcaQueue(): Promise<void> {
   if (_queue) await _queue.close();
   _queue = null;

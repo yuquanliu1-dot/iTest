@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { executeCaseInBrowser } from '../src/execute/cdp.js';
 
-/** 覆盖 runStepsInContext 对 page 的已知调用面；未覆盖的方法按报错补 no-op（预期内的红绿迭代）。 */
+/** Covers runStepsInContext's known call surface on page; uncovered methods throw and get no-op'd as errors surface (expected red-green iteration). */
 function fakePage() {
   return {
     url: () => 'about:blank',
@@ -24,11 +24,11 @@ function fakeContext(page: Page) {
 describe('executeCaseInBrowser onFailurePage 钩子', () => {
   it('步骤失败时触发：携带失败步骤下标与当前页，结果仍为 failed', async () => {
     const page = fakePage();
-    // 钩子契约返回 Promise<void>；vi.fn() 默认返回 undefined 会让 .catch 在真实现上炸掉。
+    // The hook contract returns Promise<void>; vi.fn()'s default undefined return would blow up .catch on a real implementation.
     const hook = vi.fn(async () => {});
     const results = await executeCaseInBrowser(
       'case-x',
-      [{ order: 1, compiled: null }], // compile-missing → 确定性失败，不触 dispatch
+      [{ order: 1, compiled: null }], // compile-missing -> deterministic failure, dispatch never reached
       { reportId: 'ut-onfailure' },
       {} as Browser,
       fakeContext(page),
@@ -49,9 +49,9 @@ describe('executeCaseInBrowser onFailurePage 钩子', () => {
   it('全部通过时不触发钩子；不传钩子行为不变', async () => {
     const page = fakePage();
     const hook = vi.fn();
-    // navigate 是 fake page 可满足的动作：goto + waitForLoadState 均为 no-op。
-    // 不传 targetUrl → init-goto 跳过；preflight 收到 url:null 不发真实网络请求
-    //（preflight.ts:12 对空 url 跳过 goto，其余探测均有内部 catch）。
+    // navigate is an action the fake page can satisfy: goto + waitForLoadState are both no-ops.
+    // No targetUrl passed -> init-goto is skipped; preflight receives url:null and sends no real network request
+    // (preflight.ts:12 skips goto for an empty url; the other probes all have internal catches).
     const results = await executeCaseInBrowser(
       'case-y',
       [{ order: 1, compiled: [{ kind: 'navigate', url: 'https://example.com/' }] }],

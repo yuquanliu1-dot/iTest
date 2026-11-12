@@ -5,32 +5,32 @@ import { isStableCssPath } from '@itest/recorder/modules/selector-filter.js';
 export interface ResolverInput {
   locator: Locator[];
   intentLocator?: IntentLocator;
-  /** 修复记忆候选（step_locator_cache）：追加到候选链末位兜底——作者候选链永远优先，
-   *  缓存只在全链失败时参与探测；与作者候选重复（同 src）时跳过。 */
+  /** Repair-memory candidate (step_locator_cache): appended to the tail of the candidate chain as fallback — the author's candidate chain always takes priority,
+   *  the cache only joins probing when the whole chain fails; skipped when it duplicates an author candidate (same src). */
   repair?: Locator | null;
 }
 
-/** 单段 CSS 是否为「纯 #id 形式且 id 非动态」——满足则提升优先级。 */
+/** Whether a single CSS segment is "pure #id form with a non-dynamic id" — if so, its priority is raised. */
 function isPureStableCss(value: string): boolean {
-  // value 形如 'tag#id' 或 '#id'
+  // value looks like 'tag#id' or '#id'
   if (!value.includes('#')) return false;
-  // 整段必须只含一个 #id，且 id 部分不命中运行时模式
+  // The whole segment must contain exactly one #id, and the id part must not hit runtime patterns
   return isStableCssPath(value);
 }
 
 /**
- * 三层定位候选构造（顺序固定）：
- *   1. intentLocator.semanticRole（作为 data-testid 候选）
- *   2. intentLocator.contextText（文本兜底）
- *   3. 稳定 #id CSS（纯 #id 形式）
+ * Three-tier locator candidate construction (fixed order):
+ *   1. intentLocator.semanticRole (as a data-testid candidate)
+ *   2. intentLocator.contextText (text fallback)
+ *   3. stable #id CSS (pure #id form)
  *   4. XPath
- *   5. 普通 CSS / role / text / testId（按出现顺序）
+ *   5. ordinary CSS / role / text / testId (in input order)
  *
- * 返回值是 playwright Locator 数组 + 标记信息；src 为该候选的来源定位表达式
- * （同 strategy 多候选时 kind 反查不出具体哪条，src 供调用方展示/报错）。失败回退由调用方 tryEach 决定。
- * 候选探测通过 count()，避免后续动作（如 click）抛错；text/role 路径可能没有 count()，接受即成功。
- * 命中时把候选 kind/value 写入 hitSink（若提供），供 step 结果记录 hitLocator。
- * root 为 Page 或 Frame：Frame 与 Page 的 locator/getBy* 同签名（帧链步骤在帧上下文构造候选）。
+ * The return value is a playwright Locator array + marking info; src is the source locator expression of that candidate
+ * (with multiple candidates of the same strategy, kind can't tell which one — src exists for the caller to display/report). Failure fallback is decided by the caller's tryEach.
+ * Candidate probing goes through count(), so subsequent actions (e.g. click) don't throw; text/role paths may lack count() — acceptance means success.
+ * On a hit, writes the candidate's kind/value into hitSink (if provided), for the step result to record hitLocator.
+ * root is a Page or Frame: Frame and Page share the same locator/getBy* signatures (frame-chain steps build candidates in the frame context).
  */
 export function buildCandidates(
   root: Page | Frame,
@@ -55,8 +55,8 @@ export function buildCandidates(
     }
   }
 
-  // 3+4+5: 稳定 #id CSS 在前，XPath 与普通 CSS / role / text / testId 在后，按输入顺序
-  // 注意：稳定 #id 在最前是为了让一级 CSS 失败时能立刻回落到稳定的 #id，避免不必要的 XPath / 普通 CSS 重试。
+  // 3+4+5: stable #id CSS first; XPath and ordinary CSS / role / text / testId after, in input order
+  // Note: stable #id goes first so that a failing tier-1 CSS can fall straight back to the stable #id, avoiding unnecessary XPath / ordinary CSS retries.
   for (const l of action.locator) {
     if (l.strategy === 'css' && isPureStableCss(l.value)) {
       push('stable-css', root.locator(l.value), l.value);
@@ -75,11 +75,11 @@ export function buildCandidates(
       if (m) {
         const [, role, name1, name2] = m;
         push('role', root.getByRole(role as never, { name: name1 ?? name2 ?? undefined }), l.value);
-        // 无 name 兜底：role 单独匹配可能命中多个元素（strict mode violation）。
-        // 给出「role + 无 name」候选，让 tryFirstMatch 用 count() 探测，避免 fill 阶段才暴露。
+        // No-name fallback: a bare role match can hit multiple elements (strict mode violation).
+        // Offer a "role + no name" candidate so tryFirstMatch can probe via count(), instead of only surfacing at the fill stage.
         if (!name1 && !name2) push('role-unnamed', root.getByRole(l.value as never), l.value);
       } else if (l.value.includes(' ')) {
-        // 多段 role locator（"textbox 用户名"）——拆为 role + text 两段组合，分别探测。
+        // Multi-segment role locator ("textbox 用户名") — split into role + text segments, probed separately.
         const parts = l.value.split(/\s+/);
         const role = parts[0]!;
         const text = parts.slice(1).join(' ');
@@ -97,7 +97,7 @@ export function buildCandidates(
     }
   }
 
-  // 6: 修复记忆候选（末位兜底）。kind='repair-cache' 供 tryFirstMatch 写 hitSink 时特判展示。
+  // 6: repair-memory candidate (tail fallback). kind='repair-cache' lets tryFirstMatch special-case it when writing hitSink for display.
   if (action.repair) {
     const r = action.repair;
     const already = out.some((c) => c.src === r.value);

@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL } from './helpers/db.js';
 
-// mock playwright-core：假 browser/context/page。evaluate 的返回值与 launch 错误可注入。
+// mock playwright-core: fake browser/context/page. evaluate's return value and the launch error are injectable.
 const mocks = vi.hoisted(() => {
   const state: { evalValue: unknown; launchError: Error | null; gotoUrls: string[] } = {
     evalValue: null,
@@ -75,10 +75,10 @@ describe('inspectPage', () => {
     expect(out).toContain('标题: 元素管理');
     expect(out).toContain('button#add "添加元素"');
     expect(out).toContain('可交互元素 (2)');
-    // 抓取质量自评：元素不足(<5)判低质量，即使 body 充足
+    // Capture-quality self-assessment: too few elements (<5) is judged low quality even with a sufficient body
     expect(out).toContain('抓取质量: 低(可交互元素 2 个,正文 520 字符)');
     expect(out).toContain('请勿基于此清单编造用例');
-    // 快照范围说明必须存在：告知 LLM 快照仅为初始状态、清单外禁止编造 testid
+    // Snapshot-scope note must be present: tells the LLM the snapshot is only the initial state and fabricating testids outside the list is forbidden
     expect(out).toContain('仅为页面初始状态');
     expect(out).toContain('禁止编造');
   });
@@ -102,7 +102,7 @@ describe('inspectPage', () => {
     expect(assessPageQuality({ title: 'mainApp', bodyLen: 6, elements: ['- a', '- b', '- c', '- d', '- e'] })).toBe('low');
     expect(assessPageQuality({ title: '404', bodyLen: 0, elements: [] })).toBe('low');
     expect(assessPageQuality({ title: 'x', bodyLen: 100, elements: ['- a', '- b', '- c', '- d', '- e'] })).toBe('ok');
-    // 去重/限额后清单很短但真实候选充足时不算空壳（candidateCount 兜底）
+    // A very short list after dedupe/cap but with plenty of real candidates is not a hollow shell (candidateCount fallback)
     expect(assessPageQuality({ title: 'x', bodyLen: 200, elements: [], candidateCount: 8 })).toBe('ok');
   });
 });

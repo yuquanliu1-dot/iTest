@@ -4,7 +4,7 @@ import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
-// finish 对 sensitive fill 走 AES-256-GCM 加密，独立跑本文件时无其它用例注入该键
+// finish encrypts sensitive fills with AES-256-GCM; when this file runs standalone no other case has injected that key
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? Buffer.alloc(32, 1).toString('base64');
 
 let pool: Pool;
@@ -25,8 +25,8 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
-  // 注入种子组织管理员身份（跳过真实登录；可见性判定依赖 managerOrgPaths 子树）。
-  // helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后再动态加载。
+  // Inject the seeded org manager identity (skips real login; visibility checks depend on the managerOrgPaths subtree).
+  // helpers/auth depends on the src service chain (which loads the db client), so it must be dynamically imported after DATABASE_URL points at the test container.
   const { managerUserOf } = await import('./helpers/auth.js');
   app.use('/api', (req, _res, next) => {
     req.user = managerUserOf(userId, username, orgId, orgPath);
@@ -124,7 +124,7 @@ describe('recorder routes', () => {
       `SELECT "order", compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`,
       [c.body.id],
     );
-    // 不再落 navigate 步骤：首步是 click，初始导航写到 test_cases.url
+    // No navigate step is persisted anymore: the first step is a click, the initial navigation goes to test_cases.url
     expect((rows.rows[0]!.compiled as Array<{ kind: string }>)[0]!.kind).toBe('click');
     const tcRows = await pool.query(`SELECT url FROM test_cases WHERE id = $1`, [c.body.id]);
     expect(tcRows.rows[0]!.url).toBe('https://app.example.com/home');
@@ -135,12 +135,12 @@ describe('recorder routes', () => {
     const c = await request(app).post('/api/cases').send({ title: 'MF', groupId, versionId });
     const s = await request(app).post('/api/recorder/sessions').send({ caseId: c.body.id, mode: 'fresh' });
     const locator = [{ strategy: 'css', value: '#auth-password' }];
-    // React input remount / 中途停顿产生的碎片 fill（值为累计值）
+    // Fragment fills produced by React input remounts / mid-typing pauses (values are cumulative)
     await appendStep(s.body.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#auth-username' }] }, url: 'https://app.example.com/' });
     await appendStep(s.body.sessionId, { action: { kind: 'fill', locator, value: 'a', sensitive: true }, url: 'https://app.example.com/' });
     await appendStep(s.body.sessionId, { action: { kind: 'fill', locator, value: 'admin', sensitive: true }, url: 'https://app.example.com/' });
     await appendStep(s.body.sessionId, { action: { kind: 'fill', locator, value: 'admin123', sensitive: true }, url: 'https://app.example.com/' });
-    // 中间夹了别的步骤 → 不合并
+    // Another step in between → no merge
     await appendStep(s.body.sessionId, { action: { kind: 'click', locator: [{ strategy: 'css', value: '#submit' }] }, url: 'https://app.example.com/' });
     await appendStep(s.body.sessionId, { action: { kind: 'fill', locator, value: 'changed' }, url: 'https://app.example.com/' });
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
@@ -152,11 +152,11 @@ describe('recorder routes', () => {
     );
     const kinds = rows.rows.map((r: { compiled: Array<{ kind: string; value?: string }> }) => r.compiled[0]);
     expect(kinds.map((a: { kind: string }) => a.kind)).toEqual(['click', 'fill', 'click', 'fill']);
-    // sensitive fill：明文不进 compiled(value 已加密),compiled 仅标记 sensitive=true
+    // Sensitive fill: plaintext never enters compiled (value encrypted), compiled only carries sensitive=true
     expect((kinds[1] as { value?: string }).value).toBeUndefined();
     expect((kinds[1]! as { sensitive?: boolean }).sensitive).toBe(true);
     expect(kinds[3]!.value).toBe('changed');
-    // 明文落 secret_ciphertext（AES-256-GCM 三元组），解密回 'admin123'
+    // Plaintext lands in secret_ciphertext (AES-256-GCM triple), decrypts back to 'admin123'
     const { decrypt } = await import('../src/lib/secret-crypto.js');
     const merged = rows.rows[1] as { compiled: Array<{ kind: string }>; secret_iv: string; secret_tag: string; secret_ciphertext: string };
     expect(merged.compiled[0]!.kind).toBe('fill');
@@ -173,7 +173,7 @@ describe('recorder routes', () => {
     const f = await request(app).post(`/api/recorder/sessions/${s.body.sessionId}/finish`);
     expect(f.status).toBe(200);
     const tcRows = await pool.query(`SELECT url, web_service_ref FROM test_cases WHERE id = $1`, [c.body.id]);
-    // 兜底 origin 命中命名默认 web 服务对象(name=web) → 相对化 '/' + web_service_ref='web'
+    // Fallback origin hits the named default web service object (name=web) → relativized '/' + web_service_ref='web'
     expect(tcRows.rows[0]!.url).toBe('/');
     expect(tcRows.rows[0]!.web_service_ref).toBe('web');
     const stepRows = await pool.query(
@@ -222,7 +222,7 @@ describe('recorder routes', () => {
 
   it('relative url + no default env → 422 with actionable message（不再静默 null 让扩展打开 file 错误页）', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
-    // 环境与 web 服务都在,但环境没设默认 → displayWebEnv 返回 null → resolveCaseUrl 只回 null
+    // Environment and web service both exist, but the environment is not default → displayWebEnv returns null → resolveCaseUrl just returns null
     const e = await pool.query(
       `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '测试环境', false) RETURNING id`,
       [projectId],

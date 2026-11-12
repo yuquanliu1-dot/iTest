@@ -171,13 +171,13 @@ describe('GET/PUT /api/settings/llm', () => {
   });
 
   it('POST /llm/test 带 channelId：空 apiKey 取存量真值（连接错误而非「key 为空」）', async () => {
-    // 先把存量渠道 baseUrl 换成不可达端口（apiKey 留空=保留），避免测试外呼真实端点
+    // First swap the stored channel's baseUrl to an unreachable port (empty apiKey = keep stored) to avoid the test calling a real endpoint
     const put = await request(app).put('/api/settings/llm').send({
       defaultChannelId: 'ch-1',
       channels: [{ ...CHANNEL, apiKey: '', baseUrl: 'http://127.0.0.1:9' }],
     });
     expect(put.status).toBe(200);
-    // 表单 apiKey/model/baseUrl 全空 → 服务端用存量真值探测
+    // Form apiKey/model/baseUrl all empty → the server probes with the stored real values
     const r = await request(app).post('/api/settings/llm/test').send({
       channelId: 'ch-1', provider: 'openai', apiKey: '', model: '', baseUrl: '',
     });

@@ -1,13 +1,13 @@
 /**
- * assistant_skills 全局共享 CRUD + 文件树接口（系统设置页管理；所有空间线程加载全量启用 skills）。
- * 挂载于 /api/assistant/skills，router.ts 处 requireManager 保护。
+ * assistant_skills globally-shared CRUD + file tree API (managed by the system settings page; every space thread loads all enabled skills).
+ * Mounted at /api/assistant/skills, protected by requireManager in router.ts.
  *
- * 一律委托 skillsService（校验 + 落库共用层），与空间助手 manage_skill 工具同规则。
- * 无 scope：skills 是平台级全局共享（所有项目同一个技能库），DB 无归属列。
+ * Always delegates to skillsService (the shared validation + persistence layer), same rules as the space assistant's manage_skill tool.
+ * No scope: skills are platform-level globally shared (all projects share one skill library); the DB has no ownership column.
  *
- * 文件树接口一律用 **skill id** 定位，服务端从 DB 行解析 name——顶层路径段永远是过了
- * isSafeSkillName 的 slug，客户端无法指定目录名。逐文件读写全走 resolveInSkill 守卫
- * （realpath 解析 + 逐段拒 .git/node_modules/隐藏文件 + 可选要求父目录存在）。
+ * The file tree API always locates by **skill id**, with the server resolving the name from the DB row — the top-level path segment is
+ * always a slug that passed isSafeSkillName, and the client cannot specify directory names. Per-file reads/writes all go through the resolveInSkill guard
+ * (realpath resolution + per-segment rejection of .git/node_modules/hidden files + optionally requiring the parent directory to exist).
  */
 import fs from 'node:fs';
 import { Router } from 'express';
@@ -30,7 +30,7 @@ const MAX_FILE_READ_CHARS = 60_000;
 const MAX_FILE_WRITE_BYTES = 1_000_000;
 const MAX_UPLOAD_FILES = 20;
 
-/** :id → { name, dir }；DB 无行 404。id 是唯一入口参数，name 一律服务端解析。 */
+/** :id → { name, dir }; 404 when no DB row. id is the only entry parameter; name is always resolved server-side. */
 async function dirOfSkill(id: string): Promise<{ name: string; dir: string }> {
   const row = (await db.select({ name: assistantSkills.name }).from(assistantSkills)
     .where(eq(assistantSkills.id, id)).limit(1))[0];
@@ -57,15 +57,15 @@ skillsRoute.delete('/:id', async (req, res) => {
   res.status(204).end();
 });
 
-/** 删孤儿目录：磁盘上有目录但 DB 无行（id=null，故 :id 系列接口一律够不着）。
- *  这类目录没法被任何会话加载（catalog 只认 DB 行），留着只会让设置页列表永远挂一条。
- *  name 走 isSafeSkillName + removeSkillDir 双重守卫，删的必定是 SKILLS_ROOT 的直接子目录。 */
+/** Delete orphan directories: a directory exists on disk but has no DB row (id=null, so the :id endpoints can never reach it).
+ *  Such directories cannot be loaded by any session (the catalog only recognizes DB rows); keeping them just leaves a permanent dangling entry in the settings page list.
+ *  name passes the double guard of isSafeSkillName + removeSkillDir, so what gets deleted is always a direct child of SKILLS_ROOT. */
 skillsRoute.delete('/orphan/:name', async (req, res) => {
   const name = String(req.params.name ?? '');
   if (!isSafeSkillName(name)) throw new HttpError(400, 'bad_request', `skill 名称非法: ${name}`);
   const row = (await db.select({ id: assistantSkills.id }).from(assistantSkills)
     .where(eq(assistantSkills.name, name)).limit(1))[0];
-  // 已登记的走 DELETE /:id（连 DB 行一起删），这条路由只处理未登记的孤儿。
+  // Registered skills go through DELETE /:id (deleting the DB row too); this route only handles unregistered orphans.
   if (row) throw new HttpError(409, 'conflict', `「${name}」已登记，请用常规删除`);
   if (!fs.existsSync(skillDirOf(name))) throw new HttpError(404, 'not_found', `skill 目录不存在: ${name}`);
   removeSkillDir(SKILLS_ROOT, name);

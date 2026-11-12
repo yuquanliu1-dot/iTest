@@ -95,7 +95,7 @@ describe('commit / invalidate', () => {
     vi.advanceTimersByTime(1000);
     const fbNew = fakeBrowser();
     commit('new', { browser: fbNew.browser, context: fakeContext(), page: fakePage() }, META, []);
-    expect(peekSession('old')).toBeNull(); // 最旧被淘汰
+    expect(peekSession('old')).toBeNull(); // oldest evicted
     expect(fbOld.close).toHaveBeenCalledTimes(1);
     expect(peekSession('mid')).not.toBeNull();
     expect(peekSession('new')).not.toBeNull();
@@ -112,7 +112,7 @@ describe('commit / invalidate', () => {
   it('invalidate 幂等；下册后 acquire 返 null', () => {
     const fb = put('k10');
     invalidate('k10');
-    invalidate('k10'); // 幂等
+    invalidate('k10'); // idempotent
     expect(fb.close).toHaveBeenCalledTimes(1);
     expect(acquire('k10', META, HASH)).toBeNull();
   });
@@ -122,7 +122,7 @@ describe('sweepOnce', () => {
   it('只清过期记录，未过期保留', () => {
     const fbKeep = put('keep');
     vi.advanceTimersByTime(20 * 60 * 1000 + 1);
-    const fbGone = put('gone'); // 时间已在过期线之后，但 lastUsedAt 是刚 touch 的
+    const fbGone = put('gone'); // time is already past the expiry line, but lastUsedAt was just touched
     sweepOnce();
     expect(peekSession('keep')).toBeNull();
     expect(peekSession('gone')).not.toBeNull();

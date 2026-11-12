@@ -1,6 +1,6 @@
-/** query_stats:执行历史只读查询(overview/case_stats/failures/report_detail/reports/plan_runs/plan_run_detail)。
- *  项目域范围(含计划成员执行、无版本计划),结果标注版本;汇总优先、按需下钻控制上下文预算。
- *  裁剪(截断/结构化结果整形)在 service 层完成,本工具只做参数解析与序列化。 */
+/** query_stats: read-only execution-history queries (overview/case_stats/failures/report_detail/reports/plan_runs/plan_run_detail).
+ *  Project-scoped (including plan-member executions and version-less plans), results annotated with versions; summaries first, on-demand drill-down to control the context budget.
+ *  Clipping (truncation/structured-result shaping) is done in the service layer; this tool only parses parameters and serializes. */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
 import * as svc from '../../../services/executionHistory.service.js';

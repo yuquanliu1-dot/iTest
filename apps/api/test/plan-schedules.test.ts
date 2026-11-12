@@ -1,8 +1,8 @@
 /**
- * plan_schedules 路由测试：cron-only CRUD + 校验 + DB+BullMQ 同步。
+ * plan_schedules route tests: cron-only CRUD + validation + DB+BullMQ sync.
  *
- * 注：测试环境不连 Redis；upsertScheduleJob / removeScheduleJob 内部走 isSchedulerReady()
- * 守门，未连接时直接返回 0 副作用。DB 写入仍正常。
+ * Note: the test environment does not connect to Redis; upsertScheduleJob / removeScheduleJob go through
+ * the isSchedulerReady() gate internally and return with zero side effects when not connected. DB writes still go through.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
@@ -46,7 +46,7 @@ afterAll(async () => {
 
 async function bootstrapPlan(): Promise<string> {
   const { projectId, versionId } = await seedProject(pool);
-  // 创建计划要求 versionId 必填；这里种一条空计划即可。
+  // Creating a plan requires versionId; seeding a bare plan is enough here.
   const created = await request(app)
     .post(`/api/projects/${projectId}/plans`)
     .send({ name: '调度测试', versionId });

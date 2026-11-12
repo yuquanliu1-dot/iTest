@@ -100,16 +100,16 @@ describe('runPlan dataset aggregation', () => {
     const plain = prc.rows.find((r: { case_id: string }) => r.case_id === plainCaseId)!;
     expect(Array.isArray(bound.report_ids)).toBe(true);
     expect(bound.report_ids).toHaveLength(2);
-    expect(bound.report_id).toBe(bound.report_ids[0]); // 兼容字段指向第一条
-    expect(bound.status).toBe('passed'); // N 行全 pass 才 pass
+    expect(bound.report_id).toBe(bound.report_ids[0]); // The compat field points to the first entry
+    expect(bound.status).toBe('passed'); // Pass only when all N rows pass
     expect(plain.report_ids).toBeNull();
     expect(plain.status).toBe('passed');
 
-    // report 实际 2 条
+    // Actually 2 reports
     const reps = await pool.query(`SELECT count(*)::int AS n FROM reports WHERE case_id = $1`, [boundCaseId]);
     expect(reps.rows[0].n).toBe(2);
 
-    // 详情接口：rowStatuses 与 reportIds 对齐
+    // Detail endpoint: rowStatuses aligned with reportIds
     const detail = await request(app).get(`/api/plan-runs/${planRunId}`);
     expect(detail.status).toBe(200);
     const boundCase = detail.body.cases.find((c: { caseId: string }) => c.caseId === boundCaseId);
@@ -119,7 +119,7 @@ describe('runPlan dataset aggregation', () => {
   it('用例级行选择：计划运行只跑选中的行（report_ids 只 1 条）', async () => {
     const created = await request(app).post(`/api/projects/${projectId}/datasets`).send({ ...dsBody, name: '计划行选择' });
     const boundCaseId = await insertCase('计划行选择用例', created.body.id);
-    // 只跑第 2 行（启用行下标 1）
+    // Run only row 2 (enabled row index 1)
     await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[1] WHERE id = $1`, [boundCaseId]);
     const plainCaseId = await insertCase('普通3', null);
     const planRunId = await makePlan(boundCaseId, plainCaseId);
@@ -134,7 +134,7 @@ describe('runPlan dataset aggregation', () => {
     expect(bound.report_ids).toHaveLength(1);
     expect(bound.status).toBe('passed');
 
-    // 报告实际只有 1 条，且行号 = 数据集启用行号 1
+    // Actually only 1 report, and its row number = the dataset's enabled row index 1
     const reps = await pool.query(`SELECT dataset_row_index FROM reports WHERE case_id = $1`, [boundCaseId]);
     expect(reps.rows).toHaveLength(1);
     expect(reps.rows[0].dataset_row_index).toBe(1);
@@ -193,7 +193,7 @@ describe('runPlan 计划级行选择覆盖', () => {
     await pool.query(`UPDATE test_cases SET dataset_row_indexes = ARRAY[1] WHERE id = $1`, [boundCaseId]);
     const plainCaseId = await insertCase('普通6', null);
     const planRunId = await makePlan(boundCaseId, plainCaseId);
-    // plan_cases.dataset_row_indexes 保持 NULL（默认）
+    // plan_cases.dataset_row_indexes stays NULL (default)
 
     execMock.mockReset();
     execMock.mockResolvedValue([]);

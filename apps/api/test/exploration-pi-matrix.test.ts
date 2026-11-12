@@ -1,15 +1,15 @@
 /**
- * P4 回归：C2 章程分解 + C3 人格矩阵 + S2 跨会话交集。
+ * P4 regression: C2 charter decomposition + C3 persona matrix + S2 cross-session intersection.
  *
- * 覆盖：
- *  ① 章程分解：模型输出形状容错（goals/plan/裸数组/脏输出）+ 去重封顶 + 软失败
- *     （LLM 挂了 = 无子目标，不掀翻会话——与代码范围解析同款语义）；
- *  ② 矩阵建组：一组人格 → N 个会话共用 matrix_id，matrix_role=persona，重复人格去重；
- *  ③ 矩阵视图 / 取消：矩阵内会话与 findings 可见；取消只影响未终态会话；
- *  ④ S2 交集：同源近义标题 → cross_session_count=2；跨 origin 不算共同发现；
- *     只标注不改 findings.status（人工审阅才是权威）。
+ * Coverage:
+ *  ① Charter decomposition: model output shape tolerance (goals/plan/bare arrays/dirty output) + dedupe cap + soft failure
+ *     (LLM down = no subgoals, session not disrupted — same semantics as code scope resolution);
+ *  ② Matrix grouping: one persona set → N sessions share matrix_id, matrix_role=persona, duplicate personas deduped;
+ *  ③ Matrix view / cancel: sessions and findings inside the matrix are visible; cancel only affects non-terminal sessions;
+ *  ④ S2 intersection: same-origin near-synonym titles → cross_session_count=2; cross-origin does not count as joint discovery;
+ *     annotate only, never change findings.status (human review is the authority).
  *
- * 真实实现会起 chromium + 调 LLM，本测试全部打桩，只验平台自己的语义。
+ * The real implementation launches chromium + calls LLM; this test stubs everything and only verifies the platform's own semantics.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
@@ -19,7 +19,7 @@ import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 import type { AuthUser } from '../src/services/auth.service.js';
 import type { LLMClient } from '../src/agent/llm-client.js';
 
-// runner 打桩：真实实现会起 chromium + 调 LLM，路由测试只验契约与状态机。
+// Runner stub: the real implementation launches chromium + calls the LLM; route tests only verify the contract and state machine.
 const { runMock } = vi.hoisted(() => ({
   runMock: vi.fn(async (_input: { sessionId: string }) => undefined),
 }));
@@ -41,7 +41,7 @@ let orgPath: string;
 let currentUser: AuthUser;
 let managerUserOf: typeof import('./helpers/auth.js').managerUserOf;
 
-/** 动态导入的模块（env 设好后才加载——db/client 导入即快照 DATABASE_URL）。 */
+/** Dynamically imported module (loaded only after env is set — db/client snapshots DATABASE_URL on import). */
 let parseGoals: typeof import('../src/pi/exploration/decompose.js').parseGoals;
 let decomposeCharter: typeof import('../src/pi/exploration/decompose.js').decomposeCharter;
 let recomputeMatrixIntersection: typeof import('../src/pi/exploration/matrix.js').recomputeMatrixIntersection;
@@ -91,7 +91,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** 建一条带矩阵分组的会话（落库直写，绕开 runner）。 */
+/** Insert a session with matrix grouping (direct DB write, bypassing the runner). */
 async function insertMatrixSession(opts: {
   matrixId: string;
   role: string;
@@ -115,7 +115,7 @@ async function insertMatrixSession(opts: {
   return r.rows[0]!.id as string;
 }
 
-/** 建一条 finding（标题用于近义判定）。 */
+/** Insert a finding (title used for near-synonym judgment). */
 async function insertFinding(sessionId: string, title: string, order = 1): Promise<string> {
   const r = await pool.query(
     `INSERT INTO exploration_findings(session_id, "order", title, description)
@@ -133,7 +133,7 @@ describe('P4 · C2 章程分解', () => {
     ]);
     expect(parseGoals(['裸字符串子目标'])).toEqual([{ id: 'g1', text: '裸字符串子目标' }]);
     expect(parseGoals({ plan: [{ goal: '用 plan 键承载' }] })).toEqual([{ id: 'g1', text: '用 plan 键承载' }]);
-    // 脏输出 → 无子目标（不抛错）。
+    // Dirty output → no subgoals (no throw).
     expect(parseGoals(null)).toEqual([]);
     expect(parseGoals({ goals: '不是数组' })).toEqual([]);
     expect(parseGoals({ goals: [{ text: '   ' }] })).toEqual([]);
@@ -186,7 +186,7 @@ describe('P4 · C3 人格矩阵', () => {
     expect(rows.rows.every((x) => x.matrix_id === r.body.matrixId)).toBe(true);
     expect(rows.rows.every((x) => x.matrix_label === '两人格矩阵')).toBe(true);
     expect(rows.rows.map((x) => x.matrix_role).sort()).toEqual(['novice', 'qa']);
-    // 每个会话各派发一次（矩阵 = N 次独立探索）。
+    // Each session is dispatched once (matrix = N independent explorations).
     expect(runMock).toHaveBeenCalledTimes(2);
   });
 
@@ -213,7 +213,7 @@ describe('P4 · C3 人格矩阵', () => {
       .send({ versionId, charter: CHARTER, personas: ['qa', 'novice'] });
     const matrixId = created.body.matrixId as string;
     const ids = (created.body.sessions as Array<{ id: string }>).map((s) => s.id);
-    // 一个会话置终态（模拟已跑完），另一个保持 pending。
+    // Set one session to terminal state (simulating finished); keep the other pending.
     await pool.query(`UPDATE exploration_sessions SET status='completed' WHERE id=$1`, [ids[0]]);
 
     const r = await request(app).post(`/api/explorations/matrix/${matrixId}/cancel`);
@@ -248,7 +248,7 @@ describe('P4 · S2 跨会话交集', () => {
     const s2 = await insertMatrixSession({ matrixId, role: 'novice', startUrl: 'http://sut.local/app/users' });
     const s3 = await insertMatrixSession({ matrixId, role: 'power', startUrl: 'http://other.local/app/users' });
 
-    // s1/s2 标题近义（同一缺陷换措辞）；s3 是另一个站点 → 不参与同源比对。
+    // s1/s2 titles are near-synonyms (same defect reworded); s3 is a different site → excluded from same-origin comparison.
     await insertFinding(s1, '保存按钮点击后列表未刷新');
     await insertFinding(s2, '保存按钮点击后列表没有刷新');
     await insertFinding(s3, '保存按钮点击后列表未刷新');
@@ -263,9 +263,9 @@ describe('P4 · S2 跨会话交集', () => {
     const bySession = new Map(rows.rows.map((x) => [x.session_id as string, x]));
     expect(Number(bySession.get(s1)!.cross_session_count)).toBe(2);
     expect(Number(bySession.get(s2)!.cross_session_count)).toBe(2);
-    // 跨 origin 的同名单缺陷不算「多视角共同发现」。
+    // An identical single defect across origins does not count as a "multi-perspective joint discovery".
     expect(Number(bySession.get(s3)!.cross_session_count)).toBe(1);
-    // 只标注：人工审阅状态不被交集计算改动。
+    // Annotation only: the human-review status is not touched by intersection computation.
     for (const row of rows.rows) expect(row.status).toBe('pending');
   });
 
@@ -278,7 +278,7 @@ describe('P4 · S2 跨会话交集', () => {
 
     await finishSession(s1, { status: 'completed', turnsUsed: 3, usage: {} });
 
-    // 交集重算是 fire-and-forget → 轮询等它落库。
+    // Intersection recompute is fire-and-forget → poll until it lands in the DB.
     const deadline = Date.now() + 5000;
     let counts: number[] = [];
     while (Date.now() < deadline) {

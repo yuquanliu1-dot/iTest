@@ -40,7 +40,7 @@ describe('plans.service', () => {
 
   it('setPlanGroupCases 跨产品线 → 409;addCases 幂等追加;removeCases 后重排 1..m', async () => {
     const { groupId, versionId, projectId } = await seedProject(pool);
-    // R2 起成员范围按产品线判定：外案必须落在**另一条**产品线上才会被 409。
+    // Since R2 membership scope is decided by product line: a foreign case must sit on **another** product line to trigger 409.
     const otherLineId = await seedOtherProductLine(pool);
     const other = await seedProject(pool, { productLineId: otherLineId });
     const svc = await import('../src/services/plans.service.js');
@@ -54,14 +54,14 @@ describe('plans.service', () => {
       .rejects.toMatchObject({ status: 409, code: 'cross_project' });
 
     await svc.addPlanCases(plan.id, [c1, c2]);
-    const addedAgain = await svc.addPlanCases(plan.id, [c2, c3]); // c2 已在 → 只追加 c3
+    const addedAgain = await svc.addPlanCases(plan.id, [c2, c3]); // c2 already present → only c3 appended
     expect(addedAgain).toBe(1);
     let detail = await svc.getPlanDetail(plan.id);
     expect(detail!.cases.map((c) => c.order)).toEqual([1, 2, 3]);
 
     await svc.removePlanCases(plan.id, [c2]);
     detail = await svc.getPlanDetail(plan.id);
-    expect(detail!.cases.map((c) => c.order)).toEqual([1, 2]); // c1, c3 重排
+    expect(detail!.cases.map((c) => c.order)).toEqual([1, 2]); // c1, c3 resequenced
   }, 30_000);
 
   it('重复 caseIds 去重不误报 409;remove 清空到 0;setPlanGroupCases 空数组清空组', async () => {
@@ -70,15 +70,15 @@ describe('plans.service', () => {
     const c1 = await makeCase(groupId, versionId, 'rc1');
     const c2 = await makeCase(groupId, versionId, 'rc2');
     const plan = await svc.createPlan(projectId, { name: '重复', versionId });
-    expect(await svc.addPlanCases(plan.id, [c1, c1])).toBe(1); // 重复去重,只加 1
-    expect(await svc.addPlanCases(plan.id, [c1, c2])).toBe(1); // c1 已在,补 c2
-    expect(await svc.removePlanCases(plan.id, [c1, c2])).toBe(2); // 清空
+    expect(await svc.addPlanCases(plan.id, [c1, c1])).toBe(1); // deduplicated, only 1 added
+    expect(await svc.addPlanCases(plan.id, [c1, c2])).toBe(1); // c1 already in, c2 added
+    expect(await svc.removePlanCases(plan.id, [c1, c2])).toBe(2); // emptied
     const detail = await svc.getPlanDetail(plan.id);
     expect(detail!.cases).toEqual([]);
-    expect(await svc.removePlanCases(plan.id, [c1])).toBe(0); // 空计划再删 → 0
+    expect(await svc.removePlanCases(plan.id, [c1])).toBe(0); // removing from an empty plan again → 0
     const g = await svc.createPlanGroup(plan.id, { name: 'G' });
     await svc.setPlanGroupCases(plan.id, g.id, [c1]);
-    expect(await svc.setPlanGroupCases(plan.id, g.id, [])).toBe(0); // 空数组 = 清空该组
+    expect(await svc.setPlanGroupCases(plan.id, g.id, [])).toBe(0); // empty array = clear the group
     const detail2 = await svc.getPlanDetail(plan.id);
     expect(detail2!.groups!.find((x) => x.id === g.id)!.cases).toEqual([]);
   }, 30_000);
@@ -114,12 +114,12 @@ describe('plan case groups CRUD', () => {
 
     await expect(svc.deletePlanGroup(plan.id, g2.id)).resolves.toMatchObject({ ok: true });
 
-    // 组A 直插 plan_cases 造非空组(setPlanGroupCases 是 Task 4) → 删除 409
+    // Group A made non-empty by inserting into plan_cases directly (setPlanGroupCases is Task 4) → delete 409s
     const c = await makeCase(s.groupId, s.versionId, 'gc1');
     await pool.query(`INSERT INTO plan_cases(plan_id, case_id, group_id, "order") VALUES ($1,$2,$3,1)`, [plan.id, c, g1.id]);
     await expect(svc.deletePlanGroup(plan.id, g1.id)).rejects.toMatchObject({ status: 409, code: 'group_not_empty' });
 
-    // 清空后可删
+    // Deletable after being emptied
     await pool.query(`DELETE FROM plan_cases WHERE plan_id = $1 AND group_id = $2`, [plan.id, g1.id]);
     await expect(svc.deletePlanGroup(plan.id, g1.id)).resolves.toMatchObject({ ok: true });
   }, 30_000);
@@ -164,14 +164,14 @@ describe('组内用例编排', () => {
     const [c1, c2] = cs.rows.map((r) => r.id as string);
 
     await svc.setPlanGroupCases(plan.id, gA.id, [c1, c2]);
-    await svc.setPlanGroupCases(plan.id, gB.id, [c1, c1]); // 同组重复去重为 1 条；跨组重复合法
+    await svc.setPlanGroupCases(plan.id, gB.id, [c1, c1]); // duplicates within one group collapse to 1; repeating across groups is legal
     const detailA = await svc.getPlanDetail(plan.id);
     const gAafter = detailA!.groups!.find((g) => g.id === gA.id)!;
     const gBafter = detailA!.groups!.find((g) => g.id === gB.id)!;
     expect(gAafter.cases.map((c) => c.id)).toEqual([c1, c2]);
     expect(gBafter.cases.map((c) => c.id)).toEqual([c1]);
     expect(gAafter.cases.map((c) => c.order)).toEqual([1, 2]);
-    // 平铺 cases（兼容旧读取）：按组序拼接
+    // Flattened cases (legacy read compat): concatenated in group order
     expect(detailA!.cases.map((c) => c.id)).toEqual([c1, c2, c1]);
   }, 30_000);
 
@@ -184,7 +184,7 @@ describe('组内用例编排', () => {
       [s.groupId, s.versionId]);
     const [x1, x2] = cs.rows.map((r) => r.id as string);
 
-    const added = await svc.addPlanCases(plan.id, [x1]); // 无组 → 自动建默认分组
+    const added = await svc.addPlanCases(plan.id, [x1]); // no groups → default group auto-created
     expect(added).toBe(1);
     const d1 = await svc.getPlanDetail(plan.id);
     expect(d1!.groups!.map((g) => g.name)).toEqual(['默认分组']);

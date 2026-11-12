@@ -4,11 +4,11 @@ import type { AddressInfo } from 'node:net';
 import type { Page } from 'playwright-core';
 import type { LLMClient, LLMResult } from '../src/agent/llm-client.js';
 
-// 与 execute-cdp.test.ts 同构：整体 mock playwright-core（假 page + 可改 count 的 locator），
-// 驱动 executeCaseReal → runStepsInContext。llmClient 通过 ctx.llmClient 注入，绕过 resolveLlmClient 读库。
+// Same structure as execute-cdp.test.ts: playwright-core mocked wholesale (fake page + locator with a controllable count),
+// driving executeCaseReal -> runStepsInContext. llmClient is injected via ctx.llmClient, bypassing resolveLlmClient's DB read.
 vi.mock('playwright-core', () => {
-  // pressSequentially 键入轨迹：typedValues 模拟真实输入框（fill('') 清空、inputValue 回读），
-  // typedAll 只追加 —— 断言凭据替换用（连续两次 fill 会清掉前一个值）。
+  // pressSequentially typing trail: typedValues simulates a real input box (fill('') clears it, inputValue reads it back),
+  // typedAll only appends -- used for credential-replacement assertions (two consecutive fills would wipe the earlier value).
   const typedValues: string[] = [];
   const typedAll: string[] = [];
   const makeLocator = () => ({
@@ -79,7 +79,7 @@ const mocked = await import('playwright-core') as unknown as {
   __typed: string[];
 };
 
-/** 脚本化 mock LLM：complete 按顺序回 JSON；脚本耗尽则抛错（模拟 AI 不可用/放弃）。 */
+/** Scripted mock LLM: complete returns JSONs in order; throws when the script is exhausted (simulates AI unavailable/giving up). */
 function makeMockLlm(script: Array<Record<string, unknown>>) {
   const calls: string[] = [];
   const llm: LLMClient = {
@@ -94,7 +94,7 @@ function makeMockLlm(script: Array<Record<string, unknown>>) {
   return { llm, calls };
 }
 
-/** 永不命中的 locator：count 恒 0 → tryFirstMatch 全窗口 all locator candidates failed → LocatorAllFailed。 */
+/** Never-matching locator: count is always 0 -> tryFirstMatch reports all locator candidates failed across the whole window -> LocatorAllFailed. */
 function missingLocator() {
   return {
     click: vi.fn().mockResolvedValue(undefined),
@@ -103,7 +103,7 @@ function missingLocator() {
   };
 }
 
-/** 环境上下文桩：login 缺省 = 环境未配置凭据（触发 EnvMissing 前置拦截的形态）。 */
+/** Env-context stub: login absent = environment has no credentials configured (the shape that triggers EnvMissing's upfront interception). */
 function makeEnvCtx(login?: { user: string; password: string }): EnvCtx {
   return {
     envId: 'env-1',
@@ -119,8 +119,8 @@ function makeEnvCtx(login?: { user: string; password: string }): EnvCtx {
   } as EnvCtx;
 }
 
-// 2026-10-24 起固化可选：NL 视觉步骤（空 compiled + 有指令）的临场执行是正式执行语义，
-// 不受任何开关管；只有「机械执行失败后 AI 重做」仍由 locatorFailed 开关治理。
+// Since 2026-10-24 solidify became optional: the on-the-spot execution of NL visual steps (empty compiled + an instruction) is official execution semantics,
+// governed by no switch; only "AI redo after a mechanical failure" is still governed by the locatorFailed switch.
 const ON = { locatorFailed: true };
 const OFF = { locatorFailed: false };
 
@@ -157,7 +157,7 @@ describe('NL 视觉步骤（空 compiled + 有指令）— 正式执行语义，
   });
 
   it('AI 不可用（LLM 抛错）：回退原 compile-missing 失败', async () => {
-    const { llm } = makeMockLlm([]); // 空脚本 → complete 抛错
+    const { llm } = makeMockLlm([]); // empty script -> complete throws
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000102',
       [{ order: 1, id: 's-3', instruction: '点击保存按钮', compiled: [] }],
@@ -203,7 +203,7 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
     );
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.failureReason).toBe('LocatorAllFailed');
-    // 说明快照：failed 结果同样携带，报告页失败步也能看到意图
+    // instruction snapshot: failed results carry it too, so the report page shows the intent for failed steps
     expect(results[0]!.instruction).toBe('点击已删除按钮');
   });
 
@@ -226,14 +226,14 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
     expect(results[0]!.warning).toMatch(/count=0/);
     expect(results[0]!.degraded).toBe(true);
     expect(results[0]!.aiUsage?.calls).toBeGreaterThanOrEqual(1);
-    // 说明快照：报告页据此展示步骤意图（降级 passed 也带）
+    // instruction snapshot: the report page renders the step intent from it (degraded passed steps carry it as well)
     expect(results[0]!.instruction).toBe('点击已删除按钮');
     expect(results[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#gone' }] }]);
     expect(results[1]!.status).toBe('passed');
   });
 
   it('非 LocatorAllFailed 失败（AssertionMismatch）：同样降级 AI 重做通过', async () => {
-    // 需求口径：任意机械执行失败都降级，不限元素识别失败。assertText contains 不命中 → AssertionMismatch。
+    // Requirement wording: any mechanical failure degrades, not just element-identification failures. An assertText contains miss -> AssertionMismatch.
     const { llm } = makeMockLlm([{ done: true, summary: '已确认操作成功' }]);
     mocked.__page.evaluate.mockReset();
     mocked.__page.evaluate.mockImplementation(() => Promise.resolve('页面正文文本'));
@@ -281,9 +281,9 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
   });
 
   it('开关 on + 有指令但 AI 降级抛错：仍失败 + warning 记录 AI 未成功 + aiUsage 有计数', async () => {
-    // b7d40426 实测根因：机械 LocatorAllFailed → 触发降级 → runAiTask 跑了 LLM（onUsage 已计数）
-    // 但模型回 {"fail":...} → 抛 "aiTask 放弃"。旧逻辑静默 catch 落回机械报错，报告只留孤立
-    // aiUsage 看不出 AI 已介入却没救回来。脚本给一条 fail 响应（非空脚本）以复现"用到了 AI 但放弃"。
+    // b7d40426 live-measured root cause: mechanical LocatorAllFailed -> degrade triggered -> runAiTask ran the LLM (onUsage already counted)
+    // but the model returned {"fail":...} -> threw "aiTask 放弃". The old logic silently caught and fell back to the mechanical error, leaving an orphan
+    // aiUsage in the report with no sign AI stepped in and failed to rescue. The script provides a fail response (non-empty script) to reproduce "AI was used but gave up".
     const { llm, calls } = makeMockLlm([{ fail: '找不到规则tab的关闭按钮' }]);
     mocked.__locator.mockImplementationOnce(() => missingLocator());
     const results = await executeCaseReal(
@@ -291,24 +291,24 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
       [{ order: 1, id: 's-1', instruction: '关闭打开的规则tab', compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#gone' }] }] }],
       { reportId: 'r-lf-ai-err', aiFallback: ON, llmClient: llm },
     );
-    // AI 确实被调用过（complete 至少一次）
+    // AI really was called (complete at least once)
     expect(calls.length).toBeGreaterThanOrEqual(1);
-    // 仍维持机械失败（status/failureReason 不变）
+    // still a mechanical failure (status/failureReason unchanged)
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.failureReason).toBe('LocatorAllFailed');
-    // 不再孤立：warning 记录 AI 降级尝试未成功 + 放弃原因
+    // no longer orphaned: warning records the unsuccessful AI degrade attempt + the give-up reason
     expect(results[0]!.warning).toMatch(/AI 降级尝试未成功/);
     expect(results[0]!.warning).toMatch(/aiTask 放弃/);
     expect(results[0]!.warning).toMatch(/找不到规则tab的关闭按钮/);
-    // aiUsage 有计数（与 warning 呼应，不再是孤零零的调用记录）
+    // aiUsage has a count (echoing the warning, no longer a lone call record)
     expect(results[0]!.aiUsage?.calls).toBeGreaterThanOrEqual(1);
-    // 未降级通过
+    // not a degraded pass
     expect(results[0]!.degraded).toBeUndefined();
   });
 
   it('开关 on 但本身是 aiTask 步骤：识别失败不降级，仍 LocatorAllFailed 失败', async () => {
-    // aiTask 步骤本就在跑 AI，识别失败时再“按指令临场执行”无增益 → 维持原失败。
-    // LLM 脚本给了 2 条：若降级误触发会消费第 2 条并“通过”，实测仍 failed 即证明 guard 生效。
+    // An aiTask step is already running AI; redoing "per the instruction on the spot" after an identification failure adds nothing -> keep the original failure.
+    // The LLM script provides 2 entries: if the degrade path misfires it would consume the 2nd and "pass"; the measured still-failed proves the guard works.
     const { llm } = makeMockLlm([
       { done: true, summary: '识别成功' },
       { done: true, summary: '重做成功' },
@@ -333,9 +333,9 @@ describe('回放 AI 降级 — 机械执行失败（任意失败原因）', () =
   });
 
   it('非浏览器步骤（httpRequest）失败：不降级，LLM 零调用', async () => {
-    // prod228 报告 15dd42d9：Host 头注入探针的 httpRequest 断言失败（200≠400）触发降级，
-    // 但 AI 只能驱动浏览器、无法设置受保护头 → 结构上不可能完成，白烧 44.5s/1 次调用零收益。
-    // 断言 httpRequest 失败不进降级路径：LLM 零调用，失败原因保持 HttpRequestAssertionFailed。
+    // prod228 report 15dd42d9: the Host-header injection probe's httpRequest assertion failure (200 != 400) triggered the degrade,
+    // but AI can only drive the browser and cannot set protected headers -> structurally impossible, burning 44.5s / 1 call for zero gain.
+    // Asserts an httpRequest failure stays out of the degrade path: zero LLM calls, failureReason stays HttpRequestAssertionFailed.
     const srv = http.createServer((_req, res) => { res.writeHead(200); res.end('ok'); });
     await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/`;
@@ -390,7 +390,7 @@ describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录
     );
     expect(results[0]!.status).toBe('passed');
     expect(results[0]!.degraded).toBe(true);
-    // 键入的是真实凭据，不是字面量占位符
+    // what got typed is the real credential, not the literal placeholder
     expect(mocked.__typed).toContain('admin');
     expect(mocked.__typed).toContain('pw9');
     expect(mocked.__typed.join('|')).not.toMatch(/__ITEST_/);
@@ -415,7 +415,7 @@ describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录
   });
 
   it('环境未配置 login + 指令引用凭据：EnvMissing 快速失败，LLM 零调用', async () => {
-    // prod228 实测：占位符原样进登录表单必败，AI 多轮空转烧 12+ 次调用——预检必须在烧轮次前拦截。
+    // prod228 measured: a placeholder typed verbatim into the login form is a guaranteed failure; the AI spun across many rounds burning 12+ calls -- the precheck must intercept before any rounds are burned.
     const { llm, calls } = makeMockLlm([]);
     mocked.__page.evaluate.mockReset();
     mocked.__page.evaluate.mockImplementation(() => Promise.resolve([{ selector: '#user', tag: 'input' }]));
@@ -451,7 +451,7 @@ describe('回放 AI 降级 — 凭据占位符替换（2026-10-21 prod228 登录
   });
 
   it('compiled aiTask 分支：指令含 {{ITEST_USERNAME}} 不再 var-missing 判死，fill 值替换为真实凭据', async () => {
-    // 降级开关全关：走的是 compiled aiTask 正常回放路径（非降级），degraded 不置位。
+    // All degrade switches off: this exercises the compiled aiTask normal replay path (not a degrade), so degraded stays unset.
     mocked.__typed.length = 0;
     const { llm, calls } = makeMockLlm([
       { actions: [{ type: 'fill', selector: '#user', value: '{{ITEST_USERNAME}}' }], done: true, summary: '已填写登录' },

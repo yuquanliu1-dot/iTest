@@ -1,29 +1,29 @@
 /**
- * AI 动作 → compiled DSL 的机械映射：solidify_case（显式固化）与 aiTask 运行时缓存
- * （自动挡固化，见 aiTaskCache.ts）共用的下沉模块。execute 层不能反向依赖 pi 工具层，
- * 故从 pi/space/tools/solidifyCase.ts 搬到此处的同名函数为唯一实现。
+ * Mechanical mapping of AI actions → compiled DSL: a sunk-down module shared by solidify_case (explicit solidification)
+ * and the aiTask runtime cache (automatic solidification, see aiTaskCache.ts). The execute layer must not depend back on the pi tool layer,
+ * so the same-named function moved here from pi/space/tools/solidifyCase.ts is the sole implementation.
  */
 import type { Locator, StepAction } from '@itest/shared';
 import { credentialPlaceholderKind, type AiAction } from './aiTask.js';
 
-/** Playwright 专有语法（引擎链 / 伪类扩展），平台 css 策略不认识 → 不可映射。 */
+/** Playwright-specific syntax (engine chains / pseudo-class extensions) the platform's css strategy doesn't understand → not mappable. */
 export const PLAYWRIGHT_ONLY_SELECTOR_RE = />>|:has-text|:has\(|:near\(|:above\(|:below\(|engine=|nth=/i;
 
-/** 裸标签选择器（无 #.[: 等任何特异性，如 "span"/"button"）页内必多命中歧义，固化后机械回放
- *  会静默点错第一个可见命中——第二道防线（合成端唯一性门已在上游拦，这里拦回归/拦外部喂入）。 */
+/** Bare-tag selectors (no #.[: or any other specificity, e.g. "span"/"button") always hit ambiguously within a page; after solidification, mechanical replay
+ *  would silently click the wrong first visible hit — second line of defense (the synthesis-side uniqueness gate intercepts upstream; this intercepts regressions / external feed-ins). */
 const BARE_TAG_RE = /^[a-z][a-z0-9-]*$/i;
 
-/** 「激活态」选择器：router-link-active / is-active 等由路由状态动态加减的 class，录制时命中
- *  只因目标菜单**恰好**处于激活态；回放（深链直达目标页 / 前序步骤已切走菜单）时该 class
- *  可能不存在 → 固化必碎。2026-10-28 prod228 实录：「进入 XX 菜单」被固化为
- *  a.router-link-exact-active.router-link-active。第二道防线（合成端已剔除激活态 class，
- *  这里拦回归/拦外部喂入），固化映射时直接拒绝。 */
+/** "Active-state" selectors: classes like router-link-active / is-active that routing state dynamically adds/removes; at record time they hit
+ *  only because the target menu **happens** to be active; at replay (deep link straight to the target page / an earlier step already switched menus) the class
+ *  may not exist → solidification would surely break. 2026-10-28 prod228 record: 「进入 XX 菜单」 was solidified as
+ *  a.router-link-exact-active.router-link-active. Second line of defense (synthesis-side already strips active-state classes;
+ *  this intercepts regressions / external feed-ins); rejected outright during solidification mapping. */
 export const ACTIVE_STATE_SELECTOR_RE = /router-link-(exact-)?active|\.is-active(?![\w-])/i;
 
-/** 步骤是否为视觉模式（可固化候选）：未编译（纯 instruction）或 compiled 全部由 aiTask 组成。
- *  原 solidifyCase.ts 定义；verify_case 轨迹收集也要用，下沉到 execute 中性层避免工具间反向依赖。 */
+/** Whether the step is visual mode (a solidification candidate): uncompiled (pure instruction) or compiled consisting entirely of aiTask.
+ *  Originally defined in solidifyCase.ts; verify_case trajectory collection also needs it, so it sank to the neutral execute layer to avoid tool-to-tool reverse dependencies. */
 export function isVisualStep(step: { instruction: string | null; compiled: unknown; sensitive: boolean }): boolean {
-  if (step.sensitive) return false; // 敏感步骤凭据不进 compiled，保持原样
+  if (step.sensitive) return false; // sensitive-step credentials never enter compiled, kept as-is
   const compiled = Array.isArray(step.compiled) ? step.compiled : [];
   if (compiled.length === 0) {
     return typeof step.instruction === 'string' && step.instruction.trim().length > 0;
@@ -31,13 +31,13 @@ export function isVisualStep(step: { instruction: string | null; compiled: unkno
   return compiled.every((a) => (a as { kind?: string }).kind === 'aiTask');
 }
 
-/** AI 动作选择器 → 平台 Locator；不可映射返回 null。 */
+/** AI action selector → platform Locator; returns null when not mappable. */
 export function mapSelector(selector: string): Locator | null {
   const text = /^text=(.+)$/s.exec(selector);
   if (text) return { strategy: 'text', value: text[1]! };
-  // 尾缀 :has-text("Y")（伪类修饰目标元素本身，如 button:has-text("查询")）→ 文本定位。
-  // 丢掉 css 前缀收窄，多命中风险由验收静态分析「源码命中多处」告警兜底；
-  // :has-text 出现在选择器中段（div:has-text("x") input，目标是 input）语义不保真，仍按专有语法拒绝。
+  // Trailing :has-text("Y") (the pseudo-class decorates the target element itself, e.g. button:has-text("查询")) → text locator.
+  // The css prefix narrowing is dropped; the multi-hit risk is covered by the acceptance static-analysis "源码命中多处" warning as fallback;
+  // :has-text in the middle of a selector (div:has-text("x") input, target is input) doesn't preserve semantics, still rejected as proprietary syntax.
   const hasText = /^(.*):has-text\(\s*(['"])(.+?)\2\s*\)\s*$/.exec(selector);
   if (hasText) return { strategy: 'text', value: hasText[3]! };
   if (PLAYWRIGHT_ONLY_SELECTOR_RE.test(selector)) return null;
@@ -45,9 +45,9 @@ export function mapSelector(selector: string): Locator | null {
 }
 
 /**
- * mapSelector + 固化同款防线（激活态 class / css 裸标签拒绝）收口：
- * 供 locator 修复记忆（cdp.ts 降级路径）等不经 mapAiActionsToCompiled 的写入方复用，
- * 防止 a.router-link-active 这类回放必碎的易碎 selector 被冻结进缓存（2026-10-28 prod228 实录）。
+ * mapSelector + the same solidification defenses (active-state class / css bare-tag rejection) consolidated:
+ * for reuse by writers that bypass mapAiActionsToCompiled, such as the locator repair memory (cdp.ts fallback path),
+ * preventing fragile selectors like a.router-link-active that would surely break at replay from being frozen into the cache (2026-10-28 prod228 record).
  */
 export function mapSelectorStrict(selector: string): Locator | null {
   if (ACTIVE_STATE_SELECTOR_RE.test(selector)) return null;
@@ -62,24 +62,24 @@ export type SolidifyMapResult =
   | { ok: false; reason: string };
 
 /**
- * 把一个 aiTask 步骤收集到的（成功）AI 动作序列机械映射为 compiled DSL。
- * 步骤级全有或全无：press 无对应 DSL kind、选择器含 Playwright 专有语法、
- * fill value 是凭据占位符——任一出现即整步保持 aiTask（保守正确优于部分固化）。
- * wait 有对应形态：映射为 waitFor 空 locator + timeoutMs（cdp 的 waitFor 空 locator 分支
- * 即「睡满 timeoutMs」的固定等待），AI 相的页面稳定等待因此可机械保留——prod228 实测里
- * click 后夹带的 wait(1500ms) 曾让整步（含那个真 click）被丢弃，固化率归零。
- * screenshot 是观察性动作，跳过不映射。
- * 纯观察步（只有 wait/screenshot，无任何 click/fill/navigate）整体拒绝：waitFor([]) 独苗
- * 是「盲等伪装成固化」（prod228 2026-10-23 实测），语义价值为零还挤掉真步骤的 aiTask 化。
+ * Mechanically maps a (successful) AI action sequence collected by an aiTask step into compiled DSL.
+ * Step-level all-or-nothing: press has no DSL kind counterpart, the selector contains Playwright proprietary syntax,
+ * the fill value is a credential placeholder — any one occurrence keeps the whole step as aiTask (conservatively correct beats partial solidification).
+ * wait has a counterpart: mapped to waitFor with empty locator + timeoutMs (cdp's empty-locator waitFor branch
+ * is exactly the fixed "sleep through timeoutMs" wait), so the AI phase's page-settling waits survive mechanically — in prod228 measurements,
+ * a wait(1500ms) wedged after a click once caused the whole step (including that real click) to be dropped, zeroing the solidification rate.
+ * screenshot is an observational action; skipped, not mapped.
+ * Pure-observation steps (only wait/screenshot, no click/fill/navigate) are rejected wholesale: a lone waitFor([])
+ * is "blind waiting disguised as solidification" (prod228 2026-10-23 measurement), zero semantic value that also crowds out real steps' aiTask-ization.
  */
 export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
   const compiled: StepAction[] = [];
   let skippedCount = 0;
-  let realCount = 0; // click/fill/navigate 计数：真实交互动作，区别于 wait/screenshot 观察性动作
+  let realCount = 0; // click/fill/navigate counter: real interaction actions, as opposed to wait/screenshot observational actions
   for (const a of actions) {
     switch (a.type) {
       case 'click': {
-        // 坐标动作未解析回 selector（执行点元素解析失败）→ 不可机械固化，整步保持 aiTask。
+        // Coordinate action not resolved back to a selector (element resolution failed at the execution point) → cannot be mechanically solidified; whole step stays aiTask.
         if (!a.selector) return { ok: false, reason: 'click 为坐标动作且未解析回稳定选择器，无法映射为平台 locator' };
         if (ACTIVE_STATE_SELECTOR_RE.test(a.selector)) {
           return { ok: false, reason: `click 选择器 "${a.selector}" 是激活态 class（由路由状态动态加减，回放时会因菜单未激活而落空），整步保持 aiTask` };
@@ -94,9 +94,9 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         break;
       }
       case 'fill': {
-        // 任意形态的凭据占位符（哨兵 / 花括号变体 {{ITEST_USERNAME}} / @服务名 归属形态）都不固化——
-        // 固化会把字面量冻结进 compiled，回放时 valueSub 认得但字面量里没有凭据，
-        // 且换环境后归属失效。保守整步保持 aiTask。
+        // Credential placeholders in any form (sentinel / curly-brace variants {{ITEST_USERNAME}} / @服务名 attribution form) are never solidified —
+        // solidification would freeze the literal into compiled; at replay valueSub recognizes it but the literal carries no credential,
+        // and the attribution breaks when the environment changes. Conservatively keep the whole step as aiTask.
         if (credentialPlaceholderKind(a.value)) {
           return { ok: false, reason: 'fill value 为登录/敏感凭据占位符（含 @服务名 归属形态，登录不属于用例步骤，归环境登录），不固化' };
         }
@@ -118,19 +118,19 @@ export function mapAiActionsToCompiled(actions: AiAction[]): SolidifyMapResult {
         realCount += 1;
         break;
       case 'screenshot':
-        skippedCount += 1; // 观察性动作（AI 自己看页面用），无副作用，不进 compiled
+        skippedCount += 1; // observational action (the AI looks at the page itself), no side effects, not in compiled
         break;
       case 'press':
-        // AI 的 press 是页面级键盘动作（page.keyboard.press，无元素定位），映射不了带 locator 的 press DSL。
+        // The AI's press is a page-level keyboard action (page.keyboard.press, no element locator); it cannot map to the locator-bearing press DSL.
         return { ok: false, reason: `含键盘动作 press(${a.key})（页面级键盘、无元素定位），整步保持 aiTask` };
       case 'sql':
-        // 数据库取证动作（探索会话专用通道）没有对应的机械 DSL：不能固化成回放步骤。
+        // Database evidence actions (exploration-session-only channel) have no mechanical DSL counterpart: cannot be solidified into replay steps.
         return { ok: false, reason: '含数据库取证动作（只读查询），无对应机械 DSL，整步保持 aiTask' };
       case 'repo':
-        // 仓库读码动作（探索会话专用通道）同理：取证性质，无对应机械 DSL，整步保持 aiTask。
+        // Repo code-reading actions (exploration-session-only channel) likewise: evidentiary in nature, no mechanical DSL counterpart, whole step stays aiTask.
         return { ok: false, reason: '含仓库读码动作（只读取证），无对应机械 DSL，整步保持 aiTask' };
       case 'wait':
-        // AI 相的页面稳定等待映射为固定时长 waitFor（空 locator = 不等元素，睡满 timeoutMs）
+        // The AI phase's page-settling wait maps to a fixed-duration waitFor (empty locator = wait for no element, sleep through timeoutMs)
         compiled.push({ kind: 'waitFor', locator: [], timeoutMs: a.ms });
         break;
     }

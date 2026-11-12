@@ -1,14 +1,16 @@
 /**
- * Assistant/RCA 线程跨副本桥(Redis):3 副本 + nginx 轮询下,线程 session 常驻某一副本
- * 进程内存,其余副本看不到运行态、收不到事件、cancel 打空。本模块把三件事搬上 Redis:
- * - 事件镜像:session.ts 的 fanOut/emitThreadEvent 顺手 PUBLISH(信封 {o,e});SSE 路由经
- *   subscribeThreadMirror 收「他副本」事件透传进同一响应(origin 相同的本副本回环跳过,
- *   本地 listeners 已送达过,重复透传会让前端 seq 去重器看到双份)。
- * - cancel 命令:PSUBSCRIBE itest:thread-cmd:* → 本地有该线程 record 即 abort。处理函数由
- *   session.ts 注入(避免 threadBus ↔ session 模块环);cancelThread 本地快路径 + 始终 PUBLISH。
- * - 运行态探测:itest:thread-run 锁键由 session.ts 经 redisLock 维护(runs>0 期间 5s 心跳续期),
- *   threadRunRemote 用 EXISTS 探测,供 threadStatusAsync 把他副本运行中的线程标成 running。
- * 无 REDIS_URL(本地 dev / vitest)时全部 no-op,行为与单进程版完全一致。
+ * Assistant/RCA thread cross-replica bridge (Redis): with 3 replicas + nginx round-robin, a thread's session
+ * lives in one replica's process memory; the other replicas can't see its running state, receive no events,
+ * and cancel fires into the void. This module moves three things onto Redis:
+ * - Event mirroring: session.ts's fanOut/emitThreadEvent PUBLISHes along the way (envelope {o,e}); the SSE route
+ *   receives "other-replica" events via subscribeThreadMirror and passes them through into the same response
+ *   (same-origin loops on this replica are skipped — local listeners already delivered them; passing them through
+ *   again would show the frontend's seq deduplicator a double copy).
+ * - cancel command: PSUBSCRIBE itest:thread-cmd:* → abort if this replica holds that thread's record. The handler is
+ *   injected by session.ts (avoiding a threadBus ↔ session module cycle); cancelThread takes the local fast path and always PUBLISHes.
+ * - Running-state probing: the itest:thread-run lock key is maintained by session.ts via redisLock (5s heartbeat renewal
+ *   while runs>0); threadRunRemote probes it with EXISTS so threadStatusAsync can mark threads running on other replicas as running.
+ * Without REDIS_URL (local dev / vitest) everything is a no-op and behavior is identical to the single-process version.
  */
 import IORedis, { type Redis } from 'ioredis';
 import { ORIGIN_ID } from '../../lib/redisLock.js';
@@ -16,7 +18,7 @@ import { ORIGIN_ID } from '../../lib/redisLock.js';
 export const THREAD_EV_PREFIX = 'itest:thread-ev:';
 export const THREAD_CMD_PREFIX = 'itest:thread-cmd:';
 const THREAD_CMD_PATTERN = `${THREAD_CMD_PREFIX}*`;
-/** 运行锁键前缀(值=持有副本的 ORIGIN_ID;键的 TTL/心跳在 session.ts)。 */
+/** Run-lock key prefix (value = the holding replica's ORIGIN_ID; key TTL/heartbeat live in session.ts). */
 export const THREAD_RUN_PREFIX = 'itest:thread-run:';
 
 let _pub: Redis | null = null;
@@ -50,13 +52,13 @@ function getSub(): Redis | null {
   return _sub;
 }
 
-// ── 事件镜像 ─────────────────────────────────────────────────────────────────
+// ── Event mirroring ─────────────────────────────────────────────────────────────────
 
-/** threadId → 本副本上的 SSE 转发回调集(share 一条 SUBSCRIBE 连接,末个离开才退订)。 */
+/** threadId → the set of SSE forwarding callbacks on this replica (share one SUBSCRIBE connection; unsubscribe only when the last one leaves). */
 const _evHandlers = new Map<string, Set<(e: unknown) => void>>();
 const _evSubscribed = new Set<string>();
 
-/** 源侧:线程事件发布(fire-and-forget;stamped 已带 threadId+seq,前端按 seq 去重)。 */
+/** Source side: thread event publishing (fire-and-forget; stamped already carries threadId+seq, the frontend dedups by seq). */
 export function publishThreadEvent(threadId: string, stamped: Record<string, unknown>): void {
   void getPub()
     ?.publish(`${THREAD_EV_PREFIX}${threadId}`, JSON.stringify({ o: ORIGIN_ID, e: stamped }))
@@ -72,13 +74,13 @@ function dispatchEvent(threadId: string, msg: string): void {
   } catch {
     return;
   }
-  if (env.o === ORIGIN_ID) return; // 本副本回环:本地 listeners 已送达
+  if (env.o === ORIGIN_ID) return; // this replica's own loop: local listeners already delivered
   for (const fn of set) {
-    try { fn(env.e); } catch { /* 单个订阅者异常不拖垮分发 */ }
+    try { fn(env.e); } catch { /* a single subscriber's failure must not drag down the dispatch */ }
   }
 }
 
-/** SSE 侧:订阅他副本镜像事件(异源转发给 fn,本副本回环跳过)。返回退订函数(幂等)。 */
+/** SSE side: subscribe to other-replica mirror events (forwarding cross-origin ones to fn; this replica's own loops are skipped). Returns the unsubscribe function (idempotent). */
 export function subscribeThreadMirror(threadId: string, fn: (e: unknown) => void): () => void {
   let set = _evHandlers.get(threadId);
   const first = !set || set.size === 0;
@@ -109,63 +111,67 @@ export function subscribeThreadMirror(threadId: string, fn: (e: unknown) => void
   };
 }
 
-// ── 线程事件 seq(全局单调) ──────────────────────────────────────────────────
-// seq 曾是每副本内存计数器:三副本下各有一本账,副本重启/冷构建归零,SSE 快照信封带的
-// 基线因此失真——react-pi 把「seq 更低的快照」当序列重置(lastSeq 打回 ~0),后续镜像
-// message_start 无条件 append,用户消息在快照+事件里各一份 = 前端双气泡。seq 上移到
-// Redis(每事件 INCR,串行泵内分配,见 session.ts)后基线全局单调,快照/GET 体带真实
-// 高水位,react-pi 内建的旧事件门/快照重置检测/overtaken 保护全部生效。
+// ── Thread event seq (globally monotonic) ──────────────────────────────────────────────────
+// seq used to be a per-replica in-memory counter: three replicas kept three ledgers, replica restarts / cold builds
+// zeroed them, and the baseline carried by the SSE snapshot envelope went wrong accordingly — react-pi treats
+// "a snapshot with a lower seq" as a sequence reset (lastSeq snapped back to ~0), then subsequent mirror
+// message_start events append unconditionally, and the user message exists once in the snapshot plus once in an
+// event = a doubled bubble on the frontend. After seq moved up to
+// Redis (one INCR per event, allocated inside the serial pump; see session.ts), the baseline is globally monotonic;
+// snapshots/GET bodies carry the true high-water mark, and react-pi's built-in stale-event gate / snapshot-reset
+// detection / overtaken protections all take effect.
 
 export const THREAD_SEQ_PREFIX = 'itest:thread-seq:';
-/** Redis 故障/无 Redis 时的进程内兜底计数(跨副本一致性丢失,单进程语义不变)。 */
+/** In-process fallback counter when Redis fails / is absent (cross-replica consistency is lost; single-process semantics unchanged). */
 const localSeqFallback = new Map<string, number>();
 
-/** 分配下一个全局事件 seq。Redis 故障时退化为本地计数:已发出的高 seq 会让别的副本
- *  事件在前端被旧事件门暂时挡住,直到下一次快照重建基线,属可自愈降级。 */
+/** Allocate the next global event seq. On Redis failure it degrades to local counting: high seqs already emitted
+ *  will make other replicas' events temporarily held back by the frontend's stale-event gate until the next snapshot
+ *  rebuilds the baseline — a self-healing degradation. */
 export async function allocateThreadSeq(threadId: string): Promise<number> {
   const r = getPub();
   if (r) {
     try {
       return await r.incr(`${THREAD_SEQ_PREFIX}${threadId}`);
-    } catch { /* 落本地兜底 */ }
+    } catch { /* fall to the local fallback */ }
   }
   const next = (localSeqFallback.get(threadId) ?? 0) + 1;
   localSeqFallback.set(threadId, next);
   return next;
 }
 
-/** 当前 seq 高水位(冷构建基线)。键不存在/无 Redis → 0。 */
+/** Current seq high-water mark (cold-build baseline). Missing key / no Redis → 0. */
 export async function currentThreadSeq(threadId: string): Promise<number> {
   const r = getPub();
   if (r) {
     try {
       return Number(await r.get(`${THREAD_SEQ_PREFIX}${threadId}`)) || 0;
-    } catch { /* 落本地兜底 */ }
+    } catch { /* fall to the local fallback */ }
   }
   return localSeqFallback.get(threadId) ?? 0;
 }
 
-/** 线程删除时清 seq 键(幂等)。id 不复用,仅为卫生;进程重启/Redis 重启不清——
- *  全局单调性正是要跨重启保住的状态。 */
+/** Clear the seq key when a thread is deleted (idempotent). Ids are never reused — hygiene only; process restarts / Redis restarts must not clear it —
+ *  global monotonicity is precisely the state that must survive restarts. */
 export function deleteThreadSeq(threadId: string): void {
   localSeqFallback.delete(threadId);
   void getPub()?.del(`${THREAD_SEQ_PREFIX}${threadId}`).catch(() => undefined);
 }
 
-// ── cancel 命令 ──────────────────────────────────────────────────────────────
+// ── cancel command ──────────────────────────────────────────────────────────────
 
-/** 源侧:广播 cancel 命令(值=发起副本 ORIGIN_ID,供各副本过滤自己的回环)。 */
+/** Source side: broadcast the cancel command (value = the originating replica's ORIGIN_ID, so each replica can filter out its own loop). */
 export function publishThreadCancel(threadId: string): void {
   void getPub()?.publish(`${THREAD_CMD_PREFIX}${threadId}`, ORIGIN_ID).catch(() => undefined);
 }
 
 function dispatchCommand(threadId: string, msg: string): void {
-  if (msg === ORIGIN_ID) return; // 本副本 cancelThread 已走本地快路径 abort
+  if (msg === ORIGIN_ID) return; // this replica's cancelThread already aborted via the local fast path
   _cancelHandler?.(threadId);
 }
 
-/** 注册本地 abort 处理并(一次性)PSUBSCRIBE 命令频道;无 Redis 时仅注册不订阅。
- *  session.ts 模块加载时调用;重复调用只更新处理函数,不重复订阅。 */
+/** Register the local abort handler and (once) PSUBSCRIBE the command channel; without Redis, register only and don't subscribe.
+ *  Called at session.ts module load; repeated calls only update the handler, never re-subscribe. */
 export function startThreadCommandWatch(onCancel: (threadId: string) => void): void {
   _cancelHandler = onCancel;
   if (_cmdWatchStarted) return;
@@ -177,9 +183,9 @@ export function startThreadCommandWatch(onCancel: (threadId: string) => void): v
   });
 }
 
-// ── 运行态探测 ───────────────────────────────────────────────────────────────
+// ── Running-state probing ───────────────────────────────────────────────────────────────
 
-/** 他副本是否正持有该线程的运行锁。无 Redis/错误 → false(退化为本地视角)。 */
+/** Whether another replica currently holds this thread's run lock. No Redis / error → false (degrades to the local view). */
 export async function threadRunRemote(threadId: string): Promise<boolean> {
   const r = getPub();
   if (!r) return false;

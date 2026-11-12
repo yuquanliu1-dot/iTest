@@ -1,8 +1,8 @@
 /**
- * 探索会话看门狗：把「执行器已死、状态却还停在 running」的僵死会话判死。
+ * Exploration session watchdog: declares dead the zombie sessions whose "executor is gone but status still says running".
  *
- * 判据 = 心跳超时（heartbeat_at）。真源：发版重建 api 容器 → 执行器进程被杀 →
- * exec worker 的 catch 只写日志不写状态 → 会话永远 running → 删除永远 409。
+ * Criterion = heartbeat timeout (heartbeat_at). Source of truth: rebuilding the api container on release kills the executor process →
+ * the exec worker's catch only logs without writing status → session stays running forever → deletion always 409.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
@@ -30,7 +30,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** 建一条会话（心跳时刻可指定；null = 从未心跳）。 */
+/** Insert a session (heartbeat time can be specified; null = never heartbeated). */
 async function insertSession(heartbeatAt: Date | null, status = 'running'): Promise<string> {
   const r = await pool.query(
     `INSERT INTO exploration_sessions(project_id, version_id, title, charter, persona, status, heartbeat_at)
@@ -89,7 +89,7 @@ describe('探索会话看门狗', () => {
     await sweepStaleExplorations();
     const row = (await pool.query(`SELECT status FROM exploration_sessions WHERE id=$1`, [id])).rows[0]!;
     expect(row.status).toBe('failed');
-    // 路由层的删除守卫只看 status running/pending + 未请求取消 → 判死后可删
+    // The route-level delete guard only checks status running/pending + no cancel requested → deletable after being declared dead
     const del = await pool.query(`DELETE FROM exploration_sessions WHERE id=$1`, [id]);
     expect(del.rowCount).toBe(1);
   });

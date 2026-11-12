@@ -1,6 +1,6 @@
 /**
- * R3.5 失败教训路由（requireManager）：教训列表 + 人工退役。
- * assistant_failure_signals 不暴露路由（内部采集层）。
+ * R3.5 failure-lesson routes (requireManager): lesson list + manual retirement.
+ * assistant_failure_signals exposes no routes (internal collection layer).
  */
 import { Router } from 'express';
 import { and, desc, eq } from 'drizzle-orm';

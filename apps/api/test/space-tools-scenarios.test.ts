@@ -6,8 +6,8 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 import { resolveConfirmation } from '../src/pi/space/confirm.js';
 
-// 注意:buildScenariosTools 链上静态引入 db/client(DATABASE_URL 在 beforeAll 才指向容器),
-// 必须在测试体内动态 import(与 space-tools-cases.test.ts 同模式),否则查询打到默认本地库。
+// Note: the buildScenariosTools chain statically imports db/client (DATABASE_URL only points at the container inside beforeAll),
+// so it must be dynamically imported inside the test body (same pattern as space-tools-cases.test.ts), otherwise queries hit the default local DB.
 async function toolOf(ctx: SpaceToolsContext) {
   return (await import('../src/pi/space/tools/scenarios.js')).buildScenariosTools(ctx)[0]!;
 }
@@ -44,7 +44,7 @@ function makeCtx(over: Partial<SpaceToolsContext> = {}): { ctx: SpaceToolsContex
   return { ctx, events };
 }
 
-/** execute 在 confirm 前有异步 DB 查询 → 轮询等 confirm_request。 */
+/** execute runs async DB queries before confirm → poll and wait for confirm_request. */
 async function untilConfirm(events: Array<Record<string, unknown>>): Promise<string> {
   for (let i = 0; i < 100; i++) {
     const e = events.find((x) => x.type === 'confirm_request');

@@ -1,13 +1,13 @@
 /**
- * 用户管理服务。鉴权 / 可见性模型：
- *   - 调用者的「可见组织集合」= managerOrgPaths 子树并集 ∪ 直接 membership
- *   - 跨租户存在性防御：USER_NOT_FOUND 与 USER_NOT_AUTHZ 一律在 route 层映射为 404，
- *     不泄露「用户存在但跨租户」的存在性预言机。
- *   - 用户可见的「项目分配」来自 project_assignments，按可见组织裁剪后再展示，
- *     避免显示「我在 B 组织看不到的、但 B 组织分配给我」的项目。
+ * User management service. Auth / visibility model:
+ *   - The caller's "visible org set" = union of managerOrgPaths subtrees ∪ direct memberships
+ *   - Cross-tenant existence defense: USER_NOT_FOUND and USER_NOT_AUTHZ are both mapped to 404 at the route layer,
+ *     never leaking the "user exists but cross-tenant" existence oracle.
+ *   - A user's visible "project assignments" come from project_assignments, trimmed to visible orgs before display,
+ *     avoiding showing projects "I can't see in org B, but that org B assigned to me".
  *
- * 设计沿 iDO apps/dispatch-gateway/src/services/user.service.ts，按 iTest PG schema
- * （uuid、timestamp、boolean 而非 bigint 0/1）适配。
+ * Design follows iDO apps/dispatch-gateway/src/services/user.service.ts, adapted to the iTest PG schema
+ * (uuid, timestamp, boolean instead of bigint 0/1).
  */
 import { and, eq, ilike, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -58,7 +58,7 @@ export interface CallerScope {
   managerOrgPaths: string[];
 }
 
-/** 与 organizationService.getManagedSubtree 的子树判定同源。空 path 是历史脏数据，过滤掉。 */
+/** Same source as organizationService.getManagedSubtree's subtree test. Empty paths are historical dirty data, filtered out. */
 async function visibleOrgIds(caller: CallerScope): Promise<string[]> {
   const ids = new Set<string>();
   for (const p of caller.managerOrgPaths) {
@@ -77,11 +77,11 @@ function toUserSummary(row: typeof users.$inferSelect): UserSummary {
   return { id: row.id, username: row.username, displayName: row.displayName, email: row.email };
 }
 
-/** 排除已停用（disabledAt 非空）的；与 iDO auth.service.login 守卫一致。 */
+/** Excludes the disabled (non-null disabledAt); consistent with iDO auth.service.login's guard. */
 const activeUserFilter = sql`${users.disabledAt} IS NULL`;
 
-/** 用户目录检索谓词。excludeOrgId 多用于「往组织 X 加成员的候选清单」过滤。
- *  注：excludeOrgId 同步排除子树的成员资格——子组织成员也视为「已在该组织内」，避免同组织跨层重复。
+/** User directory search predicate. excludeOrgId is mostly for filtering "candidate lists when adding members to org X".
+ *  Note: excludeOrgId also excludes subtree memberships — sub-org members count as "already in the org", avoiding same-org cross-level duplicates.
  */
 function buildUserSearchWhere(orgIds: string[], q: string | undefined, excludeSubtreeOrgIds?: string[]) {
   const conds: ReturnType<typeof eq>[] = [inArray(organizationMembers.organizationId, orgIds)];
@@ -134,7 +134,7 @@ export const userService = {
     if (scopeIds.length === 0) {
       return { items: [], total: 0, page, limit };
     }
-    // excludeOrgId 拓展为「该组织 + 子树」：避免「子组织成员」重新被加到祖先组织。
+    // excludeOrgId is widened to "that org + subtree": avoids re-adding "sub-org members" to an ancestor org.
     let excludeSubtree: string[] | undefined;
     if (opts.excludeOrgId) {
       const exPath = (await db.select({ path: organizations.path }).from(organizations).where(eq(organizations.id, opts.excludeOrgId)).limit(1))[0]?.path;
@@ -202,8 +202,8 @@ export const userService = {
       .filter((x): x is UserOrgMembership => x !== null)
       .sort((a, b) => a.organizationPath.localeCompare(b.organizationPath));
 
-    // 仅统计「在调用者可见范围内的组织」里发生的项目分配。跨组织分配的，assignment.organizationId
-    // 不一定落在调用者可见集合——这类项目不计入 projectCount。
+    // Only counts project assignments that happened in "orgs within the caller's visible range". For cross-org assignments,
+    // assignment.organizationId doesn't necessarily fall in the caller's visible set — such projects don't count into projectCount.
     const projectIds = await projectAssignmentsByUserInOrgs(userId, [...visible]);
 
     return {
@@ -223,13 +223,13 @@ export const userService = {
     userId: string,
     opts: { page: number; limit: number },
   ): Promise<Paged<{ id: string; name: string; description: string | null; organizationId: string | null }>> {
-    await this.getUserDetail(caller, userId); // 可见性同款校验
+    await this.getUserDetail(caller, userId); // same visibility check
 
     const visible = await visibleOrgIds(caller);
     const ids = await projectAssignmentsByUserInOrgs(userId, visible);
     if (ids.length === 0) return { items: [], total: 0, page: opts.page, limit: opts.limit };
 
-    // 项目组织由产品线推导（projects 已无 organization_id 列），响应里仍回传派生值。
+    // A project's org is derived from its product line (projects no longer has an organization_id column); the response still returns the derived value.
     const rows = ids.length
       ? await db
           .select({ id: projects.id, name: projects.name, description: projects.description, organizationId: productLines.organizationId })
@@ -257,9 +257,9 @@ export const userService = {
     };
   },
 
-  /** 软删除：停用 + 清空 memberships 与 assignments + tokenVersion +1（踢下线）。 */
+  /** Soft delete: disable + clear memberships and assignments + tokenVersion +1 (kicks sessions offline). */
   async disableUser(caller: CallerScope, userId: string): Promise<void> {
-    await this.getUserDetail(caller, userId); // 可见性同款校验
+    await this.getUserDetail(caller, userId); // same visibility check
     await db
       .update(users)
       .set({ disabledAt: new Date(), tokenVersion: sql`${users.tokenVersion} + 1`, updatedAt: new Date() })
@@ -282,7 +282,7 @@ export const userService = {
     return await this.getUserDetail(caller, userId);
   },
 
-  /** 重置他人密码：一次性临时密码 + 强制首登改密 + 踢下线。鉴权比 updateUser 严：必须在 caller 管理子树内。 */
+  /** Resets someone else's password: one-time temporary password + forced change on first login + kicked offline. Stricter auth than updateUser: must be within the caller's managed subtree. */
   async resetUserPassword(caller: CallerScope, userId: string): Promise<string> {
     const user = (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
     if (!user || user.disabledAt !== null) throw new Error('USER_NOT_FOUND');
@@ -313,7 +313,7 @@ export const userService = {
     return temporaryPassword;
   },
 
-  /** admin 用：在 caller 可见范围内创建账号（不自动加入任何组织）。 */
+  /** admin use: creates an account within the caller's visible range (not auto-joined to any org). */
   async createUser(input: {
     username: string;
     displayName: string;
@@ -339,7 +339,7 @@ export const userService = {
     return { ...toUserSummary(row!), _temporaryPassword: input.password };
   },
 
-  /** 给 organizationMemberRepo 用：列出某用户在 caller 可见组织内的已分配项目 id。 */
+  /** For organizationMemberRepo: lists a user's assigned project ids within the caller's visible orgs. */
   async getAssignedProjectIdsInOrgs(userId: string, orgIds: string[]): Promise<string[]> {
     return projectAssignmentsByUserInOrgs(userId, orgIds);
   },

@@ -1,11 +1,15 @@
 /**
- * 判定与收尾类工具（pi 链路）：report_finding（A1 证据帧）/ note_excluded（负面账本）/ finish。
+ * Judgment and wrap-up tools (pi chain): report_finding (A1 evidence frame) / note_excluded
+ * (exclusion ledger) / finish.
  *
- * - report_finding：模型主动上报缺陷 → 工具内部 settle+截图（决策帧）→ 落库 → 帧图回传自检。
- *   legacy 的截图发生在 onFindings 回调（下一轮 JSON 到达、页面已被改掉之后）——证据与决策
- *   错位是 legacy 的结构性缺陷，这里从机制上钉死。
- * - note_excluded：申报「已排除的假设 + 依据」——外化记忆的最小切片。只存排除项不存信念。
- * - finish：明确收尾（总结 + 覆盖账本快照随终态落库）。
+ * - report_finding: the model proactively reports a defect → the tool settles+screenshots
+ *   internally (decision frame) → persists to DB → the frame image is returned for self-check.
+ *   legacy screenshotted in the onFindings callback (after the next round of JSON arrived and the
+ *   page had already changed) — that evidence/decision mismatch was a structural legacy flaw,
+ *   pinned down mechanically here.
+ * - note_excluded: declares "excluded hypothesis + basis" — the minimal slice of externalized
+ *   memory. Stores exclusions only, not beliefs.
+ * - finish: explicit wrap-up (summary + coverage ledger snapshot persisted with the terminal state).
  */
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';

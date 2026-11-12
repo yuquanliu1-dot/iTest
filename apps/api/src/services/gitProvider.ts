@@ -1,10 +1,10 @@
 /**
- * Git provider 抽象。当前只支持「仓库元数据 + 可达性验证」，不接 clone / file read。
- * 引入背景：iTest 的 AI 生成用例步骤会需要看代码；现在先确认 URL 形式合法、目标 host
- * 可达、PAT 有效（GitHub 走 REST API；GitLab 走 git ls-remote 真实探测；Gitee 仅 URL 形式校验）。
+ * Git provider abstraction. Currently supports "repo metadata + reachability verification" only; no clone / file read.
+ * Why it exists: iTest's AI-generated case steps will need to read code; for now we confirm the URL form is valid,
+ * the target host is reachable, and the PAT works (GitHub via REST API; GitLab via real git ls-remote probing; Gitee URL-form check only).
  *
- * 接口契约：verifyRepoAccess 返回 { valid: boolean, error?: string }，失败原因要可读，
- * 让前端表单在保存前提示。
+ * Interface contract: verifyRepoAccess returns { valid: boolean, error?: string }; failure reasons must be readable
+ * so the frontend form can warn before saving.
  */
 import { spawn } from 'node:child_process';
 
@@ -20,13 +20,13 @@ export interface VerifyRepoInput {
 export interface VerifyRepoResult {
   valid: boolean;
   error?: string;
-  /** 分支是否存在（branch 非空时才有意义） */
+  /** Whether the branch exists (meaningful only when branch is non-empty) */
   branchExists?: boolean;
-  /** 默认分支（若 provider 可读出） */
+  /** Default branch (when the provider exposes it) */
   defaultBranch?: string;
 }
 
-/** URL 形式校验：与 iDO provider.validateRepoName 同型，但不去查实际 repo。 */
+/** URL form validation: same shape as iDO provider.validateRepoName, but without querying the actual repo. */
 export function validateRepoUrl(repoUrl: string, provider: GitProviderName): { valid: boolean; error?: string } {
   let parsed: URL;
   try {
@@ -42,7 +42,7 @@ export function validateRepoUrl(repoUrl: string, provider: GitProviderName): { v
       if (!/(^|\.)github\.com$/i.test(parsed.hostname)) {
         return { valid: false, error: 'GitHub 仓库 URL 主机名必须是 github.com' };
       }
-      // 形如 /owner/repo[.git][/...]
+      // Form: /owner/repo[.git][/...]
       if (!/^\/[^/]+\/[^/]+(\.git)?\/?$/.test(parsed.pathname)) {
         return { valid: false, error: 'GitHub 仓库 URL 形如 https://github.com/<owner>/<repo>' };
       }
@@ -58,7 +58,7 @@ export function validateRepoUrl(repoUrl: string, provider: GitProviderName): { v
       return { valid: true };
     }
     case 'gitlab': {
-      // 自建 GitLab 不限 hostname；要求路径含 owner/repo
+      // Self-hosted GitLab: hostname unrestricted; path must contain owner/repo
       if (!/^\/[^/]+\/[^/]+(\.git)?\/?$/.test(parsed.pathname)) {
         return { valid: false, error: 'GitLab 仓库 URL 形如 https://<host>/<owner>/<repo>' };
       }
@@ -68,7 +68,7 @@ export function validateRepoUrl(repoUrl: string, provider: GitProviderName): { v
 }
 
 export function validateRepoName(name: string): { valid: boolean; error?: string } {
-  // GitHub/Gitee 仓库名：字母数字 + . _ -，最长 100
+  // GitHub/Gitee repo names: alphanumerics plus . _ -, max 100
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) {
     return { valid: false, error: '仓库名只允许字母数字与 . _ -，最长 100' };
   }
@@ -76,15 +76,15 @@ export function validateRepoName(name: string): { valid: boolean; error?: string
 }
 
 /**
- * 校验仓库可达性 + 分支存在。
- *  - URL 形式校验总是先做
- *  - GitHub：HEAD /repos/{owner}/{repo}（带 PAT）；无 PAT 则 GET /repos/.../branches/{branch}
- *    （unauthenticated 60/hr；超时即「提示需 PAT」）
- *  - GitLab：git ls-remote --symref 真实探测（与 clone 同传输层），一次拿默认分支 + 分支存在性
- *  - Gitee：URL 形式校验；未配置 token 时只校验 URL
+ * Verifies repo reachability + branch existence.
+ *  - URL form validation always runs first
+ *  - GitHub: HEAD /repos/{owner}/{repo} (with PAT); without a PAT, GET /repos/.../branches/{branch}
+ *    (unauthenticated 60/hr; timeout is reported as "PAT required")
+ *  - GitLab: real git ls-remote --symref probing (same transport as clone), fetching default branch + branch existence in one shot
+ *  - Gitee: URL form validation; without a token configured, only the URL is checked
  */
 
-/** 远端 URL 注入 PAT（gitlab 同 clone 语义：oauth2:<pat>；无 PAT 原样返回）。 */
+/** Injects the PAT into the remote URL (gitlab mirrors clone semantics: oauth2:<pat>; returned as-is when no PAT). */
 function withPat(repoUrl: string, pat?: string): string {
   const u = new URL(repoUrl);
   if (pat) {
@@ -94,12 +94,12 @@ function withPat(repoUrl: string, pat?: string): string {
   return u.toString();
 }
 
-/** GitLab 真实可达性探测。用 git ls-remote 而非 HTTP HEAD：与 cloneFirst 走完全相同的传输层，
- *  clone 会失败的这里必失败——JW/code.srdcloud.cn 这类网络不通在保存前即暴露，而不是等
- *  AI 工作台 checkout 报「仓库不可用」。PAT 注入规则与 repo.ts injectPat 的 gitlab 分支对齐
- *  （oauth2:<pat>），无 PAT 原样带用户名探测，私有仓库会归为认证失败提示补 PAT。 */
+/** Real GitLab reachability probe. Uses git ls-remote rather than HTTP HEAD: exactly the same transport as cloneFirst,
+ *  so anything clone would fail at fails here too — unreachable networks like JW/code.srdcloud.cn surface before saving
+ *  instead of waiting for the AI workbench checkout to report "repo unavailable". PAT injection matches repo.ts injectPat's
+ *  gitlab branch (oauth2:<pat>); without a PAT it probes as-is with the username, classifying private repos as auth failure. */
 async function probeGitLab(input: VerifyRepoInput): Promise<VerifyRepoResult> {
-  // --symref HEAD 顺带吐出远端默认分支（ref: refs/heads/<x>\tHEAD），前端据此自动纠正 main/master 写错
+  // --symref HEAD also yields the remote default branch (ref: refs/heads/<x>\tHEAD); the frontend uses it to auto-correct a mis-typed main/master
   const args = ['ls-remote', '--symref', withPat(input.repoUrl, input.pat), 'HEAD'];
   if (input.branch) args.push(`refs/heads/${input.branch}`);
   const r = await runGitProbe(args, 20_000);
@@ -117,8 +117,9 @@ async function probeGitLab(input: VerifyRepoInput): Promise<VerifyRepoResult> {
   return { valid: true, defaultBranch, branchExists };
 }
 
-/** 带硬超时的 git ls-remote。禁交互（GIT_TERMINAL_PROMPT=0 + GIT_ASKPASS=echo），
- *  网络挂起时 10s 强杀并归为「连接超时」；stderr 按认证特征分类，其余原样透出 git 关键行。 */
+/** git ls-remote with a hard timeout. Interaction disabled (GIT_TERMINAL_PROMPT=0 + GIT_ASKPASS=echo);
+ *  a hung network gets SIGKILLed after 10s and reported as "connection timeout"; stderr is classified by auth signatures,
+ *  the rest passes git's key line through verbatim. */
 function runGitProbe(
   args: string[],
   timeoutMs: number,
@@ -167,10 +168,10 @@ export async function verifyRepoAccess(input: VerifyRepoInput): Promise<VerifyRe
 
   if (input.provider === 'gitlab') return probeGitLab(input);
   if (input.provider !== 'github') {
-    // Gitee 当前只做 URL 形式校验；不假装可达
+    // Gitee currently only validates the URL form; doesn't fake reachability
     return { valid: true };
   }
-  // GitHub：调用 REST API HEAD /repos/{owner}/{repo}；带 PAT 可放宽限速
+  // GitHub: REST API HEAD /repos/{owner}/{repo}; a PAT relaxes the rate limit
   const m = input.repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(\.git)?\/?$/i);
   if (!m) return { valid: false, error: '无法解析 GitHub owner/repo' };
   const owner = m[1]!;
@@ -199,11 +200,11 @@ export async function verifyRepoAccess(input: VerifyRepoInput): Promise<VerifyRe
 }
 
 /**
- * 列出远程 refs（branch 或 tag）。仅做存在性/可达性，不 clone。
- *  - GitHub：REST API（带 PAT 走认证；不带走匿名 60/hr）
- *  - GitLab：git ls-remote --refs（与 clone 同传输层，PAT 同 oauth2 注入）——
- *    2026-10-24 之前只对 GitHub 支持、gitlab 恒报「请手动输入」，版本 ref 弹窗下拉永远空
- *  - Gitee：未接列 refs 的通道，给明确错误让 UI 走「手动输入」分支。
+ * Lists remote refs (branch or tag). Existence/reachability only, no clone.
+ *  - GitHub: REST API (with PAT it authenticates; without, anonymous 60/hr)
+ *  - GitLab: git ls-remote --refs (same transport as clone, PAT injected the same oauth2 way) —
+ *    before 2026-10-24 only GitHub was supported and gitlab always said "please enter manually", so the version-ref dropdown was permanently empty
+ *  - Gitee: no refs-listing channel wired up; a clear error steers the UI into the "enter manually" branch.
  */
 export async function listRefs(input: VerifyRepoInput & { kind: 'branch' | 'tag' }): Promise<string[]> {
   const urlCheck = validateRepoUrl(input.repoUrl, input.provider);
@@ -223,7 +224,7 @@ export async function listRefs(input: VerifyRepoInput & { kind: 'branch' | 'tag'
     const repo = m[2]!;
     const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'iTest' };
     if (input.pat) headers.Authorization = `Bearer ${input.pat}`;
-    // tags 走 /repos/{owner}/{repo}/tags?per_page=100；branches 走 /repos/{owner}/{repo}/branches?per_page=100
+    // tags hit /repos/{owner}/{repo}/tags?per_page=100; branches hit /repos/{owner}/{repo}/branches?per_page=100
     const path = input.kind === 'tag'
       ? `/repos/${owner}/${repo}/tags?per_page=100`
       : `/repos/${owner}/${repo}/branches?per_page=100`;
@@ -234,12 +235,12 @@ export async function listRefs(input: VerifyRepoInput & { kind: 'branch' | 'tag'
     const data = (await res.json()) as Array<{ name: string }>;
     return data.map((r) => r.name);
   }
-  // Gitee：当前不接 API 列远端 refs。错误提示 UI 走「手动输入」分支。
+  // Gitee: no API channel for listing remote refs yet. The error steers the UI into the "enter manually" branch.
   throw new Error(`provider ${input.provider} 暂不支持列举 ${input.kind}，请手动输入`);
 }
 
-/** 解析 ls-remote 输出行 `<sha>\t<full-ref>`，剥掉 refs/heads/ 或 refs/tags/ 前缀；
- *  跳过 `^{}` 解引用行与不含 tab 的杂行。导出仅供单测。 */
+/** Parses ls-remote output lines `<sha>\t<full-ref>`, stripping the refs/heads/ or refs/tags/ prefix;
+ *  skips `^{}` deref lines and stray lines without a tab. Exported for unit tests only. */
 export function parseLsRemoteRefs(stdout: string, kind: 'branch' | 'tag'): string[] {
   const prefix = kind === 'tag' ? 'refs/tags/' : 'refs/heads/';
   const out: string[] = [];
@@ -258,12 +259,12 @@ export interface VerifyRefResult {
   error?: string;
 }
 
-/** 校验远端 branch/tag 是否存在——保存 ref 前的「测试」，写错在弹窗里暴露，
- *  而不是等 AI 工作台 checkout 静默回落默认分支或 clone 失败。
- *  - GitLab：git ls-remote 精确匹配 refs/heads/<ref> / refs/tags/<ref>（与 clone 同传输层）；
- *    无匹配时 git exit 0 + 空 stdout，据此区分「不存在」与「探测失败」
- *  - GitHub：REST API（branches/<ref> / git/ref/tags/<ref>）
- *  - Gitee：未接校验通道，提示手动确认。 */
+/** Verifies the remote branch/tag exists — the "test" before saving a ref, surfacing typos in the dialog,
+ *  instead of waiting for the AI workbench checkout to silently fall back to the default branch or the clone to fail.
+ *  - GitLab: git ls-remote exact-matches refs/heads/<ref> / refs/tags/<ref> (same transport as clone);
+ *    no match yields git exit 0 + empty stdout, which distinguishes "missing" from "probe failed"
+ *  - GitHub: REST API (branches/<ref> / git/ref/tags/<ref>)
+ *  - Gitee: no verification channel wired up; asks for manual confirmation. */
 export async function verifyRef(
   input: VerifyRepoInput & { ref: string; kind: 'branch' | 'tag' },
 ): Promise<VerifyRefResult> {
@@ -274,8 +275,8 @@ export async function verifyRef(
   const noun = input.kind === 'tag' ? '标签' : '分支';
 
   if (input.provider === 'gitlab') {
-    // branch→refs/heads/<ref>：git 前缀是 heads 不是 branchs（拼成 refs/branchs/ 会精确匹配落空,
-    // exit 0 空输出 → 分支恒误报「远端不存在」；tag 的 refs/tags/ 恰好拼对所以只有分支坏）。
+    // branch→refs/heads/<ref>: git's prefix is heads, not branchs (spelling refs/branchs/ makes the exact match miss,
+    // exit 0 with empty output → the branch always false-reports "missing on remote"; tag's refs/tags/ happens to be spelled right, so only branches were broken).
     const pattern = input.kind === 'tag' ? `refs/tags/${ref}` : `refs/heads/${ref}`;
     const r = await runGitProbe(['ls-remote', withPat(input.repoUrl, input.pat), pattern], 20_000);
     if (!r.ok) return r.result;

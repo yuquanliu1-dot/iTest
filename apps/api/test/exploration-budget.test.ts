@@ -1,11 +1,13 @@
 /**
- * 探索预算口径：会话墙钟由轮次物化。
+ * Exploration budget accounting: the session wall clock is materialized from turns.
  *
- * 背景（2026-11-12 走查）：固定 15 分钟墙钟不随轮次预算放大 ⇒ 用户把「轮次预算」
- * 配到 60 也没用，跑不满 15 分钟就被墙钟停掉，旋钮形同虚设。轮次是深度的唯一旋钮，
- * 墙钟只是它的物化 + 兜底；单轮挂死另由空闲看门狗兜（不混在墙钟里）。
+ * Background (2026-11-12 walkthrough): the fixed 15-minute wall clock doesn't scale with the turn budget => even if the user
+ * sets "turn budget" to 60, it's useless -- the session is stopped by the wall clock before reaching 15 minutes, rendering the knob decorative.
+ * Turns are the only depth knob, and the wall clock is just its materialization + fallback; a single hung round is handled
+ * separately by the idle watchdog (not mixed into the wall clock).
  *
- * 本文件是纯计算用例——静态 import explorationBudget 不拖 db（预算口径要能不起库单测）。
+ * This file contains pure-computation cases -- statically importing explorationBudget doesn't drag in db (the budget
+ * accounting must be unit-testable without a database).
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -32,7 +34,7 @@ describe('探索预算口径', () => {
   it('单调递增；默认预算与看门狗阈值都在墙钟之内', () => {
     expect(explorationWallClockMs(30)).toBeGreaterThan(explorationWallClockMs(20));
     expect(explorationWallClockMs(EXPLORATION_MAX_TURNS)).toBeLessThan(EXPLORATION_WALL_CLOCK_MAX_MS);
-    // 挂死看门狗必须比墙钟先响，否则墙钟到了也没人能判挂死。
+    // the hung-round watchdog must fire before the wall clock, otherwise nobody can call a hang when the wall clock expires.
     expect(EXPLORATION_IDLE_TIMEOUT_MS).toBeLessThan(EXPLORATION_WALL_CLOCK_MIN_MS);
   });
 });

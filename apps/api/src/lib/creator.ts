@@ -1,6 +1,6 @@
 /**
- * 创建人解析 helper：批量把 userId 解析为用户摘要，各处 list/detail 序列化统一追加 createdBy。
- * created_by_user_id 可空（历史存量 / 用户已删 ON DELETE SET NULL），未命中一律按 null 处理。
+ * Creator resolution helper: batch-resolves userIds into user summaries; all list/detail serializers append createdBy uniformly.
+ * created_by_user_id is nullable (legacy rows / user deleted with ON DELETE SET NULL); misses are always treated as null.
  */
 import { inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -12,7 +12,7 @@ export interface ResolvedUser {
   displayName: string;
 }
 
-/** 批量解析 userId → 用户摘要 Map。去重 + 跳过空值；不存在的 id 不出现在 Map 里。 */
+/** Batch-resolves userIds → a map of user summaries. Deduplicates + skips empties; nonexistent ids never appear in the map. */
 export async function resolveUsersByIds(
   ids: Array<string | null | undefined>,
 ): Promise<Map<string, ResolvedUser>> {
@@ -27,7 +27,7 @@ export async function resolveUsersByIds(
   return map;
 }
 
-/** 给一组含 createdByUserId 的行批量附加 createdBy（保留原始 createdByUserId 字段）。 */
+/** Batch-attaches createdBy onto a set of rows carrying createdByUserId (keeps the original createdByUserId field). */
 export async function attachCreators<T extends { createdByUserId?: string | null }>(
   rows: T[],
 ): Promise<Array<T & { createdBy: ResolvedUser | null }>> {
@@ -38,7 +38,7 @@ export async function attachCreators<T extends { createdByUserId?: string | null
   }));
 }
 
-/** 单行版 attachCreators：null/undefined 行原样返回 null。 */
+/** Single-row version of attachCreators: null/undefined rows return null as-is. */
 export async function attachCreator<T extends { createdByUserId?: string | null }>(
   row: T | null | undefined,
 ): Promise<(T & { createdBy: ResolvedUser | null }) | null> {

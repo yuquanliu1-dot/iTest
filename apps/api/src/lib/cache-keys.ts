@@ -1,6 +1,6 @@
 /**
- * 缓存 key 集中管理;避免散落拼接。
- * 命名规则:`{domain}:{entity}[:{scope}[:{id}]]`,冒号分隔便于 SCAN 过滤。
+ * Centralized cache key management; avoids scattered concatenation.
+ * Naming rule: `{domain}:{entity}[:{scope}[:{id}]]`; colons separate segments for easy SCAN filtering.
  */
 
 export function meKey(userId: string, tokenVersion: number): string {
@@ -35,27 +35,27 @@ export function tagsKey(orgId: string): string {
   return `tags:${orgId}`;
 }
 
-/** scenario 缓存以项目为粒度(同项目多 requirement 共享)。 */
+/** scenario cache at project granularity (multiple requirements in the same project share it). */
 export function scenariosForProjectKey(projectId: string): string {
   return `scenarios:project:${projectId}`;
 }
 
-/** scenario 缓存按 requirement 粒度(GET /requirements/:rid/scenarios 用)。 */
+/** scenario cache at requirement granularity (used by GET /requirements/:rid/scenarios). */
 export function scenariosForRequirementKey(requirementId: string): string {
   return `scenarios:requirement:${requirementId}`;
 }
 
-/** 计划运行详情(仅终态缓存;running 实时组装)。rca 落库/运行删除时须显式失效。 */
+/** Plan run detail (only final states cached; running is assembled live). Must be explicitly invalidated when an rca is persisted / the run is deleted. */
 export function planRunDetailKey(runId: string): string {
   return `planrun:detail:${runId}`;
 }
 
-/** 用例列表按项目粒度(GET /cases?projectId= 分支)。用例/步骤写路径须显式失效。 */
+/** Case list at project granularity (the GET /cases?projectId= branch). Case/step write paths must invalidate explicitly. */
 export function casesForProjectKey(projectId: string): string {
   return `cases:project:${projectId}`;
 }
 
-/** 仪表盘聚合(窗口 range=7d|30d)。TTL-only,无写失效,dashboard 容忍 60s 陈旧。 */
+/** Dashboard aggregation (window range=7d|30d). TTL-only, no write invalidation; dashboard tolerates 60s staleness. */
 export function overviewKey(projectId: string, range: string): string {
   return `overview:${projectId}:${range}`;
 }

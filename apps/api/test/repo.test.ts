@@ -29,9 +29,9 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // 不 TRUNCATE，靠 vitest 的 file-level 隔离（test 顺序 + 各自 insert）。
-  // seedProject() 复用 WeakMap 缓存的 orgId；如果前面已经 seed 过，本测试只是再添加新的
-  // 项目到同一组织下，不影响 FK。
+  // No TRUNCATE: relies on vitest's file-level isolation (test order + each own inserts).
+  // seedProject() reuses the WeakMap-cached orgId; if already seeded earlier, this test only adds new
+  // projects under the same org, without touching FKs.
   const seed = await seedProject(pool);
   projectId = seed.projectId;
   const r = await pool.query(`INSERT INTO requirements(title, content, project_id) VALUES ('r','c',$1) RETURNING id`, [projectId]);
@@ -55,7 +55,7 @@ describe('checkoutRepo', () => {
 async function makeBareRepo(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-bare-'));
   spawnSync('git', ['init', '--bare', dir], { stdio: 'ignore' });
-  // 推一个 commit 到 main
+  // Push one commit to main
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'itest-work-'));
   spawnSync('git', ['init', '-b', 'main', work], { stdio: 'ignore' });
   spawnSync('git', ['config', 'user.email', 't@t'], { cwd: work });
@@ -101,8 +101,8 @@ describe('checkoutRepo end-to-end (local bare repo)', () => {
     const bare = await makeBareRepo();
     await pool.query(`UPDATE projects SET repo_url=$1, default_branch='main', provider='github' WHERE id=$2`, [bare, projectId]);
     const { checkoutRepo } = await import('../src/pi/repo.js');
-    // 两路并发都从「目录不存在」进入：赢家锁内克隆，输家等锁后二次检查走热路径。
-    // 旧实现（冷路径吞锁 + rm 在拿锁前）此场景会互相 rm/克隆同一目录。
+    // Both concurrent paths enter from "directory missing": the winner clones inside the lock, the loser re-checks after waiting and takes the hot path.
+    // The old implementation (cold path swallowed the lock + rm before acquiring it) would rm/clone the same directory over each other in this scenario.
     const [a, b] = await Promise.all([checkoutRepo(reqId), checkoutRepo(reqId)]);
     expect(a).toBe(b);
     const meta = JSON.parse(await fs.readFile(path.join(a, '.itest-sandbox.json'), 'utf8'));

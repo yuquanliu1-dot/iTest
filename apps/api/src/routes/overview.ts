@@ -46,7 +46,7 @@ async function loadBase(projectId: string, days: number) {
     : [];
   const since = new Date(Date.now() - days * 86_400_000);
   const caseFilter = cs.length ? inArray(reports.caseId, cs.map((c) => c.id)) : null;
-  // 趋势/KPI 只需时间窗内报告(旧实现全量拉所有历史在 JS 里过滤,报告表涨了这里先爆)
+  // Trend/KPI only need reports within the time window (the old implementation pulled all history and filtered in JS; as the report table grows this blows up first)
   const rsWindow = caseFilter
     ? await db
         .select({
@@ -63,7 +63,7 @@ async function loadBase(projectId: string, days: number) {
         .where(and(caseFilter, gte(reports.createdAt, since)))
         .orderBy(desc(reports.createdAt))
     : [];
-  // recent 需要全时段最新 10 条(union 性质:两端各取 top10 再归并,合并 top10 不变)
+  // recent needs the latest 10 across all time (union property: take top10 from each side and merge; the merged top10 is unchanged)
   const recentRows = caseFilter
     ? await db
         .select({
@@ -191,7 +191,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
         .groupBy(planCases.planId)
     : [];
   const caseCountMap = new Map(caseCountRows.map((r) => [r.planId, r.count]));
-  // 每 plan 全量 runs 的 N+1 合并为一次查询,按 plan 分组后各算 last 与 30d 通过率
+  // Each plan's full runs N+1 merged into one query; after grouping by plan, compute last and the 30d pass rate
   const allRuns = planIds.length
     ? await db
         .select({
@@ -213,7 +213,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
     arr.push({ status: r.status, startedAt: r.startedAt, triggeredBy: r.triggeredBy });
     runsByPlan.set(r.planId, arr);
   }
-  // 最近一次 RCA 类别(DISTINCT ON 取每 plan 最新一条带 rca 的用例结果)
+  // Latest RCA category (DISTINCT ON takes each plan's newest case result carrying an rca)
   const rcaRows = planIds.length
     ? await db.execute(sql`
         SELECT DISTINCT ON (run.plan_id) run.plan_id AS plan_id, prc.rca->>'category' AS category
@@ -249,7 +249,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
     };
   });
 
-  // 定时计划数(plan_schedules enabled,挂在本项目计划下)
+  // Scheduled plan count (plan_schedules enabled, attached to this project's plans)
   const scheduleCountRows = planIds.length
     ? await db
         .select({ count: sql<number>`count(*)::int` })
@@ -259,7 +259,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
     : [];
   const schedulesEnabled = scheduleCountRows[0]?.count ?? 0;
 
-  // AI 用量:窗口内报告逐条聚合 step_results 里的 aiUsage.calls 与自愈步数,按日分桶
+  // AI usage: per-report aggregation of aiUsage.calls and self-healed step counts inside step_results, bucketed by day
   const aiUsageRows = rsWindow.length
     ? await db.execute(sql`
         SELECT r.created_at AS created_at,
@@ -278,14 +278,14 @@ async function buildOverview(projectId: string, days: number, today: Date) {
   const aiUsage = buildDayBuckets(today, days);
   const aiUsageDayMap = new Map(aiUsage.map((b) => [b.date, b]));
   for (const row of aiUsageRows.rows as Array<{
-    // db.execute 走 drizzle 的 rawSQL 解析器：timestamp(tz off) 原样回字符串，不经列映射
+    // db.execute goes through drizzle's rawSQL parser: timestamp (tz off) comes back as a raw string, no column mapping
     created_at: string;
     calls: string | number;
     healed_steps: string | number;
   }>) {
-    // 无时区字符串直接 new Date 会按进程本地时区解析（UTC 容器写入的 UTC 墙钟在 +08 机器上
-    // 被错误平移 8h，桶落到「昨天」）；补 +0000 与 drizzle 列映射（timestamp.cjs mapFromDriverValue）
-    // 同一口径——按 UTC 解释。
+    // A timezone-less string parsed by new Date directly would use the process's local timezone (a UTC wall clock
+    // written by a UTC container would be wrongly shifted 8h on a +08 machine, buckets landing on "yesterday");
+    // appending +0000 matches the same convention as drizzle's column mapping (timestamp.cjs mapFromDriverValue) — interpret as UTC.
     const bucket = aiUsageDayMap.get(dateKey(new Date(`${row.created_at}+0000`)));
     if (!bucket) continue;
     bucket.calls += Number(row.calls) || 0;
@@ -293,7 +293,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
   }
   const aiCalls7d = aiUsage.reduce((acc, b) => acc + b.calls, 0);
 
-  // 步骤固化率:项目全量步骤中 compiled 非空占比;pending aiTask = 未固化且 instruction 非空
+  // Step solidification rate: share of non-null compiled across all steps in the project; pending aiTask = unsolidified with non-empty instruction
   const solidifyRows = await db.execute(sql`
     SELECT count(*)::int AS total,
            count(*) FILTER (WHERE jsonb_array_length(COALESCE(s.compiled, '[]'::jsonb)) > 0)::int AS solidified,
@@ -309,7 +309,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
   )[0] ?? { total: 0, solidified: 0, pending_ai: 0 };
   const solidifyRate = solidifyRow.total === 0 ? 0 : solidifyRow.solidified / solidifyRow.total;
 
-  // p95 耗时(窗口内,排除进行中/无时长报告)
+  // p95 duration (within the window, excluding in-progress/duration-less reports)
   const p95Rows = await db.execute(sql`
     SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY r.duration_ms) AS p95
     FROM reports r
@@ -320,7 +320,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
   const p95Raw = (p95Rows.rows as Array<{ p95: string | number | null }>)[0]?.p95;
   const p95DurationMs = p95Raw == null ? null : Math.round(Number(p95Raw));
 
-  // 阻塞数:窗口内计划运行中被跳过的用例结果
+  // Blocked count: skipped case results in plan runs within the window
   const blockedRows = await db.execute(sql`
     SELECT count(*)::int AS blocked
     FROM plan_run_cases prc
@@ -329,7 +329,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
   `);
   const blocked = (blockedRows.rows as Array<{ blocked: number }>)[0]?.blocked ?? 0;
 
-  // RCA 根因分布(窗口内计划运行产生的 RCA 结果)
+  // RCA root-cause distribution (RCA results produced by plan runs within the window)
   const rcaDistRows = await db.execute(sql`
     SELECT COALESCE(prc.rca->>'category', 'other') AS category,
            count(*)::int AS count,
@@ -357,7 +357,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
     }
   }
 
-  // 需求覆盖:关联 = requirementId 外键 或 requirementNo 手填编号
+  // Requirement coverage: linked = requirementId FK or a hand-filled requirementNo
   const linkedCases = cs.filter(
     (c) => c.requirementId != null || (c.requirementNo ?? '') !== '',
   ).length;
@@ -382,7 +382,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
     linked: 0,
   };
 
-  // 录制活动:按 compiled DSL kind 聚合项目内全部步骤动作(全量,非时间窗)。
+  // Recording activity: aggregates all step actions in the project by compiled DSL kind (full scope, not time-windowed).
   const recordingRows = await db.execute(sql`
     SELECT a->>'kind' AS kind, count(*)::int AS count
     FROM test_steps s
@@ -432,7 +432,7 @@ async function buildOverview(projectId: string, days: number, today: Date) {
       return {
         ...f,
         totalRuns,
-        // 疑似 flaky:窗口内多次执行且失败/通过交替出现(非稳定失败)
+        // Suspected flaky: multiple runs within the window with fail/pass alternating (not a stable failure)
         flakySuspected: totalRuns >= 3 && f.failureCount >= 2 && passCount >= 1,
       };
     });
@@ -486,12 +486,12 @@ overviewRoute.get('/:projectId/overview', async (req, res) => {
   const parsed = RangeSchema.safeParse(req.query.range);
   if (!parsed.success) throw new HttpError(400, 'bad_request', 'range must be 7d or 30d');
   await assertProjectVisible(projectId, req.user!);
-  // ?versionId= 透传：当前 dashboard 不做范围过滤（保持 KPI 与图表语义稳定），
-  // 仅允许前端带上来证明 URL 与上下文一致。
+  // ?versionId= pass-through: the dashboard currently does no scope filtering by it (keeping KPI and chart semantics stable),
+  // it only allows the frontend to carry it as proof that the URL matches the context.
   void (typeof req.query.versionId === 'string' ? req.query.versionId : null);
 
-  // dashboard 语义容忍 1min 陈旧:60s TTL-only,无写失效网(执行完 KPI 最多滞后 60s);
-  // 换取不碰任何写路径。可见性断言在缓存之外。
+  // Dashboard semantics tolerate 1min staleness: 60s TTL-only, no write invalidation gate (after a run, KPI lags at most 60s);
+  // in exchange for never touching any write path. The visibility assertion stays outside the cache.
   const payload = await cache.wrap(
     overviewKey(projectId, parsed.data),
     60_000,

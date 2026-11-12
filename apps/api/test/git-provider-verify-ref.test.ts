@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
-// gitProvider 只用 spawn 探测 git；mock 掉即可在服务层断言 ls-remote 的 ref pattern。
-// （路由层 project-versions.test.ts 把 verifyRef 整个 mock 了，pattern 拼错漏网——
-//  曾把 branch 拼成 refs/branchs/<ref>，git 精确匹配落空 exit 0 空输出，分支恒误报「不存在」。）
+// gitProvider only uses spawn to probe git; mocking it lets the service layer assert the ls-remote ref pattern.
+// (The route layer's project-versions.test.ts mocks verifyRef entirely, so a wrong pattern slips through —
+//  branch was once spelled refs/branchs/<ref>; git's exact match came up empty with exit 0 and empty output, so branches were always falsely reported "not found".)
 vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 
 const makeChild = (stdout: string) => {

@@ -4,13 +4,13 @@ import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject, seedProductLine } from './helpers/db.js';
 
-// mock 真实 git 探测（不连外网）；记录入参以断言 PAT 回落。
+// Mock the real git probe (no external network); record inputs to assert the PAT fallback.
 const { verifyRepoAccessMock } = vi.hoisted(() => ({ verifyRepoAccessMock: vi.fn() }));
 vi.mock('../src/services/gitProvider.js', () => ({ verifyRepoAccess: verifyRepoAccessMock }));
 
 let pool: Pool;
 let app: import('express').Express;
-/** 新建项目必填 productLineId：全程复用同一条种子线。 */
+/** Creating a project requires productLineId: the same seeded line is reused throughout. */
 let lineId: string;
 
 beforeAll(async () => {
@@ -26,8 +26,8 @@ beforeAll(async () => {
   app.use(express.json());
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
   lineId = (await seedProductLine(pool)).productLineId;
-  // 注入种子组织管理员身份（跳过真实登录；可见性判定依赖 managerOrgPaths 子树）。
-  // helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后再动态加载。
+  // Inject the seeded org manager identity (skips real login; visibility checks depend on the managerOrgPaths subtree).
+  // helpers/auth depends on the src service chain (which loads the db client), so it must be dynamically imported after DATABASE_URL points at the test container.
   const { managerUserOf } = await import('./helpers/auth.js');
   app.use('/api', (req, _res, next) => {
     req.user = managerUserOf(userId, username, orgId, orgPath);
@@ -99,7 +99,7 @@ describe('projects', () => {
   });
 
   it('项目组织由产品线推导（不是调用者激活组织）', async () => {
-    // 造一条「兄弟组织」下的线：path 挂在种子组织下 → 可见；再让项目挂到它名下
+    // Build a line under a "sibling org": its path hangs under the seeded org → visible; then attach the project to it
     const { orgPath } = await seedOrg(pool);
     const sub = await pool.query(
       `INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`,
@@ -114,8 +114,8 @@ describe('projects', () => {
       .post('/api/projects')
       .send({ name: '跨组织线项目', productLineId: line.rows[0]!.id });
     expect(created.status).toBe(201);
-    // R2：projects 已无 organization_id —— 组织只能经产品线推导。
-    // 断言两件事：项目挂在了那条线上，且响应里的 organizationId 是该线所属的子组织。
+    // R2: projects no longer have organization_id — the org can only be derived via the product line.
+    // Assert two things: the project hangs on that line, and the response's organizationId is the sub-org the line belongs to.
     const row = await pool.query(
       `SELECT p.product_line_id, l.organization_id FROM projects p
          JOIN product_lines l ON l.id = p.product_line_id WHERE p.id = $1`,

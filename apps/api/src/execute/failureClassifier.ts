@@ -30,7 +30,7 @@ const HUMAN: Record<FailureReason, string> = {
   SqlAssertionFailed: 'SQL 结果断言未命中',
   EnvMissing: '缺少环境配置，请到项目设置配置测试环境',
   EnvProjectMismatch: '环境所属项目与当前用例不匹配',
-  /** 2026-10-16: 相对 url 执行——环境无可拼 origin 的 web 服务，或 web_service_ref 非法 */
+  /** 2026-10-16: relative-url execution — the environment has no web service whose origin can be joined, or web_service_ref is invalid */
   WebServiceMissing: '用例 url 为相对地址，但环境未配置可用的 web 服务或引用的服务不存在',
   EnvDbMissing: '当前环境未配置数据库连接',
   EnvSyslogMissing: '当前环境未配置 syslog 连接',
@@ -43,10 +43,10 @@ const HUMAN: Record<FailureReason, string> = {
   HttpRequestTimeout: 'HTTP 请求超时',
   HttpRequestAssertionFailed: 'HTTP 断言未命中（状态码或响应体不匹配）',
   HttpRequestSaveAsFailed: 'HTTP 响应值提取失败',
-  /** 平台侧 LLM 网关/提供商错误：页面与定位无关联，误报页面慢会引偏排查。 */
+  /** Platform-side LLM gateway/provider error: unrelated to the page or locating; a false "slow page" report would misdirect troubleshooting. */
   LLMProviderError: 'LLM 网关/提供商异常（空响应或已被安全策略拦截），请检查模型服务状态',
   VisionAssertionFailed: '最终页面与用例预期不符(vision 判定失败)',
-  /** 计划运行被用户终止：非故障，仅说明本步因取消未执行。 */
+  /** Plan run terminated by the user: not a fault, just notes that this step wasn't executed due to cancellation. */
   Cancelled: '计划运行已终止，本步及后续步骤不再执行',
   EngineUnavailable: '移动端引擎不可用，请检查设备配置或 agent-device daemon',
   MobileUnsupportedCapability: '当前 mobile 引擎不支持该动作',
@@ -108,8 +108,8 @@ export function classify(err: unknown, ctx: ClassifyCtx = {}): ClassifiedFailure
   if (e?.name === 'HttpRequestTimeout') return { reason: 'HttpRequestTimeout', humanMessage: HUMAN.HttpRequestTimeout };
   if (e?.name === 'HttpRequestAssertionFailed') return { reason: 'HttpRequestAssertionFailed', humanMessage: HUMAN.HttpRequestAssertionFailed };
   if (e?.name === 'HttpRequestSaveAsFailed') return { reason: 'HttpRequestSaveAsFailed', humanMessage: HUMAN.HttpRequestSaveAsFailed };
-  // 必须在 durationMs SlowLoad 兜底之前：LLM 网关异常往往耗时超 15s，
-  // 若落到兜底会被误报成「页面加载过慢」。2026-10-13 prod228 实测误报。
+  // Must run before the durationMs SlowLoad fallback: LLM gateway failures often take over 15s,
+  // and falling to the fallback would misreport them as 「页面加载过慢」. 2026-10-13 prod228 measured false positive.
   if (e?.name === 'LLMProviderError') return { reason: 'LLMProviderError', humanMessage: HUMAN.LLMProviderError };
   if (ctx.action && (ctx.action as { kind?: string }).kind === 'fill' &&
       (msg.includes('unique constraint') || msg.includes('duplicate'))) {

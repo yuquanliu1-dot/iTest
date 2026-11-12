@@ -10,7 +10,7 @@ let app: import('express').Express;
 beforeAll(async () => {
   const pgDb = await createTestDatabase();
   process.env.DATABASE_URL = pgDb.uri;
-  delete process.env.REDIS_URL; // enqueue 走 inline，无队列依赖
+  delete process.env.REDIS_URL; // enqueue goes inline, no queue dependency
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
   const { default: express } = await import('express');
@@ -19,8 +19,8 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   const { userId, username, orgId, orgPath } = await seedOrg(pool);
-  // 注入种子组织管理员身份（跳过真实登录；可见性判定依赖 managerOrgPaths 子树）。
-  // helpers/auth 依赖 src 服务链（连带加载 db client），须等 DATABASE_URL 指向测试容器后再动态加载。
+  // Inject the seeded org manager identity (skips real login; visibility checks depend on the managerOrgPaths subtree).
+  // helpers/auth depends on the src service chain (which loads the db client), so it must be dynamically imported after DATABASE_URL points at the test container.
   const { managerUserOf } = await import('./helpers/auth.js');
   app.use('/api', (req, _res, next) => {
     req.user = managerUserOf(userId, username, orgId, orgPath);
@@ -58,7 +58,7 @@ describe('rcaEnabled 透传', () => {
       .send({ name: '快照计划', versionId, rcaEnabled: true });
     const run = await request(app).post(`/api/plans/${created.body.id}/run`);
     expect(run.status).toBe(200);
-    // 等待后台 run 收敛到终态，避免与 afterAll 的 pool.end 竞争（快照行本身已同步落库）
+    // Wait for the background run to reach terminal state, avoiding a race with afterAll's pool.end (the snapshot row itself is already persisted synchronously)
     for (let i = 0; i < 50; i++) {
       const cur = await pool.query('SELECT status FROM plan_runs WHERE id = $1', [run.body.runId]);
       if (cur.rows[0]!.status !== 'running') break;
@@ -106,7 +106,7 @@ describe('报告详情回带 rca', () => {
       `INSERT INTO plan_run_cases(plan_run_id, case_id, "order", status, step_kind, report_id, rca) VALUES ($1, $2, 1, 'failed', 'business', $3, $4::jsonb)`,
       [runId, caseId, reportId, JSON.stringify({ status: 'analyzed', category: 'system_defect', confidence: 'high', summary: '根因X' })],
     );
-    // 挂路由（本文件 app 未挂 reports，动态建一个）
+    // Mount routes (this file's app has no reports route; build one on the fly)
     const { default: express } = await import('express');
     const { errorHandler } = await import('../src/middleware/errorHandler.js');
     const { userId, username, orgId, orgPath } = await seedOrg(pool);
@@ -124,7 +124,7 @@ describe('报告详情回带 rca', () => {
     expect(linked.body.planRunId).toBe(runId);
     expect(linked.body.rca.summary).toBe('根因X');
 
-    // 同用例的独立报告（无 plan_run_cases 关联）→ 无 rca/planRunId 字段
+    // The same case's standalone report (no plan_run_cases link) → no rca/planRunId fields
     const solo = await pool.query(
       `INSERT INTO reports(case_id, status, step_results) VALUES ($1, 'passed', '[]'::jsonb) RETURNING id`,
       [caseId],

@@ -6,9 +6,9 @@ export interface EngineInput {
   caseId: string;
   caseTitle: string;
   caseUrl: string | null;
-  /** 用例绑定 web 服务的 origin（T7 中途 navigate 相对 url 拼接用）；无环境 web 服务时缺省。 */
+  /** Origin of the web service bound to the case (used to join relative urls on mid-case T7 navigates); omitted when the environment has no web service. */
   caseWebOrigin?: string | null;
-  /** 用例绑定的 web 服务名（无 @ref 凭据占位符的第二级解析目标）。 */
+  /** Web service name bound to the case (second-level resolution target for credential placeholders without @ref). */
   caseWebServiceRef?: string | null;
   expectedOutcome: string | null;
   steps: Array<{
@@ -20,10 +20,10 @@ export interface EngineInput {
     componentKind: string | null;
     sensitive: boolean;
     compiled: unknown[] | null | undefined;
-    /** 行级自然语言指令；回放仅 AI 降级兜底用，机械回放不读。 */
+    /** Row-level natural-language instruction; replay reads it only as the AI-fallback fallback — mechanical replay never reads it. */
     instruction: string | null;
   }>;
-  /** 回放 AI 降级开关（全局设置，runCase 层读入注入；缺省全关）。 */
+  /** Replay AI-fallback switches (global settings; read in and injected at the runCase layer; all default off). */
   aiFallback?: import('./aiFallback.js').AiFallbackSettings;
   envCtx?: EnvCtx;
   initialVars?: Record<string, string>;
@@ -33,21 +33,21 @@ export interface EngineInput {
   projectId: string | undefined;
   caseWindow?: CaseWindow;
   incognito: boolean;
-  /** 计划级 loginPrepare 导出的登录态（runPlan → runCase 透传）；单用例执行无此值。 */
+  /** Login state exported by plan-level loginPrepare (passed through runPlan → runCase); single-case execution has no value here. */
   storageState?: unknown;
   appRef?: { bundleId: string; appPath?: string; launchArgs?: string[] } | null;
   deviceTargetId?: string | null;
   mobileOs?: 'ios' | 'android' | null;
-  /** playground 实时画面源：每页新开时 setPage，让画面跟随执行（计划运行/单用例执行）。 */
+  /** playground live-view source: setPage on each newly opened page so the view follows execution (plan runs / single-case runs). */
   liveView?: import('./liveView.js').LiveViewHandle;
-  /** 终止检查点（计划运行取消）：runPlan 注入 isCancelRequested，步循环每步开始前轮询。 */
+  /** Abort checkpoint (plan-run cancel): runPlan injects isCancelRequested; the step loop polls before each step starts. */
   shouldAbort?: () => boolean | Promise<boolean>;
 }
 
 export interface Engine {
   readonly platform: 'web' | 'mobile';
-  /** 每步结束（passed/failed 均已落 results）后回调该步结果——供 runCase 层增量落库，
-   *  报告页 2s 轮询即可逐步看到结果，不必等整段跑完。 */
+  /** After each step ends (passed/failed both already in results), callbacks with that step's result — lets the runCase layer persist incrementally,
+   *  so the report page's 2s polling sees results step by step instead of waiting for the whole run to finish. */
   execute(
     input: EngineInput,
     targetUrl?: string,

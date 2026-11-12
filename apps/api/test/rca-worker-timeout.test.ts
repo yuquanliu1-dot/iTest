@@ -1,9 +1,9 @@
 /**
- * 超时护栏:RCA_TIMEOUT_MS 到点 runWithTimeout 先 steer 一条收尾消息,宽限 RCA_GRACE_MS
- * 到点 cancelThread(abort),processRcaJob 的 finally 里 fillTimeoutRows 把未落 rca 的
- * 失败行兜底写成 status=timeout。prompt 挂死模拟 AI 长转,首发与 steer 两条消息都不返回,
- * 全靠 runWithTimeout 的两条 Promise.race 定时器驱动——同时验证计时器有清理路径
- * (vitest 必须能正常退出,不留悬挂定时器)。
+ * Timeout guard: when RCA_TIMEOUT_MS elapses, runWithTimeout first steers a wrap-up message; when the RCA_GRACE_MS
+ * grace period elapses it calls cancelThread (abort); in processRcaJob's finally, fillTimeoutRows writes status=timeout
+ * as a fallback for failed rows that never got an rca. A hung prompt simulates a long-running AI — neither the first
+ * prompt nor the steer returns, everything is driven by runWithTimeout's two Promise.race timers — which also verifies
+ * the timers have a cleanup path (vitest must exit cleanly, no dangling timers left behind).
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { Pool } from 'pg';
@@ -16,7 +16,7 @@ beforeAll(async () => {
   const pgDb = await createTestDatabase();
   process.env.DATABASE_URL = pgDb.uri;
   delete process.env.REDIS_URL;
-  // 必须在动态 import rcaWorker 之前:模块顶层读 env 定超时
+  // Must happen before the dynamic import of rcaWorker: the module reads env at top level to fix the timeout
   process.env.RCA_TIMEOUT_MS = '200';
   process.env.RCA_GRACE_MS = '200';
   pool = new Pool({ connectionString: pgDb.uri });
@@ -39,7 +39,7 @@ afterEach(async () => {
 describe('rca 超时兜底', () => {
   it('prompt 挂死 → 超时 steer 收尾 → 宽限 abort,未分析行写 status=timeout', async () => {
     const { projectId, groupId, versionId } = await seedProject(pool);
-    // FK 完整:plan_runs.plan_id NOT NULL → 必须真 execution_plans 行
+    // FK completeness: plan_runs.plan_id NOT NULL → a real execution_plans row is required
     const p = await pool.query(
       `INSERT INTO execution_plans(project_id, name, version_id, rca_enabled) VALUES ($1, '超时计划', $2, true) RETURNING id`,
       [projectId, versionId],
@@ -66,7 +66,7 @@ describe('rca 超时兜底', () => {
       subscribe: () => () => {},
       prompt: async (text: string) => {
         prompts.push(text);
-        await new Promise<void>(() => { /* 挂死模拟 AI 长转:首发与 steer 都不返回 */ });
+        await new Promise<void>(() => { /* hang forever to simulate a long-running AI: neither the first prompt nor the steer returns */ });
       },
       abort: () => { aborted = true; },
       dispose: () => {},
@@ -77,11 +77,11 @@ describe('rca 超时兜底', () => {
     const { processRcaJob } = await import('../src/scheduler/rcaWorker.js');
     await processRcaJob({ kind: 'rca', planRunId: runId });
 
-    // steer 收尾消息确实发出(第二条 prompt),随后 cancelThread → abort
+    // The steer wrap-up message really went out (second prompt), then cancelThread → abort
     expect(prompts).toHaveLength(2);
     expect(prompts[1]!).toContain('超时');
     expect(aborted).toBe(true);
-    // 未落 rca 的失败行被 fillTimeoutRows 兜底标 timeout
+    // Failed rows with no rca were fallback-marked timeout by fillTimeoutRows
     const rows = await pool.query('SELECT rca FROM plan_run_cases WHERE plan_run_id=$1', [runId]);
     expect((rows.rows[0]!.rca as Record<string, unknown>).status).toBe('timeout');
   }, 30_000);

@@ -1,10 +1,10 @@
 /**
- * 机械步骤 locator 修复记忆：AI 降级（ai_fallback_locator_failed）整步重做成功后，
- * 把 AI 动作解析回的稳定 selector 写入 step_locator_cache；后续回放把缓存 locator
- * 追加进候选链末位参与探测（零 LLM），失败由 cdp.ts 照旧走 AI 降级并覆写缓存（自愈协议）。
+ * Mechanical-step locator repair memory: after an AI fallback (ai_fallback_locator_failed) whole-step redo succeeds,
+ * the stable selector the AI action resolved back to is written into step_locator_cache; subsequent replays append the cached locator
+ * to the tail of the candidate chain for probing (zero LLM); on failure cdp.ts still goes through AI fallback and overwrites the cache (the self-heal protocol).
  *
- * 缓存永远不能阻塞回放：读失败/未命中一律返回 null，写失败只静默（调用方 .catch）。
- * key = stepId（+ action_kind 区分步内多动作归属）；步骤删除级联清缓存。
+ * The cache must never block replay: read failure/miss always returns null, write failure stays silent (caller .catch).
+ * key = stepId (+ action_kind distinguishing multiple actions within one step); step deletion cascades the cache clear.
  */
 import { eq, sql } from 'drizzle-orm';
 import type { Locator } from '@itest/shared';
@@ -19,7 +19,7 @@ export interface CachedLocator {
   actionKind: string;
 }
 
-/** 读缓存：stepId 非 UUID（草稿 staged-N 等）→ null；db 异常 → null（不阻塞回放）。 */
+/** Read cache: non-UUID stepId (drafts like staged-N etc.) → null; db exception → null (doesn't block replay). */
 export async function readLocatorCache(stepId: string): Promise<CachedLocator | null> {
   if (!UUID_RE.test(stepId)) return null;
   try {
@@ -32,7 +32,7 @@ export async function readLocatorCache(stepId: string): Promise<CachedLocator | 
   }
 }
 
-/** 覆写缓存（upsert 就地替换，hits 保留累计）；调用方 fire-and-forget。 */
+/** Overwrite cache (upsert replaces in place, hits keeps accumulating); caller fire-and-forget. */
 export async function writeLocatorCache(stepId: string, locator: Locator, actionKind: string): Promise<void> {
   await db
     .insert(stepLocatorCache)
@@ -43,7 +43,7 @@ export async function writeLocatorCache(stepId: string, locator: Locator, action
     });
 }
 
-/** 命中计数 +1（fire-and-forget，失败静默）。 */
+/** Hit count +1 (fire-and-forget, failures silent). */
 export async function bumpLocatorCacheHit(stepId: string): Promise<void> {
   await db
     .update(stepLocatorCache)

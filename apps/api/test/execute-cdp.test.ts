@@ -21,7 +21,7 @@ vi.mock('playwright-core', () => {
     first: vi.fn().mockReturnThis(),
     count: vi.fn().mockResolvedValue(1),
     pressSequentially: vi.fn().mockResolvedValue(undefined),
-    // waitTargetEnabled 的就绪探针（默认 false = 未禁用，既有 click 用例零等待通过）
+    // waitTargetEnabled's readiness probe (default false = not disabled, so existing click cases pass with zero waiting)
     evaluate: vi.fn().mockResolvedValue(false),
   });
 
@@ -29,7 +29,7 @@ vi.mock('playwright-core', () => {
   const getByText = vi.fn().mockReturnValue(makeLocator());
   const locatorFn = vi.fn().mockReturnValue(makeLocator());
 
-  // url() 跟随最近一次 goto 目标（真实浏览器行为；也让 init-goto 落地校验判定"已到达"不触发重试）
+  // url() follows the most recent goto target (real-browser behavior; it also lets the init-goto landed check decide "arrived" without triggering a retry)
   let lastGotoUrl: string | undefined;
   const page = {
     goto: vi.fn((targetUrl: string) => {
@@ -55,7 +55,7 @@ vi.mock('playwright-core', () => {
       }),
     },
     __page: page,
-    // 单例 page 跨测试复用，nav 状态须逐测试归位（真实执行每次 newPage 从 about:blank 起）
+    // the singleton page is reused across tests, so nav state must be reset per test (real execution starts each newPage from about:blank)
     __resetNav: () => { lastGotoUrl = undefined; },
     __getByRole: getByRole,
     __getByText: getByText,
@@ -80,7 +80,7 @@ const mocked = await import('playwright-core') as unknown as {
   __locator: ReturnType<typeof vi.fn>;
 };
 
-// 单例 mock page 的 nav 状态逐测试归位（真实执行每次 newPage 从 about:blank 起）
+// the singleton mock page's nav state is reset per test (real execution starts each newPage from about:blank)
 beforeEach(() => mocked.__resetNav());
 
 describe('executeCaseReal — dispatch via mocked chromium', () => {
@@ -94,7 +94,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(mocked.__page.goto).toHaveBeenCalledWith('https://example.com', expect.objectContaining({ timeout: 30000 }));
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe('passed');
-    // 步骤级开始时刻：报告页据此显示「开始 HH:MM:SS」
+    // step-level start time: the report page renders "started HH:MM:SS" from it
     expect(results[0]!.startedAt).toBeTruthy();
     expect(Number.isNaN(new Date(results[0]!.startedAt!).getTime())).toBe(false);
   });
@@ -109,10 +109,10 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(mocked.__locator).toHaveBeenCalledWith('#btn');
   });
 
-  // —— waitTargetEnabled（prod228 2b64ba27 / 5b86de6e 回归）——
-  // 录制快节奏步骤 force-click 抢跑页面加载：Modify 在 spinner 期被点，编辑模式未进入，
-  // 后续 fill 对恒 disabled 的 textarea 超时。修复 = 对目标（或其祖先 button）的禁用/加载
-  // 态做有界等待；探测失败视为就绪保持现状；到点仍禁用则放弃操作抛 target-disabled。
+  // -- waitTargetEnabled (prod228 2b64ba27 / 5b86de6e regressions) --
+  // Recorder-paced fast steps force-clicked ahead of page load: Modify got clicked during the spinner, edit mode never entered,
+  // and the following fill timed out on a permanently disabled textarea. Fix = bounded waiting on the target's (or its ancestor button's)
+  // disabled/loading state; a probe failure counts as ready and keeps today's behavior; if still disabled at the deadline, give up and throw target-disabled.
 
   function clickWaitLocator(evaluateImpl: ReturnType<typeof vi.fn>) {
     return {
@@ -129,7 +129,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     const evaluate = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
     const loc = clickWaitLocator(evaluate);
     mocked.__locator.mockClear();
-    // Once：locator 工厂是跨用例单例，mockReturnValue 会永久污染后续用例
+    // Once: the locator factory is a cross-case singleton; mockReturnValue would permanently pollute later cases
     mocked.__locator.mockReturnValueOnce(loc as never);
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000053',
@@ -140,7 +140,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(evaluate.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(loc.click).toHaveBeenCalledTimes(1);
     expect(loc.click).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
-    // locator 是跨用例单例：清掉本用例的 results，别污染后面读 mock.results[0] 的用例
+    // the locator is a cross-case singleton: clear this case's results so later cases reading mock.results[0] aren't polluted
     mocked.__locator.mockClear();
   });
 
@@ -154,11 +154,11 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
       [{ order: 1, compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#modify' }] }] }],
       { reportId: 'r-click-stuck' },
     );
-    // 5b86de6e 实录后的语义变更：对仍禁用目标强点是无效操作，宁可失败（步骤无
-    // instruction，测试环境不触发 AI 降级，直接红）。
+    // Semantics change after the 5b86de6e live record: force-clicking a still-disabled target is a no-op, so prefer failing
+    // (the step has no instruction, the test env doesn't trigger AI fallback, it goes straight red).
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toContain('target-disabled');
-    expect(evaluate.mock.calls.length).toBeGreaterThan(5); // maxIters 兜底，墙钟不推进也终止
+    expect(evaluate.mock.calls.length).toBeGreaterThan(5); // maxIters fallback guarantees termination even though the wall clock doesn't advance
     expect(loc.click).not.toHaveBeenCalled();
     mocked.__locator.mockClear();
   });
@@ -235,7 +235,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toMatch(/boom/);
-    // 失败步同样带开始时刻（报告页统一展示）
+    // failed steps carry the start time too (the report page renders it uniformly)
     expect(results[0]!.startedAt).toBeTruthy();
   });
 
@@ -264,7 +264,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
 
   it('hover falls back to visible-filtered first() on strict mode violation', async () => {
     mocked.__locator.mockClear();
-    // 录制场景常见：文本/CSS 命中多个元素（表格里重复的日期、同名链接）。
+    // Common in recorder scenarios: text/CSS matching multiple elements (repeated dates in tables, same-named links).
     const okHover = vi.fn().mockResolvedValue(undefined);
     const multi = {
       hover: vi.fn().mockRejectedValueOnce(new Error('strict mode violation: locator(\'tr\') resolved to 3 elements')),
@@ -286,8 +286,8 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
 
   it('click strict-mode 兜底先过滤 visible 再 first（隐藏克隆不得劫持）', async () => {
     mocked.__locator.mockClear();
-    // 规则查看 回测回归：[title="查看"] 命中 7 个（Element-UI .hidden-columns 里的 display:none
-    // 模板克隆 DOM 顺序在前），裸 .first() 会抓到不可见副本等到超时。
+    // Rule-view replay regression: [title="查看"] matched 7 elements (the display:none template clones inside
+    // Element-UI's .hidden-columns come first in DOM order), so bare .first() grabbed an invisible copy and waited until timeout.
     const okClick = vi.fn().mockResolvedValue(undefined);
     const multi = {
       click: vi
@@ -297,7 +297,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
       first: vi.fn().mockReturnValue({ click: okClick }),
       count: vi.fn().mockResolvedValue(7),
     };
-    // 两次 Once：初次 click 与兜底路径二次 tryFirstMatch 各解析一次 locator，都要拿到 multi
+    // Two Onces: the initial click and the fallback path's second tryFirstMatch each resolve the locator once, and both must get multi
     mocked.__locator.mockImplementationOnce(() => multi as never);
     mocked.__locator.mockImplementationOnce(() => multi as never);
     const results = await executeCaseReal(
@@ -355,7 +355,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
 
   it('press 目标恒禁用：放弃按键，步骤失败并带 target-disabled', async () => {
     mocked.__locator.mockClear();
-    // evaluate 恒 true = 目标处于禁用/加载态（waitTargetEnabled 探针）
+    // evaluate always true = the target is in a disabled/loading state (waitTargetEnabled probe)
     const evaluate = vi.fn().mockResolvedValue(true);
     const loc = {
       press: vi.fn().mockResolvedValue(undefined),
@@ -388,7 +388,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
   });
 
   it('extract action stores element value into vars for later fill', async () => {
-    // 必须清历史：本用例按 mock.results[1] 取 fill 步骤的 locator，前面用例残留的调用会挤偏下标
+    // Must clear history: this case reads the fill step's locator from mock.results[1]; leftover calls from earlier cases would shift the index
     mocked.__locator.mockClear();
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000001',
@@ -442,10 +442,10 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     );
     expect(results[0]!.status).toBe('passed');
     expect(mocked.__page.waitForTimeout).toHaveBeenCalledWith(1200);
-    // 空等待不解析任何 locator
+    // an empty wait resolves no locator
     expect(mocked.__locator).not.toHaveBeenCalled();
 
-    // 缺省 timeoutMs → 5000
+    // default timeoutMs -> 5000
     await executeCaseReal(
       '00000000-0000-0000-0000-000000054',
       [{ order: 1, compiled: [{ kind: 'waitFor', locator: [] }] }],
@@ -523,7 +523,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     );
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe('passed');
-    // init goto 被跳过（initLanded=false → preflight 不跳导航）；preflight 补位 goto + step 自身的 navigate
+    // the init goto is skipped (initLanded=false -> preflight doesn't jump navigation); preflight's catch-up goto + the step's own navigate
     expect(mocked.__page.goto).toHaveBeenCalledTimes(2);
     expect(mocked.__page.goto).toHaveBeenCalledWith('https://init.example.com', expect.anything());
   });
@@ -538,7 +538,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
     );
     expect(results).toHaveLength(1);
     expect(results[0]!.status).toBe('passed');
-    // init 落地（mock url 跟随 goto）→ preflight 跳过二次 goto；只剩 init + step navigate
+    // init landed (mock url follows goto) -> preflight skips the second goto; only init + step navigate remain
     expect(mocked.__page.goto).toHaveBeenCalledTimes(2);
   });
 
@@ -551,7 +551,7 @@ describe('executeCaseReal — dispatch via mocked chromium', () => {
       'https://init.example.com',
     );
     expect(results).toHaveLength(1);
-    // init 落地 → preflight 跳过二次 goto（prod228 02c812ea 修复前此处是 2 次 goto）
+    // init landed -> preflight skips the second goto (before the prod228 02c812ea fix this was 2 gotos)
     expect(mocked.__page.goto).toHaveBeenCalledTimes(1);
     expect(mocked.__page.goto).toHaveBeenCalledWith('https://init.example.com', expect.anything());
   });
@@ -625,7 +625,7 @@ describe('phase3 — three-tier locator', () => {
 
   it('falls back from primary CSS to stable #id when primary throws', async () => {
     mocked.__locator.mockClear();
-    // 第一次 locator 调用抛错，模拟主 CSS 找不到
+    // the first locator call throws, simulating the primary CSS not found
     mocked.__locator.mockImplementationOnce(() => ({
       click: vi.fn().mockImplementation(() => Promise.reject(new Error('not found'))),
       first: vi.fn().mockReturnThis(),
@@ -744,10 +744,10 @@ describe('phase3 — assertText target×match', () => {
 
 describe('phase3 — step-level assertion (test_steps.assertion)', () => {
   it('passes step when assertion matches body innerText (canonical shape)', async () => {
-    // mock 的 page.evaluate 返回 '登录成功'，body contains 断言应当 pass。
+    // The mock's page.evaluate returns '登录成功', so the body contains assertion should pass.
     mocked.__locator.mockClear();
-    // 用 mockImplementation 把整段测试里所有 evaluate 都钉成期望值，
-    // 否则 mockClear/mockResolvedValueOnce 的组合会让前序测试残留状态干扰本次。
+    // Pin every evaluate in this test block to the expected value with mockImplementation;
+    // otherwise the mockClear/mockResolvedValueOnce combination lets leftover state from earlier tests interfere.
     mocked.__page.evaluate.mockReset();
     mocked.__page.evaluate.mockImplementation(() => Promise.resolve('登录成功'));
     const results = await executeCaseReal(
@@ -771,7 +771,7 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
   });
 
   it('element-level assertion runs and leaves no skipped-assertion warning', async () => {
-    // 元素级断言（specifiedElement + 非空 locator）真实参与逐步判定 → 无跳过告警（P1-3 对照）。
+    // Element-level assertions (specifiedElement + non-empty locator) genuinely participate in per-step judgment -> no skipped-assertion warning (P1-3 control group).
     mocked.__locator.mockClear();
     const results = await executeCaseReal(
       '00000000-0000-0000-0000-000000000034',
@@ -795,9 +795,9 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
   });
 
   it('skips whole-page fuzzy text assertion (Track 1: expectedOutcome + vision is the final judgement)', async () => {
-    // target:'page' + locator:[] + match:'contains' 是 AI 写出来的描述性短语断言形态
-    // （"登录表单正常展示"等），cdp.ts:normalizeStepAssertion 主动 filter，不再让回放因
-    // page innerText 不命中而误报 failed。用例级 expectedOutcome + vision 才是终态判定。
+    // target:'page' + locator:[] + match:'contains' is the descriptive-phrase assertion shape AI writes
+    // ("登录表单正常展示" and the like); cdp.ts:normalizeStepAssertion actively filters it so replay no longer
+    // falsely fails when page innerText doesn't match. Case-level expectedOutcome + vision is the final judgment.
     mocked.__locator.mockClear();
     mocked.__page.evaluate.mockReset();
     mocked.__page.evaluate.mockImplementation(() => Promise.resolve('不匹配的页面'));
@@ -819,12 +819,12 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
       { reportId: 'r-step-assert-fail' },
     );
     expect(results[0]!.status).toBe('passed');
-    // 被跳过的断言显式留痕（P1-3）：报告/warning 能看出「这步其实没断言」，不再静默。
+    // Skipped assertions leave an explicit trail (P1-3): the report/warning shows "this step never asserted" instead of staying silent.
     expect(String(results[0]!.warning)).toContain('步骤级断言未执行');
   });
 
   it('legacy assertion shape {kind,text} is normalised to canonical and runs', async () => {
-    // 老 AI 保存路径留下的 {kind:'assertText', text:'...'}; 不走 save 也能跑通。
+    // Legacy {kind:'assertText', text:'...'} left by the old AI save path; runs fine even without going through save.
     mocked.__locator.mockClear();
     mocked.__page.evaluate.mockReset();
     mocked.__page.evaluate.mockImplementation(() => Promise.resolve('页面标题显示为"元素管理 - 低代码测试平台"'));
@@ -843,7 +843,7 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
   });
 
   it('action failure short-circuits before assertion runs', async () => {
-    // action 失败时（navigate reject）→ 直接 failed；断言不会"补救"成功。
+    // When the action fails (navigate rejects) -> straight failed; the assertion can't "rescue" it into a pass.
     mocked.__page.evaluate.mockReset();
     mocked.__page.goto.mockImplementationOnce(() => Promise.reject(new Error('net down')));
     const results = await executeCaseReal(
@@ -870,8 +870,8 @@ describe('phase3 — step-level assertion (test_steps.assertion)', () => {
 
 describe('locator probe window — SPA 深链挂载滞后的有界轮询', () => {
   it('count=0 for early rounds then mounted → passes within window', async () => {
-    // 回测 8a178d83 根因回归：networkidle 后页面仍未挂载完，探测放弃 ~2s 后元素才出现。
-    // 前 2 轮 count=0、第 3 轮变 1 → 轮询窗口内应命中而非判失败。
+    // Replay 8a178d83 root-cause regression: after networkidle the page still wasn't fully mounted and the element appeared ~2s after the probe gave up.
+    // First 2 rounds count=0, round 3 turns 1 -> should hit within the polling window instead of failing.
     let calls = 0;
     const late = {
       click: vi.fn().mockResolvedValue(undefined),
@@ -885,7 +885,7 @@ describe('locator probe window — SPA 深链挂载滞后的有界轮询', () =>
       { reportId: 'r-late-mount' },
     );
     expect(results[0]!.status).toBe('passed');
-    expect(late.count).toHaveBeenCalledTimes(3); // 前 2 轮 miss，第 3 轮命中
+    expect(late.count).toHaveBeenCalledTimes(3); // first 2 rounds miss, round 3 hits
     expect(late.click).toHaveBeenCalled();
   });
 
@@ -903,7 +903,7 @@ describe('locator probe window — SPA 深链挂载滞后的有界轮询', () =>
     );
     expect(results[0]!.status).toBe('failed');
     expect(results[0]!.error).toMatch(/count=0/);
-    // 有界轮询而非单次重试：单候选在窗口内被轮转探测满 12 轮
+    // Bounded polling rather than a single retry: the single candidate is probed through the full 12 rounds of the window
     expect(never.count).toHaveBeenCalledTimes(12);
   });
 });
@@ -911,8 +911,8 @@ describe('locator probe window — SPA 深链挂载滞后的有界轮询', () =>
 describe('Fix C — visibility-aware probe (tryFirstMatch)', () => {
   it('raw 单匹配不可见 → 窗口内轮询等到可见实例，点击落在可见子集上（克隆/导入导出 签名①自愈）', async () => {
     mocked.__locator.mockClear();
-    // prod228 克隆解析规则 step-0 复现形态：链式选择器解析到唯一匹配但不可见
-    //（Element-UI 固定列/模板克隆），行重渲染后可见实例才出现。
+    // prod228 clone-resolution rule step-0 reproduction: the chained selector resolves to a unique match that is invisible
+    // (Element-UI fixed columns / template clones); a visible instance only appears after the row re-renders.
     const okClick = vi.fn().mockResolvedValue(undefined);
     let visProbes = 0;
     const visibleLoc = {
@@ -931,7 +931,7 @@ describe('Fix C — visibility-aware probe (tryFirstMatch)', () => {
       { reportId: 'r-fixc-late-visible' },
     );
     expect(results[0]!.status).toBe('passed');
-    expect(raw.click).not.toHaveBeenCalled(); // 永远不点 raw（可能命中不可见副本）
+    expect(raw.click).not.toHaveBeenCalled(); // never click raw (it may hit an invisible copy)
     expect(raw.filter).toHaveBeenCalledWith({ visible: true });
     expect(okClick).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
   });
@@ -991,8 +991,8 @@ describe('Fix C — visibility-aware probe (tryFirstMatch)', () => {
 
   it('raw 与可见子集同时命中 → 点击派发到可见子集而非 raw（查看/编辑 签名② force 空转）', async () => {
     mocked.__locator.mockClear();
-    // 查看/编辑 复现形态：raw 解析成功且 force click"通过"，但点到不可见副本无实际效果。
-    // Fix C 后返回可见子集，动作天然作用于真实元素。
+    // View/Edit reproduction: raw resolves and the force click "passes", but it lands on an invisible copy with no real effect.
+    // After Fix C the visible subset is returned, so actions naturally land on real elements.
     const rawClick = vi.fn().mockResolvedValue(undefined);
     const okClick = vi.fn().mockResolvedValue(undefined);
     const visibleLoc = { click: okClick, count: vi.fn().mockResolvedValue(1) };
@@ -1033,14 +1033,14 @@ describe('phase3 — composite value at execute', () => {
       { reportId: 'r-composite' },
     );
     expect(results[0]!.status).toBe('passed');
-    // 找出本次 composite 的最后一次 pressSequentially 调用（fill() 现在只清空，键入改走 pressSequentially）
+    // Find this composite's last pressSequentially call (fill() now only clears; typing goes through pressSequentially)
     const fillCalls = (mocked.__locator.mock.results[mocked.__locator.mock.results.length - 1]!.value as { pressSequentially: ReturnType<typeof vi.fn> }).pressSequentially.mock.calls;
     const lastFillArg = fillCalls[fillCalls.length - 1]?.[0];
     expect(lastFillArg).toMatch(/^CS\d{3}$/);
   });
 });
 describe('机械 fill 的环境凭据占位符（compiled 不再需要明文密码）', () => {
-  // EnvCtx 新形态：凭据按命名 web 服务取（resolveLogin），旧的扁平 login 字段不再是解析源。
+  // New EnvCtx shape: credentials are looked up per named web service (resolveLogin); the old flat login field is no longer the resolution source.
   const loginEnv = {
     envId: 'e-1',
     envName: '默认环境',
@@ -1053,7 +1053,7 @@ describe('机械 fill 的环境凭据占位符（compiled 不再需要明文密�
     close: async () => undefined,
   };
 
-  /** 最近一次 locator mock 的 pressSequentially 实参（fill 后键入路径）。 */
+  /** The most recent locator mock's pressSequentially argument (the type-after-fill path). */
   function lastTypedValue(): unknown {
     const loc = mocked.__locator.mock.results[mocked.__locator.mock.results.length - 1]!.value as {
       pressSequentially: ReturnType<typeof vi.fn>;
@@ -1125,8 +1125,8 @@ describe('机械 fill 的环境凭据占位符（compiled 不再需要明文密�
   });
 });
 
-// ===== T6: runCase 相对 url 集成（testcontainers + 真实 DB；浏览器仍走上方 playwright mock）=====
-// runCase → WebEngine → executeCaseReal：同一 mock chromium 驱动，断言 goto 目标 + WebServiceMissing 失败报告。
+// ===== T6: runCase relative-url integration (testcontainers + real DB; the browser still goes through the playwright mock above) =====
+// runCase -> WebEngine -> executeCaseReal: driven by the same mock chromium, asserting the goto target + the WebServiceMissing failure report.
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
@@ -1181,8 +1181,8 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     const s = await seedProject(pool);
     projectId = s.projectId;
     groupId = s.groupId;
-    // 本文件顶部静态 import cdp.js → db/client.js，pool 已按兜底 localhost 建好（上部单测未发过任何
-    // 真实连接）。把共享 pool 的 connectionString 改指测试库——runCase 走同一 pool，新连接落该库。
+    // The static import of cdp.js -> db/client.js at the top of this file built the pool with the fallback localhost (the unit tests
+    // above never issued a real connection). Point the shared pool's connectionString at the test DB -- runCase uses the same pool, so new connections land there.
     const { pool: sharedPool } = await import('../src/db/client.js');
     (sharedPool as unknown as { options: { connectionString: string } }).options.connectionString = pgDb.uri;
   }, 60000);
@@ -1212,8 +1212,8 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     const envId = await insertEnv('web-env-inject', [
       { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 }, isDefault: true },
     ]);
-    // 绝对 case.url 直通(不走初始导航拼 origin);navigate 步骤的 {{web_frontend}} 依赖 T6 注入的
-    // web_<name> 系统变量替换成 origin(=10.0.0.1:8080),而非写死。
+    // An absolute case.url goes straight through (no initial-navigation origin splicing); the navigate step's {{web_frontend}} relies on the
+    // web_<name> system variable injected by T6 being replaced with the origin (=10.0.0.1:8080), not hardcoded.
     const caseId = await insertCase('http://init.example.com', envId);
     await pool.query(
       `INSERT INTO test_steps(case_id, "order", source, compiled) VALUES ($1, 1, 'manual', $2::jsonb)`,
@@ -1226,7 +1226,7 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     await waitReportDone(caseId);
 
     expect(res.status).toBe('passed');
-    // substituteVars 把 {{web_frontend}} → http://10.0.0.1:8080,再拼 /login 成完整导航地址。
+    // substituteVars turns {{web_frontend}} into http://10.0.0.1:8080, then splices /login into the full navigation address.
     expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/login')).toBe(true);
   });
 
@@ -1246,7 +1246,7 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
     await waitReportDone(caseId);
 
     expect(res.status).toBe('passed');
-    // T7: navigate 步骤相对 url(/开头)拼用例绑定 web 服务 origin,而非沿用 init 页 origin。
+    // T7: a navigate step's relative url (leading /) is spliced onto the case-bound web service origin, not the init page's origin.
     expect(mocked.__page.goto.mock.calls.some((c) => c[0] === 'http://10.0.0.1:8080/second/page')).toBe(true);
   });
 
@@ -1282,15 +1282,15 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
   });
 
   it('黄金路径:同用例换环境(计划级 envOverride)执行 → 初始导航 origin 随环境 web 服务切换', async () => {
-    // 验收点:同一相对 url + 绑定 frontend,经计划所在环境的 envOverride(runPlan 同款走线)执行,
-    // goto 目标应随环境解析出不同的 origin——而非固化在用例上。
+    // Acceptance point: the same relative url + frontend binding, executed via the plan environment's envOverride (the same wiring runPlan uses),
+    // should resolve the goto target to a different origin per environment -- rather than being frozen onto the case.
     const envA = await insertEnv('golden-env-a', [
       { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '10.0.0.1', port: 8080 }, isDefault: true },
     ]);
     const envB = await insertEnv('golden-env-b', [
       { label: '前端', payload: { name: 'frontend', scheme: 'http', host: '192.168.1.10', port: 8080 }, isDefault: true },
     ]);
-    // 用例不设 default_env_id:证明 origin 完全由计划环境(envOverride)决定。
+    // The case sets no default_env_id: proving the origin is decided entirely by the plan environment (envOverride).
     const c = await pool.query(
       `INSERT INTO test_cases(group_id, title, url, web_service_ref) VALUES ($1, 'golden', '/login', 'frontend') RETURNING id`,
       [groupId],
@@ -1313,7 +1313,7 @@ describe('runCase — 相对 url 与环境 web 服务', () => {
 });
 
 describe('sql 步骤分支（查被测系统自己的库）', () => {
-  /** 假 EnvCtx：一个名为 olap 的 db 对象，池记录调用。 */
+  /** Fake EnvCtx: one db object named olap; the pool records calls. */
   function makeSqlEnv(rows: Record<string, unknown>[]) {
     const calls: Array<{ sql: string; params: unknown[] }> = [];
     const pool = {
@@ -1431,7 +1431,7 @@ describe('locator 变量替换 — waitFor/assert* 的定位值带数据集变�
       { reportId: 'r-waitfor-var', initialVars: { expectedError: '验证码不正确' } },
     );
     expect(results[0]!.status).toBe('passed');
-    // 关键：不是字面模板串 {{expectedError}}，而是替换后的实际文案
+    // Key point: not the literal template string {{expectedError}}, but the replaced actual text
     expect(mocked.__getByText).toHaveBeenCalledWith('验证码不正确');
     expect(mocked.__getByText).not.toHaveBeenCalledWith('{{expectedError}}');
   });

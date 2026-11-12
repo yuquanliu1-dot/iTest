@@ -1,10 +1,10 @@
 /**
- * aiTask 视觉步骤的运行时动作缓存（"自动挡固化"，借鉴 midscene cache 自愈协议）：
- * 首次回放成功后把 AI 实际执行的动作序列写入 step_action_cache，后续回放先机械执行
- * 缓存动作（零 LLM），失败由 cdp.ts 静默回退 AI 重做并覆写缓存。
+ * Runtime action cache for aiTask vision steps ("automatic solidification", borrowed from the midscene cache self-heal protocol):
+ * after the first successful replay, the action sequence the AI actually executed is written to step_action_cache; subsequent replays
+ * execute the cached actions mechanically first (zero LLM); on failure cdp.ts silently falls back to AI redo and overwrites the cache.
  *
- * 缓存永远不能阻塞回放：读失败/未命中一律返回 null，写失败只 warn。
- * key = (stepId, instruction 精确匹配)——指令一改即过期。
+ * The cache must never block replay: read failures/misses always return null; write failures only warn.
+ * key = (stepId, exact instruction match) — any instruction change invalidates it.
  */
 import { eq, sql } from 'drizzle-orm';
 import type { StepAction } from '@itest/shared';
@@ -14,7 +14,7 @@ import { logger } from '../logger.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 读缓存：stepId 非 UUID（草稿 staged-N 等）或 instruction 不一致 → null；db 异常 → null（不阻塞回放）。 */
+/** Read cache: non-UUID stepId (drafts staged-N etc.) or instruction mismatch → null; db error → null (never blocks replay). */
 export async function readAiTaskCache(stepId: string, instruction: string): Promise<StepAction[] | null> {
   if (!UUID_RE.test(stepId)) return null;
   try {
@@ -27,7 +27,7 @@ export async function readAiTaskCache(stepId: string, instruction: string): Prom
   }
 }
 
-/** 覆写缓存（upsert 就地替换，hits 保留累计）；调用方 fire-and-forget。 */
+/** Overwrite cache (upsert in-place replacement, hits keep accumulating); callers fire-and-forget. */
 export async function writeAiTaskCache(stepId: string, instruction: string, actions: StepAction[]): Promise<void> {
   await db
     .insert(stepActionCache)
@@ -38,7 +38,7 @@ export async function writeAiTaskCache(stepId: string, instruction: string, acti
     });
 }
 
-/** 命中计数 +1（fire-and-forget，失败静默）。 */
+/** Hit counter +1 (fire-and-forget, failures silent). */
 export async function bumpAiTaskCacheHit(stepId: string): Promise<void> {
   await db
     .update(stepActionCache)

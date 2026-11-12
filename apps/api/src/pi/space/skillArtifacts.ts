@@ -1,46 +1,46 @@
 /**
- * skill 脚本 → 平台产物的交接协议。
+ * Handover protocol from skill scripts to platform artifacts.
  *
- * 约定：脚本把产物写到 `<skill>/.out/<文件名>`，并在 stdout 最后一行打印
+ * Convention: the script writes artifacts to `<skill>/.out/<file name>` and prints on the last stdout line
  *   __ITEST_ARTIFACTS__ [{"name":"报告.docx","path":".out/报告.docx","mime":"..."}]
- * 工具层解析清单 → 校验路径 → 读文件 → registerPersistentArtifact → 发 SSE artifact 事件。
+ * The tool layer parses the manifest → validates paths → reads files → registerPersistentArtifact → emits SSE artifact events.
  *
- * 为什么协议挂在 run_skill_script 这一层：与 skill 来源无关——用户自建的 skill
- * （manage_skill create / import_skill / 设置页编辑器）无需任何额外配置即可产出可下载文件。
+ * Why the protocol lives at the run_skill_script layer: independent of the skill's origin — user-created skills
+ * (manage_skill create / import_skill / settings-page editor) can produce downloadable files with zero extra configuration.
  *
- * **清单里的 path 是脚本自报的不可信输入**，必须校验：
- *  1) 必须在 `<skill>/.out/` 之下（约定位置）；
- *  2) realpath 解析后仍在技能目录内（防软链逃逸）；
- *  3) 必须是常规文件（不能是目录/设备/管道）。
- * 校验失败只跳过该条目并记录原因，绝不抛错中断整轮工具调用。
+ * **The path in the manifest is script-reported, untrusted input** and must be validated:
+ *  1) must be under `<skill>/.out/` (the conventional location);
+ *  2) must still be inside the skill directory after realpath resolution (prevents symlink escape);
+ *  3) must be a regular file (not a directory/device/pipe).
+ * A validation failure only skips that entry and records the reason; it never throws and aborts the whole tool call.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-/** stdout 里产物清单的前缀。用独立前缀而非裸 JSON，避免与脚本自身输出混淆。 */
+/** Prefix of the artifact manifest line inside stdout. A distinct prefix rather than bare JSON, avoiding confusion with the script's own output. */
 export const ARTIFACT_MARKER = '__ITEST_ARTIFACTS__';
 
-/** 产物约定目录（相对技能根）。点开头 → listSkillTree 跳过，产物不会污染技能文件树。 */
+/** Conventional artifact directory (relative to the skill root). Dot-prefixed → skipped by listSkillTree, so artifacts never pollute the skill file tree. */
 export const ARTIFACT_OUT_DIR = '.out';
 
-/** 单个产物的体积上限，防止 skill 脚本产出巨物撑爆磁盘。 */
+/** Size cap per artifact, preventing skill scripts from producing giant files that blow up the disk. */
 export const MAX_ARTIFACT_BYTES = 50 * 1024 * 1024;
 
 export interface ArtifactManifestItem {
-  /** 原始文件名（含扩展名，可中文）。 */
+  /** Original file name (with extension, may be non-ASCII). */
   name: string;
-  /** 相对技能根的路径，必须在 .out/ 下。 */
+  /** Path relative to the skill root; must be under .out/. */
   path: string;
-  /** Content-Type；缺省按扩展名推断。 */
+  /** Content-Type; inferred from the extension by default. */
   mime?: string;
-  /** 可选条目数（沿用 xmind 语义：文件内含多少条用例）。 */
+  /** Optional entry count (xmind semantics: how many cases the file contains). */
   count?: number;
 }
 
 /**
- * 从 stdout 解析产物清单。
- * 找不到标记 / JSON 非法 / 结构不对 → 返回 null（调用方把整段 stdout 当普通输出，不视为失败）。
- * 标记行可以在 stdout 任意位置（不强制最后一行）——脚本常在产物写完后才 flush，位置不稳。
+ * Parse the artifact manifest from stdout.
+ * Marker not found / invalid JSON / wrong shape → returns null (the caller treats the whole stdout as ordinary output, not a failure).
+ * The marker line may appear anywhere in stdout (last line not enforced) — scripts often flush only after artifacts are written, so the position is unstable.
  */
 export function parseArtifactManifest(stdout: string): ArtifactManifestItem[] | null {
   const lines = stdout.split('\n');
@@ -59,7 +59,7 @@ export function parseArtifactManifest(stdout: string): ArtifactManifestItem[] | 
   } catch {
     return null;
   }
-  // 允许单个对象或数组两种形态。
+  // Accept both shapes: a single object or an array.
   const list = Array.isArray(parsed) ? parsed : [parsed];
   const out: ArtifactManifestItem[] = [];
   for (const it of list) {
@@ -75,7 +75,7 @@ export function parseArtifactManifest(stdout: string): ArtifactManifestItem[] | 
   return out;
 }
 
-/** 把产物清单行从 stdout 里摘掉——模型看到的应该是脚本的业务输出，不是协议噪声。 */
+/** Strip the artifact manifest lines out of stdout — what the model sees should be the script's business output, not protocol noise. */
 export function stripArtifactManifest(stdout: string): string {
   return stdout
     .split('\n')
@@ -85,15 +85,15 @@ export function stripArtifactManifest(stdout: string): string {
 }
 
 /**
- * 校验产物路径并返回绝对路径；不合法返回 null（附原因）。
- * 校验链：相对路径 → 无 `..`/绝对路径 → 必须在 .out/ 下 → realpath 后仍在技能目录内 → 是常规文件。
+ * Validate the artifact path and return the absolute path; returns null-equivalent error (with reason) when invalid.
+ * Validation chain: relative path → no `..`/absolute path → must be under .out/ → still inside the skill directory after realpath → is a regular file.
  */
 export async function resolveArtifactPath(skillDir: string, relPath: string): Promise<{ abs: string; size: number } | { error: string }> {
   if (path.isAbsolute(relPath) || /^[A-Za-z]:/.test(relPath)) return { error: '产物路径必须是相对路径' };
   const segments = relPath.split(/[\\/]/).filter((s) => s.length > 0);
   if (segments.length === 0) return { error: '产物路径为空' };
   if (segments.some((s) => s === '.' || s === '..')) return { error: '产物路径不得含 . 或 ..' };
-  // 必须落在约定目录 .out/ 下（且不是 .out 本身）。
+  // Must land in the conventional .out/ directory (and not be .out itself).
   if (segments[0] !== ARTIFACT_OUT_DIR || segments.length < 2) {
     return { error: `产物必须写到 ${ARTIFACT_OUT_DIR}/ 目录下` };
   }
@@ -107,11 +107,11 @@ export async function resolveArtifactPath(skillDir: string, relPath: string): Pr
   } catch {
     return { error: '产物文件不存在' };
   }
-  // realpath 后仍须在技能目录内——防 .out/x.docx 是指向 /etc 的软链。
+  // After realpath it must still be inside the skill directory — guards against .out/x.docx being a symlink to /etc.
   if (realAbs !== realSkill && !realAbs.startsWith(realSkill + path.sep)) {
     return { error: '产物路径逃逸出技能目录' };
   }
-  // 还须在 .out 之下（realpath 解析后可能是 .out 外的路径，例如 .out 是指向别处的软链）。
+  // It must also be under .out (after realpath resolution the path may fall outside .out, e.g. when .out is a symlink elsewhere).
   const realOut = path.join(realSkill, ARTIFACT_OUT_DIR);
   if (realAbs !== realOut && !realAbs.startsWith(realOut + path.sep)) {
     return { error: '产物路径逃逸出产物目录' };

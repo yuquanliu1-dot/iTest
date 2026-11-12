@@ -63,8 +63,8 @@ async function insertMobileCase(title: string): Promise<string> {
   return r.rows[0]!.id as string;
 }
 
-/** 执行已异步化（POST 立即返回 running reportId，后台继续跑）：
- *  轮询指定 report 直到 status !== 'running'，再把 body 返回给断言。 */
+/** Execution is asynchronous (POST returns the running reportId immediately, and it keeps running in the background):
+ *  poll the report until status !== 'running', then return the body to the assertion. */
 async function waitReportDone(reportId: string, timeoutMs = 8000): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -170,7 +170,7 @@ describe('runCase platform routing', () => {
     expect(rep.body.stepResults).toHaveLength(1);
     expect(rep.body.stepResults[0].failureReason).toBe('EngineUnavailable');
     expect(rep.body.stepResults[0].humanMessage).toContain('移动端引擎不可用');
-    // 合成失败步也带开始时刻——报告页统一展示「开始 HH:MM:SS」，不留空洞
+    // The synthesized failed step also carries a start time — the report page uniformly shows "started HH:MM:SS", no gaps
     expect(rep.body.stepResults[0].startedAt).toBeTruthy();
     expect(Number.isNaN(new Date(rep.body.stepResults[0].startedAt).getTime())).toBe(false);
     // mobileExec must NOT have been called when prepare failed
@@ -186,9 +186,9 @@ describe('runCase platform routing', () => {
     expect(rep.body.status).toBe('failed');
     expect(rep.body.stepResults).toHaveLength(1);
     expect(rep.body.stepResults[0].failureReason).toBe('CDPUnavailable');
-    // 合成失败步也带开始时刻（prod228 实测：浏览器起不来时该步原本无时间戳，报告页留空洞）
+    // The synthesized failed step also carries a start time (verified on prod228: when the browser fails to start this step had no timestamp, leaving a gap on the report page)
     expect(rep.body.stepResults[0].startedAt).toBeTruthy();
-    // 用例级起止也要落——引擎挂掉不等于报告没跑
+    // Case-level start/end times must land too — an engine crash doesn't mean the report never ran
     expect(rep.body.startedAt).toBeTruthy();
     expect(rep.body.finishedAt).toBeTruthy();
   });

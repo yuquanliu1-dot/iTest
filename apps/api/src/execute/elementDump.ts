@@ -1,42 +1,43 @@
 /**
- * 页面可交互元素抽取（视口内清单 + 与截图对齐的归一化坐标框）。
+ * Extracts the page's interactive elements (in-viewport list + normalized coordinate boxes aligned with the screenshot).
  *
- * 抽自 aiTask.ts（坐标协议链路）——探索改用 pi 工具链后，元素清单被两条链路共用，
- * 不能各留一份：两份清单一旦漂移，同一页在「AI 相」与「探索」里会看到不同的控件集合。
+ * Extracted from aiTask.ts (the coordinate protocol chain) — after exploration moved to the pi tool chain, the element list
+ * is shared by both chains and cannot keep a copy each: once the two lists drift, the same page presents a different
+ * control set in the "AI phase" and in "exploration".
  *
- * 注意：本模块的 evaluate 回调必须是**匿名箭头**——tsx/esbuild 的 keepNames 会给具名
- * 函数注入 __name 助手，而 evaluate 的函数体被序列化到浏览器上下文执行，那里没有
- * __name → 整个 evaluate 抛 ReferenceError，元素清单整体失效（dev/tsx 独有，tsc 产物无此注入）。
+ * Note: this module's evaluate callbacks must be **anonymous arrows** — tsx/esbuild's keepNames injects a __name
+ * helper into named functions, and an evaluate body is serialized into the browser context where there is no
+ * __name → the whole evaluate throws ReferenceError and the element list fails wholesale (dev/tsx only; tsc output has no such injection).
  */
 import type { Page } from 'playwright-core';
 
 export interface ElementInfo {
   selector: string;
   tag: string;
-  /** 视口归一化 0-1000 坐标框 [x1,y1,x2,y2]——与截图对齐，模型据此指认目标。 */
+  /** Viewport-normalized 0-1000 coordinate box [x1,y1,x2,y2] — aligned with the screenshot; the model uses it to point at the target. */
   box: [number, number, number, number];
   text?: string;
   placeholder?: string;
   inputType?: string;
-  /** input 当前值（密码型不打）——级联选中后 value=完整路径，是截图截断显示之外
-   *  唯一可验证选中结果的通道。 */
+  /** Current input value (password type excluded) — after a cascader selection value=the full path, the only channel
+   *  besides the screenshot's truncated display that can verify the selected result. */
   value?: string;
   disabled?: boolean;
 }
 
-/** 页面上下文内执行的选择器合成源码（函数表达式字符串）——dumpElements 与 resolveAtPoint
- *  经 evaluate 参数传入并在页面内 eval 还原，共用同一份（此前两处手抄副本，prod228 10-27
- *  实测 button>span 命中产出裸 span 即手抄链无上浮/无唯一性校验的后果）。
- *  基础优先级不变：#id → tag[name] → tag[placeholder] → [role] → tag.cls1.cls2 → 裸 tag；
- *  class 候选剔除激活态 class（router-link-active/is-active 由路由状态动态加减，固化后回放
- *  会因菜单未激活而落空——2026-10-28 prod228 实录 a.router-link-exact-active.router-link-active）。
- *  多命中时依次富化，保证机械回放命中唯一：
- *    1. 短文本（≤30 字符）尾缀 :has-text("…")——非标准 CSS，唯一性按「基础命中中
- *       textContent 含该文本」的个数模拟计数（与回放侧 getByText 的包含语义同向）；
- *    2. 父内同 tag 序号 :nth-of-type(k)——标准 CSS，可直接 querySelectorAll 验证。
- *  仍不唯一 → unique:false（上报链据此保持坐标形态，固化管线保守拒绝该步）。
- *  字符串源码对 tsx/esbuild 的 evaluate 嵌套函数 keepNames 陷阱免疫；Playwright evaluate
- *  走 DevTools 通道，不受页面 CSP 的 eval 限制。 */
+/** Selector-synthesis source code executed in the page context (a function-expression string) — dumpElements and resolveAtPoint
+ *  both pass it in via evaluate arguments and eval it inside the page, sharing one copy (previously two hand-copied versions;
+ *  prod228 10-27 measurement of a button>span hit producing a bare span was the consequence of hand-copying without ancestor-lifting/without uniqueness checks).
+ *  The base priority is unchanged: #id → tag[name] → tag[placeholder] → [role] → tag.cls1.cls2 → bare tag;
+ *  active-state classes are stripped from class candidates (router-link-active/is-active are dynamically added/removed by routing state;
+ *  after solidification replay would miss because the menu isn't active — 2026-10-28 prod228 record a.router-link-exact-active.router-link-active).
+ *  On multiple hits, enrichment proceeds stepwise to guarantee mechanical replay hits uniquely:
+ *    1. short text (≤30 chars) appended as :has-text("…") — non-standard CSS; uniqueness is simulated by counting
+ *       "base hits whose textContent contains the text" (same direction as the replay side's getByText containment semantics);
+ *    2. same-tag index within parent :nth-of-type(k) — standard CSS, verifiable directly with querySelectorAll.
+ *  Still not unique → unique:false (the reporting chain keeps the coordinate form accordingly; the solidify pipeline conservatively rejects the step).
+ *  String source is immune to tsx/esbuild's evaluate nested-function keepNames gotcha; Playwright evaluate
+ *  goes through the DevTools channel, unaffected by the page CSP's eval restrictions. */
 export const SYNTH_SELECTOR_SRC = `function (el) {
   var tag = el.tagName.toLowerCase();
   var name = el.getAttribute('name');
@@ -68,8 +69,8 @@ export const SYNTH_SELECTOR_SRC = `function (el) {
   return { selector: selector, unique: false };
 }`;
 
-/** 提取视口内可交互元素清单（selector + 与截图对齐的归一化坐标框）。
- *  坐标协议下清单的定位职能降为「对齐锚点 + selector 兜底」，box 才是主要信息。 */
+/** Extracts the in-viewport interactive element list (selector + normalized coordinate boxes aligned with the screenshot).
+ *  Under the coordinate protocol the list's locating role is demoted to "alignment anchor + selector fallback"; box is the primary information. */
 export async function dumpElements(page: Page): Promise<ElementInfo[]> {
   const raw = (await page.evaluate((src: string) => {
     const synth = eval('(' + src + ')') as (el: HTMLElement) => { selector: string; unique: boolean };
@@ -83,16 +84,16 @@ export async function dumpElements(page: Page): Promise<ElementInfo[]> {
       const he = el as HTMLElement;
       const r = he.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) continue;
-      // 只保留与视口相交的元素：截图只有视口，清单与截图不对齐会误导坐标指认。
+      // Keep only elements intersecting the viewport: the screenshot covers only the viewport; a list misaligned with it would mislead coordinate pointing.
       if (r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) continue;
       const style = window.getComputedStyle(he);
       if (style.visibility === 'hidden' || style.display === 'none') continue;
       const s = synth(he);
       let text = (he.textContent ?? '').trim().slice(0, 40);
-      // 行首单选/复选 input 自身无文本（Element-UI 级联 checkStrictly 下 radio 是唯一
-      // 选中路径），清单里有坐标却无从指认是哪一行——取所在行容器的行文字。
-      // 级联的下级列嵌套在父 li 内（子面板是 li 的子节点），不能用整行 textContent，
-      // 只取行自己的标签 span。
+      // Row-leading radio/checkbox inputs have no text of their own (under Element-UI cascader checkStrictly the radio is the only
+      // selection path), leaving the list with coordinates but no way to tell which row — take the row container's row text.
+      // The cascader's child column nests inside the parent li (the child panel is a child node of li), so the whole row's textContent
+      // can't be used; take only the row's own label span.
       if (!text && he.tagName === 'INPUT') {
         const row = he.closest('li.el-cascader-node, tr, label');
         if (row) {
@@ -105,9 +106,9 @@ export async function dumpElements(page: Page): Promise<ElementInfo[]> {
       const item: Record<string, unknown> = {
         selector: s.selector,
         tag: he.tagName.toLowerCase(),
-        // 归一化不用具名箭头函数赋值：tsx/esbuild 的 keepNames 会给它注入 __name 助手，
-        // 而 evaluate 的函数体被序列化到浏览器上下文执行，那里没有 __name → 整个
-        // evaluate 抛 ReferenceError，元素清单整体失效（dev/tsx 独有，tsc 产物无此注入）。
+        // Normalization must not be assigned via a named arrow function: tsx/esbuild's keepNames would inject a __name helper into it,
+        // and the evaluate body is serialized into the browser context where there is no __name → the whole
+        // evaluate throws ReferenceError and the element list fails wholesale (dev/tsx only; tsc output has no such injection).
         box: [
           Math.round(Math.min(1000, Math.max(0, (r.left / vw) * 1000))),
           Math.round(Math.min(1000, Math.max(0, (r.top / vh) * 1000))),
@@ -120,9 +121,9 @@ export async function dumpElements(page: Page): Promise<ElementInfo[]> {
       if (ph) item.placeholder = ph;
       const it = (he as HTMLInputElement).type;
       if (he.tagName === 'INPUT' && it) item.inputType = it;
-      // 选中/填写结果的验证通道：级联选中后 value 是完整路径，截图窄框截断显示
-      // 前缀会让模型误判「选错单位」而空转到轮次耗尽（prod228 11-08 实录：radio 已
-      // 选上、abort 时值是对的，模型因截图只见前缀始终不敢判 done）。密码型不外泄。
+      // Verification channel for selection/fill results: after a cascader selection the value is the full path; the screenshot's
+      // narrow truncated box showing only the prefix would make the model misjudge "wrong unit selected" and idle until turns run out
+      // (prod228 11-08 record: the radio was selected and the value was right at abort, but the model never dared call done seeing only the prefix in the screenshot). Password type is never exposed.
       if (he.tagName === 'INPUT' && it !== 'password') {
         const v = (he as HTMLInputElement).value;
         if (v) item.value = v.slice(0, 60);

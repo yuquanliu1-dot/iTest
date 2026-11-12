@@ -15,7 +15,7 @@ export interface OrgMembership {
   isUser: boolean;
 }
 
-/** 查组织 path;不存在返回 null。path 不可变 → 实际接近永久(失效见 organizations 写路径)。 */
+/** Looks up an org path; returns null when missing. Paths are immutable → effectively permanent (invalidation lives in the organizations write path). */
 export async function getOrgPath(orgId: string): Promise<string | null> {
   return wrap(orgPathKey(orgId), 5 * 60_000, async () => {
     const rows = await db.select({ path: organizations.path }).from(organizations).where(eq(organizations.id, orgId)).limit(1);
@@ -23,7 +23,7 @@ export async function getOrgPath(orgId: string): Promise<string | null> {
   });
 }
 
-/** 物化路径子树内的全部组织 id(org 表量级小,直接全表扫 + 前缀判定)。 */
+/** All org ids inside the materialized-path subtree (the org table is small: full scan + prefix check). */
 export async function subtreeOrgIds(orgPath: string): Promise<string[]> {
   return wrap(subtreeKey(orgPath), 5 * 60_000, async () => {
     const rows = await db.select({ id: organizations.id, path: organizations.path }).from(organizations);
@@ -31,7 +31,7 @@ export async function subtreeOrgIds(orgPath: string): Promise<string[]> {
   });
 }
 
-/** 用户的全部组织成员资格(带组织信息)。 */
+/** The user's full set of org memberships (with org info). */
 export async function membershipsOf(userId: string): Promise<Array<OrgMembership & { organizationId: string }>> {
   return wrap(membershipsKey(userId), 120_000, async () => {
     const rows = await db
@@ -51,20 +51,20 @@ export async function membershipsOf(userId: string): Promise<Array<OrgMembership
   });
 }
 
-/** 显式删除某用户成员资格缓存(成员 add/remove 路径调)。 */
+/** Explicitly deletes a user's membership cache (called by member add/remove paths). */
 export async function invalidateMemberships(userId: string): Promise<void> {
   await cache.del(membershipsKey(userId));
 }
 
-/** 显式失效全部 org 子树/路径缓存(组织 C/P/D 调)。 */
+/** Explicitly invalidates all org subtree/path caches (called on org create/patch/delete). */
 export async function invalidateOrgTree(): Promise<void> {
   await cache.delPattern('org:subtree:*');
   await cache.delPattern('org:path:*');
 }
 
 /**
- * 用户可见的组织 id 集合 = 管理的每个组织的子树并集 ∪ 自己直接加入的组织。
- * org 表小,子树/成员资格已各自缓存。
+ * The set of org ids visible to the user = union of the subtrees of every managed org ∪ orgs joined directly.
+ * The org table is small; subtrees/memberships are each cached.
  */
 export async function visibleOrgIdsFor(user: AuthUser): Promise<Set<string>> {
   const visible = new Set<string>();

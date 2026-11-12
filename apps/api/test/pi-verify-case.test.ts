@@ -4,8 +4,8 @@ import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-// 全 AI 驱动编排测试：runAiTask / writeStepScreenshot / extractPageElements 打桩，聚焦 verify_case 编排契约。
-// 占位符常量随 execute 层定义（verifyCase 提示词经 aiTask.js 取用）,一并打桩隔绝真实依赖。
+// All-AI-driven orchestration test: runAiTask / writeStepScreenshot / extractPageElements are stubbed, focusing on the verify_case orchestration contract.
+// Placeholder constants are defined at the execute layer (the verifyCase prompt takes them via aiTask.js); stub those too to isolate real dependencies.
 vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/execute/aiTask.js')>();
   return {
@@ -18,7 +18,7 @@ vi.mock('../src/execute/aiTask.js', async (importOriginal) => {
 });
 vi.mock('../src/execute/cdp.js', () => ({
   writeStepScreenshot: vi.fn(async () => '/screenshots/verify-x/step-1.png'),
-  // 机械干跑默认全过（步骤序号透传）；失败/接线细节由用例内 mockImplementationOnce 覆写
+  // Mechanical dry-run passes everything by default (step order passed through); failure/wiring details are overridden per-case via mockImplementationOnce
   executeCaseInBrowser: vi.fn(
     async (
       _caseId: string,
@@ -32,10 +32,10 @@ vi.mock('../src/execute/cdp.js', () => ({
       _onFailurePage?: (page: unknown, failedIndex: number) => Promise<void>,
     ) => steps.map((s) => ({ order: s.order, status: 'passed' as const, durationMs: 10 })),
   ),
-  // runCaseVisionAssert 依赖的模板物化/脱敏（验证场景无数据集变量/敏感列，恒等即可）
+  // Template materialization/masking required by runCaseVisionAssert (no dataset variables/sensitive columns in verify scenarios, identity is enough)
   materializeExpectedOutcome: (t: string) => t,
   maskSensitiveValues: (t: string) => t,
-  // init 预导航的落地重试（默认直达；重试语义由 cdp-goto-retry.test.ts 对真实实现单测）
+  // Landing retry for the init pre-navigation (direct by default; retry semantics are unit-tested against the real implementation in cdp-goto-retry.test.ts)
   gotoWithLandedRetry: vi.fn(async (_page: unknown, targetUrl: string) => ({ landed: true, finalUrl: targetUrl })),
 }));
 vi.mock('../src/pi/inspectPage.js', () => ({
@@ -48,27 +48,27 @@ vi.mock('../src/pi/inspectPage.js', () => ({
   })),
   extractPageEvidence: vi.fn(async () => ({ overlays: [] })),
 }));
-// liveView 包一层 spy：既有真实行为不变（登记进内存表），供 ctx.liveView=false 用例断言零调用
+// Wrap liveView with a spy: existing real behavior unchanged (registers into the in-memory table), so ctx.liveView=false cases can assert zero calls
 vi.mock('../src/execute/liveView.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/execute/liveView.js')>();
   return { ...actual, registerLiveView: vi.fn(actual.registerLiveView) };
 });
-// LLM 模块桩：resolveLlmClient 缺省走 settings 表（测试库无 provider 配置会抛），先注入假 client。
+// LLM module stub: resolveLlmClient defaults to reading the settings table (the test DB has no provider config and would throw), so inject a fake client first.
 vi.mock('../src/agent/llmSettings.js', () => ({
   resolveLlmClient: vi.fn(async () => ({
     config: { provider: 'anthropic', apiKey: 'fake', model: 'fake' },
     client: { provider: 'anthropic' as const, complete: async () => ({ kind: 'text' as const, value: '', provider: 'anthropic' as const, vision: false }) },
   })),
 }));
-// playwright 桩：launch → context.newPage 返回极简 page；gotos 记录初始导航、ctxOpts 记录 newContext 入参（经 __testState 暴露给测试）。
-// locator/getByText/getByTestId/getByRole 模拟 compiled 保真校验的 count 探测：zeroLocators 里的选择器永远命中 0；multiLocators 精确命中 2（多匹配）；含 :contains 的选择器抛非法伪类错误（与真实 Playwright 一致）。
+// playwright stub: launch → context.newPage returns a minimal page; gotos records the initial navigation and ctxOpts records newContext args (exposed to tests via __testState).
+// locator/getByText/getByTestId/getByRole simulate the count probing of compiled fidelity checks: selectors in zeroLocators always hit 0; multiLocators hit exactly 2 (multi-match); selectors containing :contains throw an invalid pseudo-class error (same as real Playwright).
 vi.mock('playwright-core', () => {
   const state = {
     gotos: [] as string[], ctxOpts: [] as unknown[], zeroLocators: [] as string[], multiLocators: [] as string[],
-    // SPA 挂载滞后模拟：sel → 第 N 次 count() 起返回 1（之前返回 0）
+    // SPA mount-lag simulation: sel → count() returns 1 from the Nth call onward (0 before that)
     mountAfter: {} as Record<string, number>, countCalls: {} as Record<string, number>,
-    // 保活桩开关：false 时浏览器报 isConnected=false / 页面 isClosed=true（= 不可保活，与真实浏览器
-    // 断开同形）→ finally 判定不成立，走即用即关；true 时报连通且页面未关 → 轮末 commit 上册。
+    // Keep-alive stub switch: false → browser reports isConnected=false / page isClosed=true (= not keep-alive-able, same shape as a real browser
+    // disconnect) → the finally check fails, closing on use; true → reports connected and page not closed → commit at round end.
     browserAlive: false,
   };
   const makeLoc = (sel: string) => ({
@@ -88,7 +88,7 @@ vi.mock('playwright-core', () => {
   return {
     chromium: {
       launch: vi.fn(async () => ({
-        // 保活判定读它（finally：browser.isConnected?.() === true）
+        // The keep-alive check reads this (finally: browser.isConnected?.() === true)
         isConnected: () => state.browserAlive,
         newContext: vi.fn(async (opts?: unknown) => {
           state.ctxOpts.push(opts);
@@ -98,13 +98,13 @@ vi.mock('playwright-core', () => {
               goto: async (u: string) => { state.gotos.push(u); },
               waitForLoadState: async () => {},
               waitForTimeout: async () => {},
-              on: () => {}, // consoleCapture 订阅（console/pageerror），桩页无需采集
+              on: () => {}, // consoleCapture subscription (console/pageerror); the stub page needs no collection
               close: async () => {},
-              // 保活判定读它（finally：page.isClosed?.() === false）
+              // The keep-alive check reads this (finally: page.isClosed?.() === false)
               isClosed: () => !state.browserAlive,
               screenshot: async () => Buffer.from('fake-png'),
-              // pageSettle 的像素指纹取数字；断言文本体检取 innerText 字符串。
-              // 恒返回 0：连续两次相同 → 页面已静止；innerText 场景恒为空串，judge 仍按语义判。
+              // pageSettle's pixel fingerprint takes a number; the assertion text check takes the innerText string.
+              // Always returns 0: two consecutive identical values → page has settled; in the innerText scenario it is always empty string, judge still decides semantically.
               evaluate: async () => 0,
               locator: (sel: string) => makeLoc(sel),
               getByText: (t: string) => makeLoc(`text=${t}`),
@@ -121,12 +121,12 @@ vi.mock('playwright-core', () => {
     __testState: state,
   };
 });
-// judgeCaseOutcome 桩：vision 终态判定的 LLM 判官（真实实现要走视觉模型，测试注入裁决结果）。
+// judgeCaseOutcome stub: the LLM judge for vision final-state verdicts (the real implementation needs a vision model; tests inject the verdict).
 vi.mock('../src/agent/judgeCaseOutcome.js', () => ({
   judgeCaseOutcome: vi.fn(async () => ({ passed: true, reason: 'ok' })),
 }));
-// assertionJudge 桩：断言文本体检的 LLM 判官（真实实现要发 LLM 请求，测试注入裁决结果）。
-// 缺省判 real=true（保留断言），仅专门的用例用 mockImplementationOnce 覆盖。
+// assertionJudge stub: the LLM judge for assertion text vetting (the real implementation sends an LLM request; tests inject the verdict).
+// Defaults to real=true (keep the assertion); only dedicated cases override via mockImplementationOnce.
 vi.mock('../src/pi/space/tools/assertionJudge.js', () => ({
   judgeAssertionText: vi.fn(async () => ({ real: true, reason: '' })),
 }));
@@ -142,7 +142,7 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // SCHEMA_SQL 尚未收录暂存表,本文件自建(与 src/db/schema.ts 对齐)
+  // SCHEMA_SQL does not yet include the staging tables, so this file creates them (aligned with src/db/schema.ts)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ai_stage_cases (
       thread_id text NOT NULL,
@@ -192,7 +192,7 @@ beforeEach(async () => {
   __testState.mountAfter = {};
   __testState.countCalls = {};
   __testState.browserAlive = false;
-  // 保活注册表是进程内状态：跨用例残留会让后一轮意外命中复用，掩盖真实行为
+  // The keep-alive registry is in-process state: residue across cases would make a later round unexpectedly hit reuse and mask real behavior
   const { resetForTest } = await import('../src/pi/space/tools/browserSessions.js');
   resetForTest();
   await pool.query(`TRUNCATE test_steps, test_cases, test_environments, environment_objects,
@@ -202,7 +202,7 @@ beforeEach(async () => {
   projectId = seed.projectId;
   groupId = seed.groupId;
   versionId = seed.versionId;
-  // 每个用例都要求环境可解析（resolveEnv 需要）：默认环境无 login 凭据
+  // Every case requires a resolvable environment (needed by resolveEnv): the default environment has no login credentials
   const seedEnv = await pool.query(
     `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认环境', true) RETURNING id`,
     [projectId],
@@ -217,12 +217,12 @@ async function seedCase(opts: {
   platform?: string;
   url?: string | null;
   steps?: unknown[];
-  /** 与 steps 同序的 step-level assertion（测试步骤断言文本体检用） */
+  /** Step-level assertion in the same order as steps (for testing the step assertion text vetting) */
   assertions?: unknown[];
   expectedOutcome?: string | null;
-  /** 仅对第 1 步标记 sensitive 并注入密文（明文 StepSecret!9） */
+  /** Mark only step 1 sensitive and inject ciphertext (plaintext StepSecret!9) */
   sensitiveStep1?: boolean;
-  /** sensitive=true 但不注入密文（secret-missing 场景） */
+  /** sensitive=true but no ciphertext injected (secret-missing scenario) */
   sensitiveNoSecret?: boolean;
 }): Promise<string> {
   const id = randomUUID();
@@ -262,13 +262,13 @@ async function seedCase(opts: {
 async function seedLoginObject(): Promise<void> {
   const { encrypt } = await import('../src/lib/secret-crypto.js');
   const enc = encrypt('Passw0rd!');
-  // 先降级 beforeEach 插入的默认环境（唯一部分索引 test_environments_project_default_uq），再插新默认
+  // First demote the default environment inserted by beforeEach (the only partial index test_environments_project_default_uq), then insert the new default
   await pool.query(`UPDATE test_environments SET is_default = false WHERE project_id = $1`, [projectId]);
   const env = await pool.query(
     `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '登录环境', true) RETURNING id`,
     [projectId],
   );
-  // 0041 起登录凭据并入默认 web 服务对象:user/loginUrl/secret 内嵌 payload
+  // Since 0041, login credentials are merged into the default web service object: user/loginUrl/secret embedded in payload
   const payload = {
     name: 'web',
     scheme: 'http',
@@ -283,7 +283,7 @@ async function seedLoginObject(): Promise<void> {
   );
 }
 
-/** 视觉模式用例：instruction-only 步骤（compiled NULL）——轨迹收集与保活续跑的目标形态。返回逐步 step id。 */
+/** Vision-mode case: instruction-only steps (compiled NULL) — the target shape for trail collection and keep-alive resume. Returns per-step ids. */
 async function seedVisualCase(stepCount: number, opts?: { sensitiveFirst?: boolean }): Promise<{ caseId: string; stepIds: string[] }> {
   const id = randomUUID();
   await pool.query(
@@ -321,13 +321,13 @@ function toolCtx(emitLog?: unknown[]) {
 
 const CLICK_COMPILED = [{ kind: 'click', locator: [{ strategy: 'css', value: '#missing' }] }];
 
-/** 读取 playwright 桩记录的初始导航 */
+/** Reads the initial navigation recorded by the playwright stub */
 async function fakeGotos(): Promise<string[]> {
   const { __testState } = (await import('playwright-core')) as unknown as { __testState: { gotos: string[] } };
   return __testState.gotos;
 }
 
-/** 当前默认环境 id（loginStateCache 的 key 组成部分） */
+/** Current default environment id (part of the loginStateCache key) */
 async function defaultEnvId(): Promise<string> {
   const r = await pool.query(`SELECT id FROM test_environments WHERE project_id = $1 AND is_default = true`, [projectId]);
   return r.rows[0]!.id as string;
@@ -386,18 +386,18 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.steps).toHaveLength(2);
       expect(data.steps[0].screenshot).toContain('/screenshots/verify-');
     }
-    // 每步一次 runAiTask；instruction 含 compiled 与步骤序号
+    // One runAiTask per step; the instruction contains compiled and the step number
     expect(runAiTask).toHaveBeenCalledTimes(2);
     const call = vi.mocked(runAiTask).mock.calls[0]!;
     expect(String(call[1])).toContain('#missing');
     expect(String(call[1])).toContain('第 1 步 / 共 2 步');
-    expect(String(call[1])).not.toContain('__ITEST_USERNAME__'); // 无凭据不注入凭据段
+    expect(String(call[1])).not.toContain('__ITEST_USERNAME__'); // No credentials → credential section not injected
     expect(call[4]).toMatchObject({ maxTurns: 5 });
-    // 初始导航被调（首步非同 URL navigate）——经 gotoWithLandedRetry（含落地校验重试兜底）
+    // Initial navigation is invoked (first step is not a same-URL navigate) — via gotoWithLandedRetry (with landing-validation retry fallback)
     const { gotoWithLandedRetry } = await import('../src/execute/cdp.js');
     expect(vi.mocked(gotoWithLandedRetry)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(gotoWithLandedRetry).mock.calls[0]![1]).toBe('http://env.example/page');
-    // verify_progress SSE 事件序列:start → (step_start + step_done)×2 → replay_start → replay_done → end
+    // verify_progress SSE event sequence: start → (step_start + step_done)×2 → replay_start → replay_done → end
     const phases = emitLog.map((e) => (e as { phase: string }).phase);
     expect(phases).toEqual(['start', 'step_start', 'step_done', 'step_start', 'step_done', 'replay_start', 'replay_done', 'end']);
     const start = emitLog[0] as { type: string; caseId: string; total: number; targetUrl: string | null; loginCache: string; loginUser: string | null };
@@ -422,7 +422,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('passed');
-      // 成功响应与 failure.page 对称带回 page 元素清单（防 agent 臆造页面控件）
+      // The success response carries the page element list symmetrically with failure.page (prevents the agent from inventing page controls)
       expect(data.page.elements[0]).toContain('button#del');
     }
   });
@@ -431,7 +431,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const { registerLiveView } = await import('../src/execute/liveView.js');
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
-    // 关闭路径：liveView=false → 零注册、start 事件无 liveUrl
+    // Off path: liveView=false → zero registration, start event without liveUrl
     const caseOff = await seedCase({ steps: [CLICK_COMPILED] });
     const emitOff: unknown[] = [];
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
@@ -440,7 +440,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(registerLiveView).not.toHaveBeenCalled();
     const startOff = emitOff[0] as { liveUrl?: string };
     expect(startOff.liveUrl).toBeUndefined();
-    // 缺省（undefined）：会话链路照旧注册并带流地址
+    // Default (undefined): the session chain still registers and carries the stream address
     const caseOn = await seedCase({ steps: [CLICK_COMPILED] });
     const emitOn: unknown[] = [];
     const rOn = await buildVerifyCaseTool(toolCtx(emitOn)).execute({ caseId: caseOn });
@@ -451,12 +451,12 @@ describe('verify_case 逐步 AI 执行编排', () => {
   });
 
   it('resume 轮后缀步失败 → 响应仍 ok:true（回归：stepResults 局部下标 vs failedIndex 全局下标）', async () => {
-    // prod228 实测暴露：第 1 轮步 1 过 / 步 2 败(confirmedThrough=1)后,第 2 轮 resume 前缀、
-    // 步 2 再次失败时,旧代码 stepResults[failedIndex] 越过局部数组头(undefined→读 .order 抛错)。
+    // Exposed by prod228 field testing: after round 1 passes step 1 / fails step 2 (confirmedThrough=1), round 2 resumes the prefix and
+    // step 2 fails again — the old code's stepResults[failedIndex] ran past the head of the local array (undefined → reading .order threw).
     const caseId = await seedCase({
       steps: [
-        CLICK_COMPILED, // 步 1:count=1 命中,AI 相通过
-        [{ kind: 'click', locator: [{ strategy: 'css', value: '.ghost-element' }] }], // 步 2:pre-check 命中 0 失败
+        CLICK_COMPILED, // Step 1: count=1 hit, AI phase passes
+        [{ kind: 'click', locator: [{ strategy: 'css', value: '.ghost-element' }] }], // Step 2: pre-check hits 0, fails
       ],
     });
     const { __testState } = (await import('playwright-core')) as unknown as { __testState: { zeroLocators: string[] } };
@@ -465,7 +465,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
 
-    // 第 1 轮：步 1 过、步 2 pre-check 失败
+    // Round 1: step 1 passes, step 2 pre-check fails
     const r1 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r1.ok).toBe(true);
     if (r1.ok) {
@@ -474,7 +474,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(d1.failure.failureReason).toBe('LocatorMismatch');
     }
 
-    // 第 2 轮：resume 步 1(机械回放,不重跑 AI),步 2 仍失败——必须 ok:true 带完整 failure,而非抛错
+    // Round 2: resume step 1 (mechanical replay, AI not re-run), step 2 fails again — must return ok:true with a full failure, not throw
     const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r2.ok, r2.ok ? '' : r2.error).toBe(true);
     if (r2.ok) {
@@ -491,9 +491,9 @@ describe('verify_case 逐步 AI 执行编排', () => {
         probes: [{ strategy: 'css', value: '.ghost-element', hitCount: 0 }],
       });
     }
-    // 前缀不重跑 AI：两轮合计只有第 1 轮步 1 调过 runAiTask 一次
+    // Prefix does not re-run AI: across both rounds, only round 1 step 1 called runAiTask once
     expect(vi.mocked(runAiTask)).toHaveBeenCalledTimes(1);
-    // restore 干跑 ctx 同样携带 web origin（resume 前缀重建也会派发相对 URL navigate）
+    // The restore dry-run ctx likewise carries the web origin (resume prefix rebuild also dispatches relative-URL navigate)
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
     const restoreCall = vi.mocked(executeCaseInBrowser).mock.calls[0]! as unknown as [
       string,
@@ -519,7 +519,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const opts = call[4] as { valueSub: (v: string) => string };
     expect(opts.valueSub('__ITEST_USERNAME@web__')).toBe('qa01');
     expect(opts.valueSub('__ITEST_PASSWORD@web__')).toBe('Passw0rd!');
-    // 无 @ref 的裸占位符仍按「用例 web_service_ref → 环境默认 web」链解析到同一服务
+    // Bare placeholders without @ref still resolve to the same service via the "case web_service_ref → environment default web" chain
     expect(opts.valueSub('__ITEST_USERNAME__')).toBe('qa01');
     expect(opts.valueSub('__ITEST_PASSWORD__')).toBe('Passw0rd!');
     expect(opts.valueSub('普通值')).toBe('普通值');
@@ -528,14 +528,14 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.login).toBe('logged-in');
       expect(r.data).not.toContain('Passw0rd!');
     }
-    // start 事件上报凭据用户与缓存未命中；重跑一次捕获事件（登录态缓存已回写,本次应为 hit——顺带覆盖 hit 断言）
+    // start event reports the credential user and cache miss; run once more to capture the event (the login state cache has been written back, so this run should be a hit — also covers the hit assertion)
     const emitLog: unknown[] = [];
     const r2 = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
     expect(r2.ok).toBe(true);
     const start2 = emitLog[0] as { loginCache: string; loginUser: string | null };
     expect(start2).toMatchObject({ loginCache: 'hit', loginUser: 'qa01' });
-    // 前缀确认复用：round 1 全过后 round 2 的 AI 相不再重跑（已确认步骤以机械回放重建 DOM 状态），
-    // runAiTask 仍只有 round 1 那一次调用；事件序列无 step_*，只有 start → replay_start → replay_done → end。
+    // Prefix confirmation reuse: after round 1 fully passes, round 2's AI phase does not re-run (confirmed steps rebuild DOM state via mechanical replay),
+    // runAiTask is still only called once in round 1; the event sequence has no step_*, only start → replay_start → replay_done → end.
     expect(vi.mocked(runAiTask)).toHaveBeenCalledTimes(1);
     const phases2 = emitLog.map((e) => (e as { phase: string }).phase);
     expect(phases2).toEqual(['start', 'replay_start', 'replay_done', 'end']);
@@ -584,7 +584,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
     expect(r.ok).toBe(true);
-    expect(runAiTask).toHaveBeenCalledTimes(2); // 第 2 步失败即停，第 3 步（无）不再执行
+    expect(runAiTask).toHaveBeenCalledTimes(2); // Stop as soon as step 2 fails; step 3 (none) never runs
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('failed');
@@ -600,7 +600,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.failure.page.elements[0]).toContain('button#del');
       expect(typeof data.failure.note).toBe('string');
     }
-    // 失败路径:失败步 step_done 带 status=failed + reason,end result=failed
+    // Failure path: the failed step's step_done carries status=failed + reason, and end result=failed
     const stepDoneFailed = emitLog.find(
       (e) => (e as { phase?: string }).phase === 'step_done' && (e as { order?: number }).order === 2,
     ) as { status: string; reason: string };
@@ -623,15 +623,15 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.failure.failureReason).toBe('AiTaskAborted');
       expect(data.failure.error).toContain('aiTask 放弃');
       expect(data.failure.page.elements[0]).toContain('button#del');
-      // 有 compiled 的步骤失败仍走 locator 修正文案（agent 可修）
+      // Steps with compiled still get the locator-repair wording on failure (the agent can repair)
       expect(data.failure.note).toContain('修正 locator');
     }
   });
 
   it('自然语言步（无 compiled）AI 相失败 → note 分流反馈用户：停止重跑与自诊，不再引导修 locator', async () => {
-    // 需求口径（2026-10-27）：讨论期验证里自然语言步的 AI 相失败大概率是步骤描述与页面不符
-    // （或前面步骤把页面带偏）——agent 改 selector 无从下手、重跑不改变结果，应反馈用户调整。
-    const caseId = await seedCase({ steps: [null] }); // instruction-only 视觉步（instruction=第一步：点击删除按钮）
+    // Requirement framing (2026-10-27): in discussion-phase verification, a natural-language step's AI phase failing usually means the step description mismatches the page
+    // (or earlier steps led the page astray) — the agent has no way to fix a selector and re-running changes nothing; it should be reported back to the user for adjustment.
+    const caseId = await seedCase({ steps: [null] }); // instruction-only vision step (instruction=第一步：点击删除按钮)
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask).mockRejectedValue(new Error('aiTask 放弃：页面上没有该目标'));
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
@@ -645,8 +645,8 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.failure.note).toContain('反馈给用户');
       expect(data.failure.note).toContain('停止重跑');
       expect(data.failure.note).toContain('不要再调用 verify_case');
-      expect(data.failure.note).toContain('第一步：点击删除按钮'); // 步骤原文回带，便于转述给用户
-      expect(data.failure.note).not.toContain('修正 locator 只能使用'); // 旧 locator 修正文案不得误导
+      expect(data.failure.note).toContain('第一步：点击删除按钮'); // Original step text returned for relaying to the user
+      expect(data.failure.note).not.toContain('修正 locator 只能使用'); // The old locator-repair wording must not mislead
     }
   });
 
@@ -707,7 +707,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
         },
       ])],
     );
-    // 缓存里放一份暖登录态：若是普通用例会被注入（上一条用例已钉），登录用例必须跳过
+    // Put a warm login state in the cache: for a normal case it would be injected (pinned by the previous case), but a login case must skip it
     const { saveLoginState } = await import('../src/pi/space/tools/loginStateCache.js');
     saveLoginState(`${await defaultEnvId()}:`, { cookies: [{ name: 'sid', value: 'warm' }], origins: [] } as never);
     const { runAiTask } = await import('../src/execute/aiTask.js');
@@ -719,7 +719,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
       __testState: { ctxOpts: Array<Record<string, unknown> | undefined> };
     };
     expect(__testState.ctxOpts[0]).not.toHaveProperty('storageState');
-    // STEP_SECRET 是步骤级敏感值（业务表单密码框），不构成登录信号——注入照旧
+    // STEP_SECRET is a step-level sensitive value (a business form password field), not a login signal — injection proceeds as usual
     const { isLoginCaseSteps } = await import('../src/pi/space/tools/verifyCase.js');
     expect(isLoginCaseSteps([{ instruction: '填入 __ITEST_STEP_SECRET__' }])).toBe(false);
     expect(isLoginCaseSteps([{ instruction: '普通步' }, { compiled: [{ kind: 'fill', value: '__ITEST_PASSWORD@web__' }] }])).toBe(true);
@@ -771,7 +771,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
     expect(r.ok).toBe(true);
-    // AI 看到的是叠加后的 compiled（#real），不是 DB 里的 #missing
+    // The AI sees the overlaid compiled (#real), not the DB's #missing
     const instruction = String(vi.mocked(runAiTask).mock.calls[0]![1]);
     expect(instruction).toContain('#real');
     expect(instruction).not.toContain('#missing');
@@ -780,10 +780,10 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.basedOn).toBe('staged');
       expect(data.stagedOpsApplied).toBe(1);
     }
-    // start 事件上报暂存叠加数 → 前端"基于暂存（1 项修改）"徽标
+    // start event reports the staging overlay count → the frontend's "based on staging (1 modification)" badge
     const start = emitLog[0] as { stagedOps: number };
     expect(start.stagedOps).toBe(1);
-    // 全程不落库：DB 步骤 compiled 仍是 #missing
+    // Nothing persisted: the DB step's compiled is still #missing
     const after = await pool.query(`SELECT compiled FROM test_steps WHERE id = $1`, [stepId]);
     expect(JSON.stringify(after.rows[0]!.compiled)).toContain('#missing');
   });
@@ -812,11 +812,11 @@ describe('verify_case 逐步 AI 执行编排', () => {
       expect(data.steps).toHaveLength(2);
       expect(data.caseId).toBe(localId);
     }
-    // LLM 看到的是草稿的 compiled（#newBtn），指令含 url 兜底（草稿无分组走 env baseUrl 之外的双线）与步骤序号
+    // The LLM sees the draft's compiled (#newBtn); the instruction contains the url fallback (a draft without a group goes through the dual-line beyond env baseUrl) and the step number
     const call = vi.mocked(runAiTask).mock.calls[0]!;
     expect(String(call[1])).toContain('#newBtn');
     expect(String(call[1])).toContain('第 1 步 / 共 2 步');
-    // start 事件携带草稿标记
+    // start event carries the draft flag
     const start = emitLog[0] as { caseId: string; stagedOps: number };
     expect(start).toMatchObject({ caseId: localId, stagedOps: 0 });
   });
@@ -832,7 +832,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId: localId });
-    // 修复前：先直查 testCases.id(uuid 列) → invalid input syntax for type uuid，草稿回落没机会跑
+    // Before the fix: query testCases.id (uuid column) directly first → invalid input syntax for type uuid, and the draft fallback never got a chance to run
     expect(r.ok).toBe(true);
     if (r.ok) {
       const data = JSON.parse(r.data!);
@@ -879,7 +879,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r.ok).toBe(true);
-    expect(runAiTask).not.toHaveBeenCalled(); // 前置拦截，不烧 AI 轮次
+    expect(runAiTask).not.toHaveBeenCalled(); // Blocked upfront, no AI rounds burned
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('failed');
@@ -903,7 +903,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('failed');
-      // AI 明明报了 passed，保真校验仍判失败（回放将 count=0）
+      // The AI clearly reported passed, yet the fidelity check still judges failure (replay would see count=0)
       expect(data.steps[0].status).toBe('failed');
       expect(data.steps[0].failureReason).toBe('LocatorMismatch');
       expect(data.steps[0].error).toContain('.ghost-element');
@@ -929,7 +929,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       const data = JSON.parse(r.data!);
-      // 任一候选命中即通过——全部候选命中 0 才是回放失败
+      // Any candidate hitting counts as pass — only all candidates hitting 0 is a replay failure
       expect(data.result).toBe('passed');
       expect(data.steps[0].status).toBe('passed');
     }
@@ -964,15 +964,15 @@ describe('verify_case 逐步 AI 执行编排', () => {
   });
 
   it('compiled 保真后置校验：SPA 挂载滞后（前两轮 count=0 后命中）→ 轮询窗口内通过', async () => {
-    // 回测 8a178d83 根因回归：networkidle 后页面仍未挂载完，探测放弃约 2s 后元素才出现。
-    // verify 预检/后置校验窗口与回放对齐（12 轮轮询），迟挂载元素应判通过而非 LocatorMismatch。
+    // Regression of backtest 8a178d83's root cause: after networkidle the page still had not finished mounting; probing gave up and the element appeared ~2s later.
+    // The verify pre-check/post-check window is aligned with replay (12 polling rounds); late-mounting elements should pass rather than be judged LocatorMismatch.
     const caseId = await seedCase({
       steps: [[{ kind: 'assertVisible', locator: [{ strategy: 'css', value: '.late-mount' }] }]],
     });
     const { __testState } = (await import('playwright-core')) as unknown as {
       __testState: { mountAfter: Record<string, number>; countCalls: Record<string, number> };
     };
-    __testState.mountAfter['.late-mount'] = 3; // 前 2 次探测 0，第 3 次挂载完成
+    __testState.mountAfter['.late-mount'] = 3; // First 2 probes return 0; mounting completes on the 3rd
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"看到了","login":"not-needed"}');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
@@ -987,8 +987,8 @@ describe('verify_case 逐步 AI 执行编排', () => {
   });
 
   it('compiled 保真后置校验：fill 首候选命中多个元素（count>1）→ AmbiguousLocator', async () => {
-    // 回归动机：AI 生成 '#ruleconfig1 .baseForm input' 这类裸标签候选命中表单全部 input，
-    // 回放 strict-mode 兜底 .first() 静默填第一个字段——verify 只测 count>0 会放行"碰巧对"。
+    // Regression motivation: AI-generated bare-tag candidates like '#ruleconfig1 .baseForm input' hit every input in the form,
+    // and replay's strict-mode fallback .first() silently fills the first field — a verify that only tests count>0 would let "coincidentally correct" through.
     const caseId = await seedCase({
       steps: [[{ kind: 'fill', locator: [{ strategy: 'css', value: '#ruleconfig1 .baseForm input' }], value: '规则名' }]],
     });
@@ -999,7 +999,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r.ok).toBe(true);
-    expect(runAiTask).toHaveBeenCalledTimes(1); // fill 是后置校验：AI 先执行，元素理应仍在
+    expect(runAiTask).toHaveBeenCalledTimes(1); // fill is a post-check: the AI runs first, and the element should still be there
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('failed');
@@ -1021,7 +1021,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r.ok).toBe(true);
-    expect(runAiTask).not.toHaveBeenCalled(); // 前置拦截，AI 不跑
+    expect(runAiTask).not.toHaveBeenCalled(); // Blocked upfront, the AI does not run
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('failed');
@@ -1050,7 +1050,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('failed');
-      // 回放探测顺序 = buildCandidates 顺序：css .multi-a 先命中（count=2）即被采用，轮不到唯一的 role 候选
+      // Replay probing order = buildCandidates order: css .multi-a hits first (count=2) and is adopted; the unique role candidate never gets used
       expect(data.steps[0].failureReason).toBe('AmbiguousLocator');
       expect(data.steps[0].error).toContain('.multi-a');
     }
@@ -1068,7 +1068,7 @@ describe('verify_case 逐步 AI 执行编排', () => {
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('failed');
-      expect(data.steps[0].status).toBe('passed'); // 步骤本身没问题，死在终态
+      expect(data.steps[0].status).toBe('passed'); // The step itself is fine; death is at final state
       expect(data.failure.stepOrder).toBe(-1);
       expect(data.failure.failureReason).toBe('VisionAssertionFailed');
       expect(data.failure.error).toContain('输入框未置灰');
@@ -1111,13 +1111,13 @@ describe('verify_case 断言文本体检', () => {
     expect(r.ok, r.ok ? '' : JSON.stringify(r)).toBe(true);
     const data = JSON.parse(r!.data!);
     expect(data.result).toBe('passed');
-    // 断言原文回传，agent 据此改写成真实 UI 文案，而不是靠弱化断言蒙混
+    // The assertion original text is returned so the agent can rewrite it into real UI text, instead of sneaking through by weakening the assertion
     expect(data.droppedAssertions).toEqual([{ order: 1, assertion: '登录表单正常展示' }]);
-    // AI 相指令里带「已忽略」说明，不再让它去核实一个页面上不存在的文案
+    // The AI-phase instruction carries an "ignored" note, so it no longer tries to verify text that does not exist on the page
     const instr = String(vi.mocked(runAiTask).mock.calls[0]![1]);
     expect(instr).toContain('断言：已忽略');
     expect(instr).toContain('登录表单正常展示');
-    // 机械回放也跳过该断言（回放逐字派发，跑一遍只会白挂一次）
+    // Mechanical replay also skips this assertion (replay dispatches verbatim; running it would only waste one check)
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
     const stepsArg = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ assertion: unknown }>;
     expect(stepsArg[0]!.assertion).toBeNull();
@@ -1169,13 +1169,13 @@ describe('verify_case compiled 机械回放干跑', () => {
     ];
     expect(caseIdArg).toBe(caseId);
     expect(targetUrlArg).toBe('http://env.example/page');
-    // 相对 URL navigate 的拼接来源（prod228 缺口 2：此前干跑 ctx 缺这两字段一律 invalid-navigate-url）
+    // Source for relative-URL navigate joining (prod228 gap 2: previously the dry-run ctx lacked these two fields and every navigate was invalid-navigate-url)
     expect(ctxArg.caseWebOrigin).toBe('http://env.example');
     expect(ctxArg.caseWebServiceRef).toBeNull();
-    // 截图目录隔离（-replay 后缀），避免覆盖 AI 相同名 step-N.png；终态判定不重复跑
+    // Screenshot directory isolation (-replay suffix) to avoid overwriting the AI phase's same-named step-N.png; final-state verdict does not re-run
     expect(ctxArg.reportId).toMatch(/-replay$/);
     expect(ctxArg.expectedOutcome).toBeUndefined();
-    // compiled 逐字透传给机械回放引擎；browser/context 复用 verify 自己的实例（登录态随 cookie 携带）
+    // compiled is passed verbatim to the mechanical replay engine; browser/context reuse verify's own instances (login state carried via cookies)
     expect(stepsArg[0]!.compiled).toEqual(CLICK_COMPILED);
     expect(browserArg).toBeTruthy();
     expect(contextArg).toBeTruthy();
@@ -1194,7 +1194,7 @@ describe('verify_case compiled 机械回放干跑', () => {
     const replayPageStub = {
       url: () => 'http://env.example/page',
       marker: 'replay-page' as const,
-      // 归因证据（probeLocatorHits）要对干跑页做候选实时命中探测——真实回放 page 有 locator，桩补全同形。
+      // Attribution evidence (probeLocatorHits) probes live candidate hits against the dry-run page — the real replay page has a locator, so the stub completes the same shape.
       locator: (sel: string) => ({ count: async () => (sel.includes('#missing') ? 0 : 1) }),
       getByText: (t: string) => ({ count: async () => 1 }),
       getByRole: () => ({ count: async () => 1 }),
@@ -1214,7 +1214,7 @@ describe('verify_case compiled 机械回放干跑', () => {
         _onStep: unknown,
         onFailurePage?: (page: unknown, failedIndex: number) => Promise<void>,
       ) => {
-        // 模拟真实引擎失败时回调 onFailurePage（verify 借此留住干跑 page 引用）
+        // Simulate the real engine calling back onFailurePage on failure (verify uses this to keep the dry-run page reference)
         await onFailurePage?.(replayPageStub, 0);
         return [
           { order: 1, status: 'failed' as const, durationMs: 5, error: 'count=0 (role)', failureReason: 'LocatorAllFailed', humanMessage: '所有定位候选均未命中', screenshot: '/screenshots/verify-x-replay/step-1.png' },
@@ -1228,7 +1228,7 @@ describe('verify_case compiled 机械回放干跑', () => {
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('failed');
-      expect(data.steps[0].status).toBe('passed'); // AI 相全过，死在机械回放
+      expect(data.steps[0].status).toBe('passed'); // AI phase fully passed, death at mechanical replay
       expect(data.replay[0].status).toBe('failed');
       expect(data.failure.stepOrder).toBe(1);
       expect(data.failure.failureReason).toBe('ReplayDivergence');
@@ -1239,10 +1239,10 @@ describe('verify_case compiled 机械回放干跑', () => {
       expect(data.failure.page.elements[0]).toContain('button#del');
       expect(typeof data.failure.note).toBe('string');
     }
-    // 失败页元素清单取自干跑 page（分叉现场），不是 AI 旧 page
+    // The failure-page element list comes from the dry-run page (the divergence scene), not the AI's old page
     const { extractPageElements } = await import('../src/pi/inspectPage.js');
     expect(vi.mocked(extractPageElements).mock.calls.at(-1)?.[0]).toBe(replayPageStub);
-    // SSE 序列：AI 步全过 → replay_start → replay_done(failed) → end(failed)
+    // SSE sequence: AI steps all pass → replay_start → replay_done(failed) → end(failed)
     const phases = emitLog.map((e) => (e as { phase: string }).phase);
     expect(phases).toEqual(['start', 'step_start', 'step_done', 'replay_start', 'replay_done', 'end']);
     const replayDone = emitLog[4] as { status: string; reason: string };
@@ -1252,8 +1252,8 @@ describe('verify_case compiled 机械回放干跑', () => {
   });
 
   it('全视觉用例（无 compiled）跳过机械干跑 → 响应不带 replay 摘要（不报 epoch 假时长）', async () => {
-    // 回归点：干跑被跳过时 replayStartedAt 恒为 0，此前无条件发出的
-    // replay.durationMs = Date.now()-0 是 epoch 级垃圾值（prod228 出现 6 次）。
+    // Regression point: when the dry run is skipped, replayStartedAt stays 0, and the previously unconditional
+    // replay.durationMs = Date.now()-0 was an epoch-scale garbage value (seen 6 times on prod228).
     const caseId = await seedCase({ steps: [null, null] });
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
@@ -1261,7 +1261,7 @@ describe('verify_case compiled 机械回放干跑', () => {
     const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r.ok).toBe(true);
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
-    expect(executeCaseInBrowser).not.toHaveBeenCalled(); // 无 compiled 可逐字派发 → 跳过干跑
+    expect(executeCaseInBrowser).not.toHaveBeenCalled(); // No compiled to dispatch verbatim → dry run skipped
     const data = JSON.parse((r as { data: string }).data);
     expect(data.result).toBe('passed');
     expect(data.replay).toBeUndefined();
@@ -1282,7 +1282,7 @@ describe('verify_case compiled 机械回放干跑', () => {
       { secretResolver: (stepId: string) => Promise<string | null> },
     ];
     expect(sensitiveCall[1][0]!.sensitive).toBe(true);
-    // 暂存/DB step id 直接映射解密明文（DB 默认 secretResolver 查库链路不适用 verify 语境）
+    // Staged/DB step ids map directly to decrypted plaintext (the DB-default secretResolver DB-query chain does not apply in the verify context)
     await expect(sensitiveCall[2].secretResolver(sensitiveCall[1][0]!.id)).resolves.toBe('StepSecret!9');
     await expect(sensitiveCall[2].secretResolver('unknown-step')).resolves.toBeNull();
     if (r1.ok) expect(r1.data).not.toContain('StepSecret!9');
@@ -1306,7 +1306,7 @@ describe('verify_case 空转硬上限', () => {
     vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: false, reason: '最终页面与预期不符' });
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
 
-    // 前 3 轮同因失败（失败大类签名 = vision）
+    // First 3 rounds fail for the same reason (failure category signature = vision)
     for (let i = 0; i < 3; i++) {
       const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
       expect(r.ok).toBe(true);
@@ -1322,16 +1322,16 @@ describe('verify_case 空转硬上限', () => {
     const d = JSON.parse(stopped!.data!);
     expect(d.failure.failureReason).toBe('StagnantRoundLimit');
     expect(d.failure.humanMessage).toContain('强制停止');
-    // 措辞加硬（prod228 2026-10-27：软提示被无视，agent 触发后读源码自诊 9~15 分钟）
+    // Hardened wording (prod228 2026-10-27: the soft notice was ignored; the agent spent 9~15 minutes reading source self-diagnosing after triggering)
     expect(d.failure.humanMessage).toContain('停止调用一切工具');
-    expect(chromium.launch).not.toHaveBeenCalled(); // 短路不启动浏览器
+    expect(chromium.launch).not.toHaveBeenCalled(); // Short-circuited, browser not launched
 
-    // 计数回退一级：下一次放行 1 次实测（仍同因失败会再次触发停止，不永久死锁）
+    // Counter steps back one level: the next run allows 1 real attempt (another same-cause failure triggers stop again; no permanent deadlock)
     vi.mocked(chromium.launch).mockClear();
     const allowed = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(JSON.parse(allowed!.data!).failure.failureReason).toBe('VisionAssertionFailed');
     expect(chromium.launch).toHaveBeenCalled();
-    // 放行轮显式警告：本轮结束后必须汇报，不得继续自行重试
+    // Allowed round shows an explicit warning: must report after this round ends, no more self-directed retries
     expect(JSON.parse(allowed!.data!).roundNotes[0]).toContain('护栏放行');
   });
 
@@ -1342,15 +1342,15 @@ describe('verify_case 空转硬上限', () => {
     const { judgeCaseOutcome } = await import('../src/agent/judgeCaseOutcome.js');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
 
-    // 先攒 2 轮同因失败（未达上限 3）
+    // First accumulate 2 rounds of same-cause failures (below the limit of 3)
     vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: false, reason: '不符 A' });
     for (let i = 0; i < 2; i++) {
       await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     }
-    // 通过 → 计数清零
+    // Pass → counter resets to zero
     vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: true, reason: '通过' });
     expect(JSON.parse((await buildVerifyCaseTool(toolCtx()).execute({ caseId }))!.data!).result).toBe('passed');
-    // 计数确已清零：再连败 3 轮也只在第 4 次调用才触发（而非"通过前攒的 2 轮 + 这 3 轮"提前触发）
+    // Counter is indeed reset: 3 more consecutive failures trigger only on the 4th call (not early via "the 2 rounds accumulated before the pass + these 3 rounds")
     vi.mocked(judgeCaseOutcome).mockResolvedValue({ passed: false, reason: '不符 B' });
     for (let i = 0; i < 3; i++) {
       const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
@@ -1361,9 +1361,9 @@ describe('verify_case 空转硬上限', () => {
   });
 
   it('失败大类归一：LocatorMismatch ↔ AiTaskAborted 振荡也计入同因连续，第 4 次调用强制停止', async () => {
-    // prod228 2026-10-26 实录回归：26 轮 verify / 2h39m / 零产出里，locator 闸门击杀与 AI 相
-    // abort 交替出现（同一页面障碍的两种形态），旧签名 `${failureReason}:${stepOrder}` 最长同签名
-    // 连续仅 2 轮 → 护栏全程未触发。归一到失败大类后两类同属 execution，振荡不再绕过护栏。
+    // prod228 2026-10-26 field regression: in 26 verify rounds / 2h39m / zero output, locator-gate kills and AI-phase
+    // aborts alternated (two shapes of the same page obstacle); the old signature `${failureReason}:${stepOrder}` had a max same-signature
+    // streak of only 2 rounds → the guard never triggered. After normalizing to failure category, both belong to execution, so oscillation no longer bypasses the guard.
     const caseId = await seedCase({
       steps: [[{ kind: 'click', locator: [{ strategy: 'css', value: '.osc-btn' }] }]],
     });
@@ -1371,23 +1371,23 @@ describe('verify_case 空转硬上限', () => {
     const { runAiTask } = await import('../src/execute/aiTask.js');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
 
-    // 第 1 轮：pre-check 命中 0 → LocatorMismatch
+    // Round 1: pre-check hits 0 → LocatorMismatch
     __testState.zeroLocators.push('.osc-btn');
     const r1 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(JSON.parse(r1!.data!).failure.failureReason).toBe('LocatorMismatch');
 
-    // 第 2 轮：locator 恢复命中，AI 相 reject → AiTaskAborted（与第 1 轮不同 reason、同类）
+    // Round 2: locator recovers, AI phase rejects → AiTaskAborted (different reason from round 1, same category)
     __testState.zeroLocators.length = 0;
     vi.mocked(runAiTask).mockRejectedValueOnce(new Error('aiTask 放弃：找不到目标'));
     const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(JSON.parse(r2!.data!).failure.failureReason).toBe('AiTaskAborted');
 
-    // 第 3 轮：再次 LocatorMismatch —— 三轮 execution 大类连续，计数应已到上限
+    // Round 3: LocatorMismatch again — three consecutive rounds in the execution category, the counter should have hit the limit
     __testState.zeroLocators.push('.osc-btn');
     const r3 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(JSON.parse(r3!.data!).failure.failureReason).toBe('LocatorMismatch');
 
-    // 第 4 次调用：强制停止，且不再启动浏览器
+    // 4th call: forced stop, browser not launched again
     const { chromium } = await import('playwright-core');
     vi.mocked(chromium.launch).mockClear();
     const stopped = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
@@ -1399,15 +1399,15 @@ describe('verify_case 空转硬上限', () => {
 
 describe('verify_case 超时预算', () => {
   it('全局预算随步数缩放：1-3 步保底 300s，4 步起线性增至 130s/步', async () => {
-    // 回归动机（2026-10-17 prod228）：固定 300s 全局看门狗装不下 10 步用例——每步 AI 相 ~85-107s，
-    // 3 步就烧 286.8s，第 4 步中途被 300s 预算强杀。预算必须随步数增长才谈得上多步用例可重复验证。
+    // Regression motivation (2026-10-17 prod228): the fixed 300s global watchdog cannot fit a 10-step case — each step's AI phase takes ~85-107s,
+    // 3 steps already burn 286.8s and step 4 gets killed mid-flight by the 300s budget. The budget must grow with step count for multi-step re-verification to be viable.
     const { computeVerifyTimeoutMs } = await import('../src/pi/space/tools/verifyCase.js');
-    expect(computeVerifyTimeoutMs(0)).toBe(300_000); // 兜底（无步骤前置已拦截，绝不至于 0）
+    expect(computeVerifyTimeoutMs(0)).toBe(300_000); // Fallback (no-steps is blocked earlier, so 0 never happens)
     expect(computeVerifyTimeoutMs(1)).toBe(300_000);
-    expect(computeVerifyTimeoutMs(2)).toBe(300_000); // 2×130k=260k < 保底 → 仍 300k
-    expect(computeVerifyTimeoutMs(3)).toBe(3 * 130_000); // 3×130k=390k 起越保底，线性爬升
+    expect(computeVerifyTimeoutMs(2)).toBe(300_000); // 2×130k=260k < floor → still 300k
+    expect(computeVerifyTimeoutMs(3)).toBe(3 * 130_000); // 3×130k=390k crosses the floor, climbing linearly
     expect(computeVerifyTimeoutMs(4)).toBe(4 * 130_000);
-    expect(computeVerifyTimeoutMs(10)).toBe(10 * 130_000); // 10 步 ≈ 21.7min
+    expect(computeVerifyTimeoutMs(10)).toBe(10 * 130_000); // 10 steps ≈ 21.7min
     expect(computeVerifyTimeoutMs(10)).toBeGreaterThan(300_000);
   });
 });
@@ -1419,7 +1419,7 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     vi.mocked(runAiTask)
       .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
         opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
-        opts?.onAction?.({ type: 'screenshot', selector: 'body' }, true); // 观察性动作也收集，映射端跳过
+        opts?.onAction?.({ type: 'screenshot', selector: 'body' }, true); // Observational actions are also collected; the mapping side skips them
         return '{"status":"passed","reason":"完成","login":"not-needed"}';
       })
       .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
@@ -1447,7 +1447,7 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     vi.mocked(runAiTask)
       .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
         opts?.onAction?.({ type: 'click', selector: '#ok' }, true);
-        opts?.onAction?.({ type: 'click', selector: '#gone' }, false); // 失败动作不入轨迹
+        opts?.onAction?.({ type: 'click', selector: '#gone' }, false); // Failed actions do not enter the trail
         return '{"status":"passed","reason":"完成","login":"not-needed"}';
       })
       .mockResolvedValueOnce('{"status":"failed","reason":"按钮不存在","login":"not-needed"}');
@@ -1463,7 +1463,7 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
   it('resume 轮全过：前缀轨迹携带 + 本轮 AI 相补齐 → 合并保存 traceSaved=true', async () => {
     const { caseId, stepIds } = await seedVisualCase(2);
     const { runAiTask } = await import('../src/execute/aiTask.js');
-    // 第 1 轮：步 1 过（收集 click），步 2 失败（confirmCache 记 confirmedThrough=1，轨迹随确认入册）
+    // Round 1: step 1 passes (collects click), step 2 fails (confirmCache records confirmedThrough=1, trail enters the ledger with confirmation)
     vi.mocked(runAiTask)
       .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
         opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
@@ -1472,7 +1472,7 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
       .mockResolvedValueOnce('{"status":"failed","reason":"超时","login":"not-needed"}');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     await buildVerifyCaseTool(toolCtx()).execute({ caseId });
-    // 第 2 轮：前缀机械恢复（不重跑 AI），步 2 通过并收集 fill
+    // Round 2: prefix recovered mechanically (AI not re-run), step 2 passes and collects fill
     vi.mocked(runAiTask).mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
       opts?.onAction?.({ type: 'fill', selector: '#name', value: 'v2' }, true);
       return '{"status":"passed","reason":"完成","login":"not-needed"}';
@@ -1485,16 +1485,16 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     const { getVerifiedTrace, traceKey } = await import('../src/pi/space/tools/verifyTrace.js');
     const entry = getVerifiedTrace(traceKey('t1', caseId));
     expect(entry).not.toBeNull();
-    // 前缀步：轨迹来自第 1 轮携带（本轮机械恢复无 AI 动作）
+    // Prefix step: trail comes from round 1 carry-over (this round's mechanical recovery has no AI actions)
     expect((entry!.trace.get(stepIds[0]!)![0] as { selector: string }).selector).toBe('#btn-1');
-    // 改动步：本轮 AI 相新收集
+    // Changed step: newly collected by this round's AI phase
     expect((entry!.trace.get(stepIds[1]!)![0] as { value: string }).value).toBe('v2');
   });
 
   it('resume restore 吃确认轨迹：纯 NL 前缀步收到映射后的机械 compiled（不再 compile-missing 打断重跑）', async () => {
-    // 缺口回归：mapForReplay 不带 instruction，纯 NL 前缀步在 restore 里 compile-missing，
-    // resume 退化为「从第一个 NL 步起整体重跑 AI 相」。接线 confirmedTraces → mapAiActionsToCompiled
-    // 后，restore 切片收到机械动作，零 LLM/零截图重建前缀状态。
+    // Gap regression: mapForReplay carried no instruction, so pure-NL prefix steps hit compile-missing in restore,
+    // and resume degenerated into "re-run the AI phase wholesale from the first NL step". After wiring confirmedTraces → mapAiActionsToCompiled,
+    // the restore slice receives mechanical actions and rebuilds prefix state with zero LLM / zero screenshots.
     const { caseId } = await seedVisualCase(2);
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask)
@@ -1504,8 +1504,8 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
       })
       .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
-    await buildVerifyCaseTool(toolCtx()).execute({ caseId }); // 第 1 轮：步 1 过、步 2 败
-    // 第 2 轮：restore（前缀步 1）→ AI 相只跑步 2
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId }); // Round 1: step 1 passes, step 2 fails
+    // Round 2: restore (prefix step 1) → AI phase runs only step 2
     vi.mocked(runAiTask).mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}');
     const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r2.ok).toBe(true);
@@ -1513,13 +1513,13 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     expect(data2.resumeFrom).toBe(1);
     expect(data2.result).toBe('passed');
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
-    // 第 1 轮失败无 cdp 调用；全视觉用例跳过结尾干跑 → 第 2 轮唯一一次 cdp 调用就是 restore
+    // Round 1's failure makes no cdp call; all-vision cases skip the ending dry run → the only cdp call in round 2 is the restore
     expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
     const restoreSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ compiled: unknown }>;
     expect(restoreSteps[0]!.compiled).toEqual([
       { kind: 'click', locator: [{ strategy: 'css', value: '#btn-1' }] },
     ]);
-    // AI 相只跑步 2：两轮合计 3 次（轮 1 ×2 + 轮 2 ×1），前缀步不重烧识别
+    // AI phase runs only step 2: 3 calls across both rounds (round 1 ×2 + round 2 ×1); prefix steps do not re-burn recognition
     expect(runAiTask).toHaveBeenCalledTimes(3);
   });
 
@@ -1528,7 +1528,7 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask)
       .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
-        opts?.onAction?.({ type: 'click', x: 500, y: 400 }, true); // 坐标动作，无 selector
+        opts?.onAction?.({ type: 'click', x: 500, y: 400 }, true); // Coordinate action, no selector
         return '{"status":"passed","reason":"完成","login":"not-needed"}';
       })
       .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
@@ -1538,39 +1538,39 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
     const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     const data2 = JSON.parse((r2 as { data: string }).data);
-    // 坐标动作机械回放无从派发 → 前缀步不可恢复 → 不喂进回放切片（否则必 compile-missing 断链、
-    // 白跑一次注定失败的回放还把恢复收敛点打回该步）：AI 相从第 1 步接管。
+    // Coordinate actions have no way to be dispatched by mechanical replay → the prefix step cannot be recovered → do not feed it into the replay slice (otherwise it is guaranteed
+    // to break the chain at compile-missing and waste a replay destined to fail while also knocking the recovery convergence point back to that step): the AI phase takes over from step 1.
     expect(executeCaseInBrowser).not.toHaveBeenCalled();
     expect(data2.resumeFrom).toBe(0);
   });
 
   it('混合前缀：编译过的 UI 步保留原 compiled 不吃轨迹；视觉步吃轨迹——结尾干跑只喂纯机械步（无纯机械步则整段跳过）', async () => {
-    const caseId = await seedCase({ steps: [null, CLICK_COMPILED, null] }); // NL / 编译过的 UI 步 / NL
+    const caseId = await seedCase({ steps: [null, CLICK_COMPILED, null] }); // NL / compiled UI step / NL
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask)
       .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
         opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
         return '{"status":"passed","reason":"完成","login":"not-needed"}';
       })
-      // 步 2（机械步，AI 相以 compiled 为参考照常过，无轨迹）
+      // Step 2 (mechanical step, AI phase passes as usual with compiled as reference, no trail)
       .mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}')
       .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
-    await buildVerifyCaseTool(toolCtx()).execute({ caseId }); // 轮 1：步 1-2 过、步 3 败
+    await buildVerifyCaseTool(toolCtx()).execute({ caseId }); // Round 1: steps 1-2 pass, step 3 fails
     vi.mocked(runAiTask).mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}');
     const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r2.ok).toBe(true);
     const data2 = JSON.parse((r2 as { data: string }).data);
     expect(data2.resumeFrom).toBe(2);
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
-    // 轮 2：只有 restore（前缀 2 步）——结尾干跑只喂「纯机械步」，本例唯一的 compiled 是 click
-    // （编译过的 UI 步，脱离 NL 前置状态无法单独回放）→ 干跑整段跳过，不再以 NL 步 compile-missing 误报分叉
+    // Round 2: only restore (prefix 2 steps) — the ending dry run only feeds "pure mechanical steps"; this example's only compiled is a click
+    // (a compiled UI step that cannot be replayed alone without the NL precondition state) → the whole dry-run segment is skipped, no longer misreporting divergence via NL-step compile-missing
     expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
     const restoreSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ compiled: unknown }>;
     expect(restoreSteps[0]!.compiled).toEqual([
       { kind: 'click', locator: [{ strategy: 'css', value: '#btn-1' }] },
     ]);
-    expect(restoreSteps[1]!.compiled).toEqual(CLICK_COMPILED); // 编译过的 UI 步原样，不被轨迹覆盖
+    expect(restoreSteps[1]!.compiled).toEqual(CLICK_COMPILED); // Compiled UI step kept as-is, not overwritten by the trail
     expect(data2.result).toBe('passed');
   });
 
@@ -1584,7 +1584,7 @@ describe('verify_case 轨迹收集（solidify 零执行复用的数据源）', (
     const { getVerifiedTrace, traceKey } = await import('../src/pi/space/tools/verifyTrace.js');
     const entry = getVerifiedTrace(traceKey('t1', caseId));
     expect(entry).not.toBeNull();
-    expect(entry!.trace.has(stepIds[0]!)).toBe(false); // 敏感步不在册
+    expect(entry!.trace.has(stepIds[0]!)).toBe(false); // Sensitive step not in the ledger
     expect(entry!.trace.has(stepIds[1]!)).toBe(true);
   });
 });
@@ -1611,34 +1611,34 @@ describe('verify_case mechanical 机械验收模式', () => {
     expect(call[0]).toBe(caseId);
     expect(call[5]).toBe('http://env.example/page');
     expect(call[2].reportId).toMatch(/-replay$/);
-    expect(call[2].expectedOutcome).toBeUndefined(); // 干跑 ctx 不带终态判定（verify 自己判）
-    // 干跑 ctx 携带 web 服务 origin（相对 URL navigate 拼接用）与用例绑定服务名
+    expect(call[2].expectedOutcome).toBeUndefined(); // The dry-run ctx carries no final-state verdict (verify judges itself)
+    // The dry-run ctx carries the web service origin (for relative-URL navigate joining) and the case-bound service name
     expect(call[2].caseWebOrigin).toBe('http://env.example');
     expect(call[2].caseWebServiceRef).toBeNull();
-    expect(typeof call[2].onPageReady).toBe('function'); // 机械模式靠它拿终态页
+    expect(typeof call[2].onPageReady).toBe('function'); // Mechanical mode uses it to obtain the final-state page
     expect(call[1][0]!.compiled).toEqual(CLICK_COMPILED);
     if (r.ok) {
       const data = JSON.parse(r.data!);
       expect(data.result).toBe('passed');
       expect(data.mode).toBe('mechanical');
-      expect(data.steps).toEqual([]); // 无 AI 相步骤结果
+      expect(data.steps).toEqual([]); // No AI-phase step results
       expect(data.replay.result).toBe('passed');
-      expect(data.login).toBeUndefined(); // 无 AI 自报
-      expect(data.traceSaved).toBeUndefined(); // 机械轮不产轨迹
+      expect(data.login).toBeUndefined(); // No AI self-report
+      expect(data.traceSaved).toBeUndefined(); // Mechanical rounds produce no trail
     }
-    // SSE：start → replay_start → replay_done → end（无 step 事件）
+    // SSE: start → replay_start → replay_done → end (no step events)
     const phases = emitLog.map((e) => (e as { phase: string }).phase);
     expect(phases).toEqual(['start', 'replay_start', 'replay_done', 'end']);
     expect(emitLog[0]).toMatchObject({ type: 'verify_progress', caseId, total: 2, mode: 'mechanical', resumeFrom: 0 });
-    // 初始 goto 跳过（干跑引擎自带导航；无 AI 相页面无用途）
+    // Initial goto skipped (the dry-run engine navigates itself; without an AI phase the page has no use)
     expect(await fakeGotos()).toEqual([]);
-    // 机械轮不动轨迹缓存（既不存也不清）
+    // Mechanical rounds leave the trail cache untouched (neither saved nor cleared)
     const { getVerifiedTrace } = await import('../src/pi/space/tools/verifyTrace.js');
     expect(getVerifiedTrace(`t1::${caseId}`)).toBeNull();
   });
 
   it('allVisual 用例 → ok:false 拒绝并引导 full，不启动浏览器', async () => {
-    const caseId = await seedCase({ steps: [null, null] }); // 纯 instruction 视觉步骤（compiled null）
+    const caseId = await seedCase({ steps: [null, null] }); // Pure instruction vision steps (compiled null)
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId, mode: 'mechanical' });
     expect(r.ok).toBe(false);
@@ -1648,15 +1648,15 @@ describe('verify_case mechanical 机械验收模式', () => {
   });
 
   it('全 aiTask 固化结果 → mechanical 放行并干跑（aiTask 是可派发动作，不强迫重跑 full）', async () => {
-    // 回归动机:2026-10-28 prod228 实录——solidify 把无法机械映射的步骤固化为 aiTask 执行步,
-    // 全 aiTask 用例被旧口径（isAllVisualSteps）拒之门外,agent 被迫再跑被明令禁止的 full。
+    // Regression motivation: 2026-10-28 prod228 field report — solidify solidifies steps that cannot be mapped mechanically into aiTask execution steps,
+    // but all-aiTask cases were shut out by the old rule (isAllVisualSteps), forcing the agent to run the explicitly forbidden full again.
     const AI_TASK_COMPILED = [{ kind: 'aiTask', instruction: '点击删除按钮' }];
     const caseId = await seedCase({ steps: [AI_TASK_COMPILED, AI_TASK_COMPILED] });
     const emitLog: unknown[] = [];
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId, mode: 'mechanical' });
     expect(r.ok).toBe(true);
-    // verify 本体不跑 AI 相；干跑里 aiTask 由执行引擎派发（本测试 mock 掉引擎，只验闸门与传参）
+    // verify itself does not run the AI phase; in the dry run, aiTask is dispatched by the execution engine (this test mocks the engine and only verifies the gate and arguments)
     const { runAiTask } = await import('../src/execute/aiTask.js');
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
     expect(runAiTask).not.toHaveBeenCalled();
@@ -1716,8 +1716,8 @@ describe('verify_case mechanical 机械验收模式', () => {
       expect(data.mode).toBe('mechanical');
       expect(data.failure.failureReason).toBe('ReplayDivergence');
       expect(data.failure.stepOrder).toBe(1);
-      expect(data.failure.page.elements[0]).toContain('button#del'); // 分叉现场页
-      expect(data.failure.note).toContain('mode=full'); // 升级提示
+      expect(data.failure.page.elements[0]).toContain('button#del'); // The divergence scene page
+      expect(data.failure.note).toContain('mode=full'); // Upgrade hint
       expect(data.failure.note).toContain('登录态');
     }
     const phases = emitLog.map((e) => (e as { phase: string }).phase);
@@ -1726,12 +1726,12 @@ describe('verify_case mechanical 机械验收模式', () => {
 
   it('干跑全过后终态判定在干跑页上跑：vision 不符 → VisionAssertionFailed', async () => {
     const caseId = await seedCase({ steps: [CLICK_COMPILED], expectedOutcome: '最终状态达成' });
-    // onPageReady 交还干跑终态页 → vision 证据采集必须落在它上面（不是初始 about:blank page）
+    // onPageReady hands back the dry-run final-state page → vision evidence collection must land on it (not the initial about:blank page)
     const replayPageStub = {
       url: () => 'http://env.example/page',
       evaluate: async () => 0,
       screenshot: async () => Buffer.from('fake-png'),
-      // pageSettle 视觉稳定判定要连拍两帧（evaluate 指纹）+ 间隔等待，缺一不可
+      // pageSettle's visual-stability verdict needs two consecutive frames (evaluate fingerprints) + an interval wait; neither can be missing
       waitForTimeout: async () => {},
       waitForLoadState: async () => {},
       locator: (sel: string) => ({ count: async () => 1 }),
@@ -1764,10 +1764,10 @@ describe('verify_case mechanical 机械验收模式', () => {
       expect(data.failure.note).toContain('机械验收模式');
       expect(data.failure.note).toContain('mode=full');
     }
-    // vision 失败页 = 干跑终态页（onPageReady 交还的那个）
+    // The vision failure page = the dry-run final-state page (the one handed back by onPageReady)
     const { extractPageElements } = await import('../src/pi/inspectPage.js');
     expect(vi.mocked(extractPageElements).mock.calls.at(-1)?.[0]).toBe(replayPageStub);
-    // 终态判定事件：order=-1 的 step_done（前端进度卡渲染）
+    // Final-state verdict event: step_done with order=-1 (frontend progress card rendering)
     const visionEvent = emitLog.find((e) => (e as { order?: number }).order === -1) as { status: string } | undefined;
     expect(visionEvent).toMatchObject({ status: 'failed' });
   });
@@ -1780,12 +1780,12 @@ describe('verify_case mechanical 机械验收模式', () => {
     vi.mocked(judgeAssertionText).mockResolvedValue({ real: false, reason: '描述性短语' });
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
 
-    // 第 1 轮 full：断言被体检判为描述性短语 → dropped 记入前缀确认缓存
+    // Round 1 full: the assertion is vetted as a descriptive phrase → dropped is recorded into the prefix confirmation cache
     const r1 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r1.ok).toBe(true);
     if (r1.ok) expect(JSON.parse(r1.data!).droppedAssertions).toHaveLength(1);
 
-    // 第 2 轮 mechanical（步骤未变）：复用 dropped → 回放里该步 assertion 为 null（不再字面判定）
+    // Round 2 mechanical (steps unchanged): reuses dropped → that step's assertion in replay is null (no longer judged literally)
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
     const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId, mode: 'mechanical' });
     expect(r2.ok).toBe(true);
@@ -1797,12 +1797,12 @@ describe('verify_case mechanical 机械验收模式', () => {
     expect(call2[1][0]!.assertion).toBeNull();
     if (r2.ok) {
       const d2 = JSON.parse(r2.data!);
-      expect(d2.droppedAssertions).toHaveLength(1); // 原样回传供改写
+      expect(d2.droppedAssertions).toHaveLength(1); // Returned as-is for rewriting
     }
 
-    // 第 3 轮 mechanical（步骤已暂存变更）：哈希不一致 → 不复用，新断言字面进回放
-    // 注意 update_step 暂存 op 只承载 instruction/compiled（断言不在可改字段内），
-    // 因此用「改 instruction」制造步骤哈希变化——这正是"该步内容变了"的真实场景。
+    // Round 3 mechanical (step changed via staging): hash mismatch → no reuse, the new assertion goes into replay literally
+    // Note: the update_step staging op only carries instruction/compiled (assertions are not among the editable fields),
+    // so "changing the instruction" is used to create the step-hash change — exactly the real scenario of "this step's content changed".
     const stepRows = await pool.query(`SELECT id FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
     const stepId = stepRows.rows[0]!.id as string;
     await pool.query(
@@ -1816,9 +1816,9 @@ describe('verify_case mechanical 机械验收模式', () => {
       Array<{ assertion: unknown }>,
       unknown,
     ];
-    // 该步内容变了 → 上一轮 dropped 判定不复用 → 断言按字面进回放
+    // This step's content changed → the previous round's dropped verdict is not reused → the assertion enters replay literally
     expect(call3[1][0]!.assertion).toBe('登录表单正常展示');
-    // 全程无 AI 轮次（第 1 轮 full 恰好 1 次）
+    // Zero AI rounds throughout (round 1 full happens to be 1)
     expect(runAiTask).toHaveBeenCalledTimes(1);
   });
 
@@ -1866,8 +1866,8 @@ describe('verify_case 注册', () => {
   });
 
   it('工具文案声明 url 深链直达人 + 不写导航步（agent 依赖文案选路）', async () => {
-    // prod228 2026-10-26 实录：用例 url 是门户首页 → agent 把「进入 XX 页面」菜单点击写进步骤，
-    // 26 轮 verify 导航步烧掉 64-76% 执行时间；10-27 用户给出业务页深链后 goto 一步直达，导航开销≈0。
+    // prod228 2026-10-26 field report: the case url was the portal home page → the agent wrote the "enter XX page" menu click into steps,
+    // and 26 verify rounds burned 64-76% of execution time on navigation steps; on 10-27 the user supplied a business-page deep link and one goto landed directly, navigation overhead ≈ 0.
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const tool = buildVerifyCaseTool(toolCtx());
     expect(tool.description).toContain('深链');
@@ -1891,8 +1891,8 @@ describe('verify_case 机械执行步（不经浏览器）', () => {
   ];
 
   beforeEach(async () => {
-    // 干跑桩复位成默认全过：clearAllMocks 只清调用记录、不清 implementation，
-    // 上一个用例留下的 mockImplementation（失败版）会漏到这里污染结果。
+    // Reset the dry-run stub to default all-pass: clearAllMocks only clears call records, not implementations;
+    // a mockImplementation left by the previous case (the failing one) would leak here and pollute results.
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
     vi.mocked(executeCaseInBrowser).mockImplementation(
       async (_cid: string, steps: Array<{ order: number }>) =>
@@ -1901,8 +1901,8 @@ describe('verify_case 机械执行步（不经浏览器）', () => {
   });
 
   it('纯 sql 步：AI 相不执行该步（浏览器无 DB 通道），由结尾干跑裁决', async () => {
-    // 回归点：prod228 2026-10-28 实录——AI 相被要求执行 SQL，反复尝试超 5 轮未完成
-    // （agent 自记「AI 相是浏览器执行器，无法执行 SQL 查询数据库」）。机械步不该进 AI 相。
+    // Regression point: prod228 2026-10-28 field report — the AI phase was asked to execute SQL and repeatedly tried over 5 rounds without success
+    // (the agent noted "the AI phase is a browser executor and cannot execute SQL queries against the database"). Mechanical steps should not enter the AI phase.
     const caseId = await seedCase({ steps: [SQL_COMPILED] });
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
@@ -1910,14 +1910,14 @@ describe('verify_case 机械执行步（不经浏览器）', () => {
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r = await buildVerifyCaseTool(toolCtx(emitLog)).execute({ caseId });
     expect(r.ok).toBe(true);
-    // AI 相一次都没被调用（该步被跳过，其余步也没有）
+    // The AI phase was never called (that step is skipped, and no other steps exist)
     expect(vi.mocked(runAiTask)).not.toHaveBeenCalled();
-    // 干跑照跑（真值由它裁决）
+    // Dry run still runs (the verdict belongs to it)
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
     expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
     const data = JSON.parse((r as { data: string }).data);
     expect(data.result).toBe('passed');
-    // 该步在 steps 里记 passed，并说明它由干跑裁决
+    // The step is recorded as passed in steps, noting that the dry run decides it
     expect(data.steps[0].status).toBe('passed');
     expect(String(data.steps[0].warning)).toContain('机械执行步');
   });
@@ -1937,7 +1937,7 @@ describe('verify_case 机械执行步（不经浏览器）', () => {
   });
 
   it('干跑查库结果随响应带出：replay.steps[].sql 含 dbRef/rowCount/rows（agent 据此认真值）', async () => {
-    // 回归点：prod228 2026-10-28——agent 看不到查库返回行，只能连建 15 个 PROBE 探针用例摸表结构。
+    // Regression point: prod228 2026-10-28 — the agent could not see the DB query's returned rows and had to build 15 PROBE probe cases in a row to feel out the table structure.
     const caseId = await seedCase({ steps: [SQL_COMPILED] });
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
@@ -2000,9 +2000,9 @@ describe('verify_case 机械执行步（不经浏览器）', () => {
   });
 
   it('混合用例（自然语言步 + sql 步）：AI 相跳 sql 步，结尾干跑只喂 sql 步（不再误报 ReplayDivergence）', async () => {
-    // 回归点：讨论期给 DB/API 步带 compiled 后，「全编译」判定为假 → 干跑启动 →
-    // 自然语言步逐字派发必 compile-missing → 整例误判 ReplayDivergence（混合用例在旧口径下必假失败）。
-    // 新口径：full + 混合 → 干跑只喂纯机械步（DB/API 步不依赖浏览器页面状态，能被真裁决）。
+    // Regression point: after discussion-phase DB/API steps got compiled, the "all compiled" check became false → the dry run started →
+    // dispatching natural-language steps verbatim is guaranteed compile-missing → the whole case was misjudged ReplayDivergence (mixed cases always failed falsely under the old rule).
+    // New rule: full + mixed → the dry run only feeds pure mechanical steps (DB/API steps do not depend on browser page state and can be genuinely adjudicated).
     const caseId = await seedCase({ steps: [null, SQL_COMPILED] });
     const { runAiTask } = await import('../src/execute/aiTask.js');
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"ok","login":"not-needed"}');
@@ -2011,16 +2011,16 @@ describe('verify_case 机械执行步（不经浏览器）', () => {
     const r = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(r.ok).toBe(true);
     const data = JSON.parse((r as { data: string }).data);
-    // AI 相只跑自然语言步；sql 步被跳过（不经浏览器）
+    // The AI phase only runs natural-language steps; the sql step is skipped (never goes through the browser)
     expect(vi.mocked(runAiTask)).toHaveBeenCalledTimes(1);
     expect(data.steps[1].status).toBe('passed');
     expect(String(data.steps[1].warning)).toContain('机械执行步');
-    // 结尾干跑只收到 sql 步——自然语言步不进干跑（逐字派发必 compile-missing）
+    // The ending dry run only receives the sql step — natural-language steps do not enter the dry run (verbatim dispatch is guaranteed compile-missing)
     expect(executeCaseInBrowser).toHaveBeenCalledTimes(1);
     const dryRunSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ compiled: unknown }>;
     expect(dryRunSteps).toHaveLength(1);
     expect(dryRunSteps[0]!.compiled).toEqual(SQL_COMPILED);
-    // 整例通过（不再以分叉误报失败）
+    // Whole case passes (no longer falsely failed as divergence)
     expect(data.result).toBe('passed');
     expect(data.replay.steps).toHaveLength(1);
   });
@@ -2068,12 +2068,12 @@ describe('verify_case 机械执行步（不经浏览器）', () => {
 });
 
 describe('verify_case 跨轮保活（浏览器注册表接线）', () => {
-  /** 让 playwright 桩的浏览器报「连通且页面未关」→ finally 判定成立，轮末 commit 上册 */
+  /** Make the playwright stub's browser report "connected and page not closed" → the finally check holds, commit at round end */
   async function alive(): Promise<void> {
     const { __testState } = (await import('playwright-core')) as unknown as { __testState: { browserAlive: boolean } };
     __testState.browserAlive = true;
   }
-  /** 注册表里该用例的保活会话（键 = threadId::caseId，与 verifyCase 同口径） */
+  /** The keep-alive session for a case in the registry (key = threadId::caseId, same convention as verifyCase) */
   async function session(caseId: string): Promise<{ appliedHashes: string[] } | null> {
     const { peekSession } = await import('../src/pi/space/tools/browserSessions.js');
     return peekSession(`t1::${caseId}`);
@@ -2083,7 +2083,7 @@ describe('verify_case 跨轮保活（浏览器注册表接线）', () => {
     const { caseId } = await seedVisualCase(2);
     await alive();
     const { runAiTask } = await import('../src/execute/aiTask.js');
-    // 轮 1：步 1 过（收集 click 轨迹），步 2 失败 → 失败轮也必须把浏览器留在现场
+    // Round 1: step 1 passes (collects click trail), step 2 fails → a failing round must still keep the browser on the scene
     vi.mocked(runAiTask)
       .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
         opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
@@ -2093,12 +2093,12 @@ describe('verify_case 跨轮保活（浏览器注册表接线）', () => {
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     const r1 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
     expect(JSON.parse((r1 as { data: string }).data).result).toBe('failed');
-    // 失败轮 = 干净断点：浏览器上册，已生效前缀 = 失败步之前的步数
+    // Failing round = clean breakpoint: browser registered, effective prefix = number of steps before the failed step
     const s1 = await session(caseId);
     expect(s1).not.toBeNull();
     expect(s1!.appliedHashes.length).toBe(1);
 
-    // 轮 2：命中保活 → 不开新浏览器、不做前缀回放、AI 相只跑失败的那一步
+    // Round 2: keep-alive hit → no new browser, no prefix replay, AI phase runs only the failed step
     vi.mocked(runAiTask).mockResolvedValueOnce('{"status":"passed","reason":"完成","login":"not-needed"}');
     const { chromium } = await import('playwright-core');
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
@@ -2106,10 +2106,10 @@ describe('verify_case 跨轮保活（浏览器注册表接线）', () => {
     const data2 = JSON.parse((r2 as { data: string }).data);
     expect(data2.result).toBe('passed');
     expect(data2.browserReused).toBe(true);
-    expect(data2.resumeFrom).toBe(1); // AI 相从失败步续跑
-    expect(runAiTask).toHaveBeenCalledTimes(3); // 轮1×2 + 轮2×1（前缀步不重烧）
-    expect(executeCaseInBrowser).not.toHaveBeenCalled(); // 保活命中 → 零回放
-    expect(chromium.launch).toHaveBeenCalledTimes(1); // 复用同一浏览器
+    expect(data2.resumeFrom).toBe(1); // AI phase resumes from the failed step
+    expect(runAiTask).toHaveBeenCalledTimes(3); // Round1×2 + Round2×1 (prefix steps do not re-burn)
+    expect(executeCaseInBrowser).not.toHaveBeenCalled(); // Keep-alive hit → zero replay
+    expect(chromium.launch).toHaveBeenCalledTimes(1); // Reuses the same browser
   });
 
   it('保活未命中（浏览器断开）→ 降级既有 fresh+restore 路径，行为不变', async () => {
@@ -2123,14 +2123,14 @@ describe('verify_case 跨轮保活（浏览器注册表接线）', () => {
       .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     await buildVerifyCaseTool(toolCtx()).execute({ caseId });
-    // 浏览器不可保活（默认桩状态）→ 不入注册表
+    // Browser not keep-alive-able (default stub state) → not registered
     expect(await session(caseId)).toBeNull();
   });
 
   it('混合前缀：可恢复段照常回放，其后的不可恢复步交 AI 相（回放切片截到可恢复前缀）', async () => {
     const { caseId } = await seedVisualCase(3);
     const { runAiTask } = await import('../src/execute/aiTask.js');
-    // 轮 1：步 1 轨迹可映射（selector）；步 2 轨迹映射不出（坐标）；步 3 失败
+    // Round 1: step 1's trail is mappable (selector); step 2's trail is not (coordinates); step 3 fails
     vi.mocked(runAiTask)
       .mockImplementationOnce(async (_p, _i, _c, _m, opts) => {
         opts?.onAction?.({ type: 'click', selector: '#btn-1' }, true);
@@ -2143,7 +2143,7 @@ describe('verify_case 跨轮保活（浏览器注册表接线）', () => {
       .mockResolvedValueOnce('{"status":"failed","reason":"失败","login":"not-needed"}');
     const { buildVerifyCaseTool } = await import('../src/pi/space/tools/verifyCase.js');
     await buildVerifyCaseTool(toolCtx()).execute({ caseId });
-    // 轮 2：回放切片 = 最长可恢复前缀（1 步）→ AI 相从步 2 接管
+    // Round 2: replay slice = the longest recoverable prefix (1 step) → AI phase takes over from step 2
     vi.mocked(runAiTask).mockResolvedValue('{"status":"passed","reason":"完成","login":"not-needed"}');
     const { executeCaseInBrowser } = await import('../src/execute/cdp.js');
     const r2 = await buildVerifyCaseTool(toolCtx()).execute({ caseId });
@@ -2151,7 +2151,7 @@ describe('verify_case 跨轮保活（浏览器注册表接线）', () => {
     expect(data2.result).toBe('passed');
     expect(data2.resumeFrom).toBe(1);
     const restoreSteps = vi.mocked(executeCaseInBrowser).mock.calls[0]![1] as Array<{ order: number; compiled: unknown }>;
-    expect(restoreSteps.length).toBe(1); // 不可恢复的步 2 不进回放切片
+    expect(restoreSteps.length).toBe(1); // The unrecoverable step 2 does not enter the replay slice
     expect(restoreSteps[0]!.compiled).toEqual([
       { kind: 'click', locator: [{ strategy: 'css', value: '#btn-1' }] },
     ]);

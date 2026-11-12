@@ -1,16 +1,22 @@
 /**
- * 故障注入（D2）：offline（断网）/ slow_network（慢网）/ cpu_throttle（CPU 节流）/ none（复原）。
+ * Fault injection (D2): offline (network cut) / slow_network (slow network) / cpu_throttle (CPU
+ * throttling) / none (restore).
  *
- * 为什么值得做：错误处理与降级路径只有「真的断网/变慢」才暴露——正常路径下它们永远
- * 走的是成功分支，模型永远看不到 toast、错误页、加载超时这些分支。
+ * Why it is worth doing: error-handling and degradation paths only surface when the network is
+ * genuinely cut or slowed — on the happy path the model never sees toast, error page, load
+ * timeout branches.
  *
- * 三条硬约束：
- * - **必须显式授权**：工具只在会话带 allow_fault_injection 授权位时装配（章程说辞不算授权）——
- *   故障会打断被测系统自身的轮询/心跳，可能把 SUT 状态搞脏，必须由人点头。
- * - **必须能复原**：会话收尾的 finally 必调 reset()，不给被测系统留污染。
- * - **慢网只拖 GET**：写请求（POST/PUT/DELETE）不拦——否则会造出「提交失败」的假象。
+ * Three hard constraints:
+ * - **Explicit authorization required**: the tool is only mounted when the session carries the
+ *   allow_fault_injection authorization bit (charter wording does not count) — faults interrupt
+ *   the SUT's own polling/heartbeat and may dirty SUT state, so a human must approve.
+ * - **Must be restorable**: the session-teardown finally must call reset() — no pollution left
+ *   in the SUT.
+ * - **Slow network delays GET only**: write requests (POST/PUT/DELETE) pass through — otherwise
+ *   a fake "submit failed" picture would be fabricated.
  *
- * 工具永不 throw：失败一律 isError + 可行动中文说明（铁律同其它工具）。
+ * Tools never throw: failures are always isError + actionable message (iron rule shared with
+ * other tools).
  */
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
@@ -19,21 +25,21 @@ import { toolErr, toolOk } from './result.js';
 
 export type FaultMode = 'offline' | 'slow_network' | 'cpu_throttle' | 'none';
 
-/** 慢网默认额外延迟（毫秒）：够明显（页面 loading 打转），又不至于把会话拖死。 */
+/** Default slow-network extra delay (ms): noticeable (page loading spins) yet not session-killing. */
 const SLOW_NETWORK_DEFAULT_MS = 1500;
-/** CPU 节流默认倍率：4 倍——慢到能看出差别，不到不可用。 */
+/** Default CPU throttle rate: 4x — slow enough to notice, not unusable. */
 const CPU_THROTTLE_DEFAULT_RATE = 4;
 
 export interface FaultController {
-  /** 施加/切换故障（none = 全部复原）。 */
+  /** Apply/switch fault (none = restore all). */
   apply(mode: FaultMode, opts?: { delayMs?: number; rate?: number }): Promise<void>;
-  /** 全部复原（会话收尾必调）。 */
+  /** Restore all (must be called in session teardown). */
   reset(): Promise<void>;
-  /** 当前生效的故障模式（none = 无故障）。 */
+  /** Currently active fault mode (none = no fault). */
   current(): FaultMode;
 }
 
-/** 模式名归一（大小写/空白容错；空串/不认识的返回 null——只有显式 none/off/复原才复原）。 */
+/** Mode-name normalization (case/whitespace tolerant; empty/unknown returns null — only explicit none/off/restore restores). */
 export function normalizeFaultMode(raw: unknown): FaultMode | null {
   const s = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
   if (s === 'offline' || s === '断网') return 'offline';
@@ -44,15 +50,16 @@ export function normalizeFaultMode(raw: unknown): FaultMode | null {
 }
 
 /**
- * 故障控制器：持有 context/page，负责施加与复原。
- * CDP 会话按需创建（cpu_throttle 才用），复原时 detach。
+ * Fault controller: owns context/page, applies and restores faults.
+ * CDP session created on demand (only cpu_throttle uses it), detached on restore.
  */
 export function createFaultController(context: BrowserContext, page: Page): FaultController {
   let mode: FaultMode = 'none';
   let slowDelayMs = SLOW_NETWORK_DEFAULT_MS;
   let cdp: { send: (method: string, params?: unknown) => Promise<unknown>; detach: () => Promise<void> } | null = null;
 
-  // 清理路径一律不抛：收尾的 finally 里抛错会掀翻会话终态（把「探索成功」变成 failed）。
+  // Cleanup paths never throw: an error raised in teardown's finally would overturn the session
+  // terminal state (turning a successful exploration into failed).
   const clearSlowRoute = async (): Promise<void> => {
     if (typeof context.unroute !== 'function') return;
     await context.unroute('**/*').catch(() => undefined);
@@ -77,7 +84,8 @@ export function createFaultController(context: BrowserContext, page: Page): Faul
         await this.reset();
         return;
       }
-      // 切换模式前先复原上一个——避免断网+慢网叠加出测不出原因的现场。
+      // Restore the previous mode before switching — avoids offline+slow stacking into an
+      // unexplainable scene.
       await clearSlowRoute();
       await clearCpuThrottle();
       await setOffline(false);
@@ -92,13 +100,13 @@ export function createFaultController(context: BrowserContext, page: Page): Faul
         slowDelayMs = delay;
         await context.route('**/*', async (route) => {
           try {
-            // 只拖 GET：写请求照常放行（否则会造出「提交失败」的假象）。
+            // Delay GET only: write requests pass through (otherwise a fake "submit failed" picture would be fabricated).
             if (route.request().method() === 'GET') {
               await new Promise((r) => setTimeout(r, slowDelayMs));
             }
             await route.continue();
           } catch {
-            // 路由已被取消/页面已跳转——忽略。
+            // Route already cancelled/page navigated away — ignore.
           }
         });
         mode = 'slow_network';
@@ -126,8 +134,8 @@ export function createFaultController(context: BrowserContext, page: Page): Faul
 }
 
 /**
- * inject_fault 工具：注入/复原故障条件。
- * 平台已授权才装配（deps.fault 存在 = 授权通过）。
+ * inject_fault tool: inject/restore fault conditions.
+ * Mounted only when the platform has authorized (deps.fault present = authorized).
  */
 export function createInjectFaultTool(deps: { fault: FaultController }) {
   return defineTool({

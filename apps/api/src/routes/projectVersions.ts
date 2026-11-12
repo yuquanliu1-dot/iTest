@@ -63,7 +63,7 @@ projectVersionsRoute.post('/projects/:projectId/versions', async (req, res) => {
   const dup = await db.select({ id: projectVersions.id }).from(projectVersions)
     .where(and(eq(projectVersions.projectId, pid), eq(projectVersions.name, body.name))).limit(1);
   if (dup.length > 0) throw new HttpError(409, 'version_name_taken', `version name "${body.name}" already exists in this project`);
-  // 关联环境必须属于同项目；null/缺省 = 不指定（回退项目默认环境）
+  // The linked environment must belong to the same project; null/absent = unspecified (falls back to the project's default environment)
   if (body.environmentId != null) {
     const { projectId: envPid } = await assertEnvironmentVisible(body.environmentId, req.user!);
     if (envPid !== pid) throw new HttpError(400, 'env_project_mismatch', 'environment does not belong to this project');
@@ -90,12 +90,12 @@ projectVersionsRoute.patch('/project-versions/:id', async (req, res) => {
       throw new HttpError(409, 'version_name_taken', `version name "${body.name}" already exists`);
     }
   }
-  // 关联环境必须属于同项目；null 表示清除关联（回退项目默认环境）
+  // The linked environment must belong to the same project; null clears the link (falls back to the project's default environment)
   if (body.environmentId != null) {
     const { projectId: envPid } = await assertEnvironmentVisible(body.environmentId, req.user!);
     if (envPid !== projectId) throw new HttpError(400, 'env_project_mismatch', 'environment does not belong to this project');
   }
-  // ref 和 refKind 强相关：ref 非空时 refKind 必填；refKind 置空时 ref 也清空
+  // ref and refKind are strongly coupled: when ref is non-empty, refKind is required; clearing refKind also clears ref
   const nextRef = body.ref === undefined ? undefined : body.ref;
   const nextRefKind = body.refKind === undefined ? undefined : body.refKind;
   const set: Record<string, unknown> = { updatedAt: new Date() };
@@ -109,7 +109,7 @@ projectVersionsRoute.patch('/project-versions/:id', async (req, res) => {
   res.json(rows[0]);
 });
 
-/** GET /projects/:projectId/refs?kind=branch|tag — 列远端 refs。仅 manager。 */
+/** GET /projects/:projectId/refs?kind=branch|tag — list remote refs. Managers only. */
 projectVersionsRoute.get('/projects/:projectId/refs', requireManager, async (req, res) => {
   const pid = String(req.params.projectId);
   await assertProjectVisible(pid, req.user!);
@@ -127,14 +127,14 @@ projectVersionsRoute.get('/projects/:projectId/refs', requireManager, async (req
     });
     res.json({ kind, refs });
   } catch (err) {
-    // 前端 request() 只认 body.message，缺省会兜底成「HTTP 400」——列举失败的原因
-    // （如 gitlab 不支持列 refs）必须放进 message 才能直达 UI 的手动输入分支。
+    // The frontend request() only trusts body.message and would fall back to "HTTP 400" when missing — the reason
+    // a listing failed (e.g. gitlab doesn't support listing refs) must go into message to reach the UI's manual-input branch.
     const message = (err as Error).message;
     res.status(400).json({ kind, refs: [], error: 'refs_list_failed', message });
   }
 });
 
-/** POST /projects/:projectId/verify-ref — 校验远端 branch/tag 存在性（ref 弹窗「测试」）。仅 manager。 */
+/** POST /projects/:projectId/verify-ref — verify remote branch/tag existence (the ref dialog's "test"). Managers only. */
 projectVersionsRoute.post('/projects/:projectId/verify-ref', requireManager, async (req, res) => {
   const pid = String(req.params.projectId);
   await assertProjectVisible(pid, req.user!);
@@ -144,7 +144,7 @@ projectVersionsRoute.post('/projects/:projectId/verify-ref', requireManager, asy
   const p = ps[0]!;
   if (!p.repoUrl) throw new HttpError(400, 'no_repo', '项目未配置仓库');
   try {
-    // ref 弹窗没有 PAT 输入框，一律用库中已存 PAT（GET 从不回传 PAT，同 verify-repo 的回落语义）
+    // The ref dialog has no PAT input, so always use the stored PAT from the DB (GET never returns the PAT; same fallback semantics as verify-repo)
     const result = await verifyRef({
       repoUrl: p.repoUrl,
       provider: (p.provider as GitProviderName) ?? 'github',

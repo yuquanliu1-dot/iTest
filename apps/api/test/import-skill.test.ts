@@ -1,14 +1,14 @@
 /**
- * import_skill：URL 校验 + 解析（真跑 git clone 的网络路径不做单测，用 pure 函数隔离）。
+ * import_skill: URL validation + parsing (the network path that really runs git clone is not unit-tested; isolated via pure functions).
  *
- * 覆盖：
- *  - parseSkillUrl：合法 github 形态收；非 https / 非 github.com / userinfo / 端口 / 多余路径段拒绝；
- *    /tree/<ref> 解析；ref 注入（leading -、..）拒绝。
- *  - sanitizeSlug：大小写/非法字符/折叠/首尾 - 处理；结果空 → null。
- *  - parseSkillRepo（本地 tmp 目录，不碰网络）：frontmatter name/description、引号、坏名回退仓库名、
- *    无 frontmatter 回退 sanitize、scripts/ 目录与根脚本、shebang runtime、未知 runtime/文件名非法/超大 skip、
- *    SKILL.md 缺失抛错。
- *  - 工具侧：注册闸门（manager 才注册 import_skill）、非管理员 guard、非法 URL（clone 前即拒，不碰网络）。
+ * Coverage:
+ *  - parseSkillUrl: accepts legal github shapes; rejects non-https / non-github.com / userinfo / port / extra path segments;
+ *    parses /tree/<ref>; rejects ref injection (leading -, ..).
+ *  - sanitizeSlug: case/illegal chars/collapse/leading-trailing - handling; empty result → null.
+ *  - parseSkillRepo (local tmp dir, no network): frontmatter name/description, quotes, bad name falls back to repo name,
+ *    no frontmatter falls back to sanitize, scripts/ dir vs root scripts, shebang runtime, unknown runtime/illegal filename/oversized skip,
+ *    missing SKILL.md throws.
+ *  - Tool side: registration gate (only manager registers import_skill), non-manager guard, illegal URL (rejected before clone, no network touched).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
@@ -130,7 +130,7 @@ describe('parseSkillRepo（本地目录，不碰网络）', () => {
     await fs.symlink('/tmp', path.join(dir, 'scripts', 'link'));
     const p = await parseSkillRepo(dir, 'sk');
     expect(p.files.map((f) => f.path)).toEqual(['SKILL.md']);
-    // 软链与超限文件都不进 files（软链直接丢弃不记 skipped，超限记原因）
+    // Neither symlinks nor oversized files make it into files (symlinks are dropped outright without a skipped entry; oversized ones record the reason)
     expect(p.skipped.map((s) => s.path)).toEqual(['scripts/big.js']);
     await cleanup();
   });

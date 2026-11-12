@@ -9,7 +9,7 @@ describe('mapAiActionsToCompiled 凭据占位符', () => {
     ]);
     expect(r.ok).toBe(false);
     expect(r.ok === false && r.reason).toMatch(/凭据占位符/);
-    // 文案要点名 @归属 形态——模型/用户看到原因才知道是「这个服务的凭据」也被拒了
+    // The message must name the @ref attribution form -- only then do the model/user see from the reason that "this service's credential" was rejected too
     expect(r.ok === false && r.reason).toContain('@');
   });
 
@@ -59,8 +59,8 @@ describe('mapAiActionsToCompiled 裸标签门（第二道防线）', () => {
 
 describe('mapAiActionsToCompiled 激活态选择器门（第二道防线）', () => {
   it('click/fill 命中激活态 class（router-link-active/is-active）→ 拒绝固化（回放时激活态可能不存在）', () => {
-    // 回归动机:2026-10-28 prod228 实录——「进入 XX 菜单」被固化为
-    // a.router-link-exact-active.router-link-active，回放深链直达时该 class 不存在必碎。
+    // Regression motive: 2026-10-28 prod228 live record -- "enter XX menu" got solidified as
+    // a.router-link-exact-active.router-link-active; on replay via deep link the class doesn't exist and must break.
     const c = mapAiActionsToCompiled([{ type: 'click', selector: 'a.router-link-exact-active.router-link-active' }]);
     expect(c.ok).toBe(false);
     if (!c.ok) expect(c.reason).toContain('激活态');

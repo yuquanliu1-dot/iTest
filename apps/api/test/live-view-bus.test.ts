@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * liveViewBus 单元测试。真实 Redis 不在单测范围（prod228 冒烟覆盖）：
- * - 信封编解码：纯函数 round-trip / 非法输入；
- * - REDIS_URL 缺失：全部原语 no-op（本地 dev 与既有 live-view.test.ts 的运行前提）；
- * - vi.doMock('ioredis')：模拟 pub/sub 连接，验证发布参数与 messageBuffer 分发/订阅记账。
+ * liveViewBus unit tests. Real Redis is out of unit-test scope (covered by the prod228 smoke):
+ * - envelope encode/decode: pure-function round-trip / illegal input;
+ * - REDIS_URL missing: all primitives no-op (the run precondition for local dev and the existing live-view.test.ts);
+ * - vi.doMock('ioredis'): simulates the pub/sub connection, verifying publish params and messageBuffer dispatch/subscription bookkeeping.
  */
 import {
   encodeEvent,
@@ -60,7 +60,7 @@ describe('信封编解码', () => {
     const bad = encodeEvent(EV_FRAME, 1, JPEG);
     bad.writeUInt8(0x7f, 0);
     expect(decodeEvent(bad)).toBeNull();
-    // biome-ignore lint/suspicious/noExplicitAny: 故意喂非 Buffer
+    // biome-ignore lint/suspicious/noExplicitAny: deliberately feeding a non-Buffer
     expect(decodeEvent(undefined as never)).toBeNull();
   });
 });
@@ -101,7 +101,7 @@ describe('REDIS_URL 缺失 → 全部 no-op', () => {
   });
 });
 
-// ── mock ioredis：按本模块用到的最小命令集模拟 ─────────────────────────────────
+// ── mock ioredis: simulating the minimal command set used by this module ─────────────────────────────────
 
 interface FakeCall {
   cmd: string;
@@ -112,7 +112,7 @@ class FakeRedis {
   static all: FakeRedis[] = [];
   listeners: Record<string, Array<(...args: never[]) => void>> = {};
   calls: FakeCall[] = [];
-  /** 按命令名固定返回值（缺省 null）；Error 实例 → reject（测 catch 路径）。 */
+  /** Fixed return value per command name (default null); an Error instance → reject (tests the catch path). */
   results: Record<string, unknown> = {};
   pipelineOps: FakeCall[] = [];
   constructor() {
@@ -163,7 +163,7 @@ class FakeRedis {
   }
 }
 
-/** 动态载入挂了 fake ioredis 的全新 bus 模块（连接状态随模块重置）。 */
+/** Dynamically load a fresh bus module with fake ioredis attached (connection state resets with the module). */
 async function freshBusWithFakeRedis() {
   vi.resetModules();
   FakeRedis.all = [];
@@ -206,7 +206,7 @@ describe('源侧发布（mock ioredis）', () => {
     expect(decodeEvent(endMsg)!.type).toBe(EV_END);
 
     bus.appendRecording('case:2', ts, JPEG);
-    // fake 的 pipeline.exec 把 ops 展开进 args（args 即操作列表）
+    // The fake's pipeline.exec spreads ops into args (args is the op list)
     const pipe = pub.callsOf('pipeline.exec')[0]!.args as unknown as FakeCall[];
     expect(pipe.map((o) => o.cmd)).toEqual(['rpush', 'ltrim', 'pexpire']);
     expect(pipe[0]!.args[0]).toBe('itest:live-rec:case:2');
@@ -235,7 +235,7 @@ describe('源侧发布（mock ioredis）', () => {
 
     pub.results.get = '3';
     await expect(bus.viewersGet('k')).resolves.toBe(3);
-    pub.results.get = '-2'; // 崩溃残留：decr 越过 0 → 读取端钳 0
+    pub.results.get = '-2'; // crash leftover: decr went below 0 → reader clamps to 0
     await expect(bus.viewersGet('k')).resolves.toBe(0);
     pub.results.get = null;
     await expect(bus.viewersGet('k')).resolves.toBe(0);
@@ -321,7 +321,7 @@ describe('镜像侧读取与订阅（mock ioredis）', () => {
     unsub();
     expect(sub.callsOf('unsubscribe')[0]!.args).toEqual(['itest:live:planrun:9']);
     sub.emit('messageBuffer', chan, encodeEvent(EV_FRAME, 10, JPEG));
-    expect(got).toHaveLength(1); // 退订后本地回调不再触发
+    expect(got).toHaveLength(1); // after unsubscribe the local callback no longer fires
   });
 
   it('同 key 多镜像共享一条订阅；末个离开才 UNSUBSCRIBE', async () => {
@@ -331,7 +331,7 @@ describe('镜像侧读取与订阅（mock ioredis）', () => {
     const unsubA = bus.subscribeMirror('k', { onFrame: (ts) => aFrames.push(ts), onEnd: () => {} });
     const unsubB = bus.subscribeMirror('k', { onFrame: (ts) => bFrames.push(ts), onEnd: () => {} });
     const sub = FakeRedis.all[0]!;
-    expect(sub.callsOf('subscribe')).toHaveLength(1); // 共享订阅，不重复 SUBSCRIBE
+    expect(sub.callsOf('subscribe')).toHaveLength(1); // shared subscription, no duplicate SUBSCRIBE
 
     sub.emit('messageBuffer', Buffer.from('itest:live:k'), encodeEvent(EV_FRAME, 1, JPEG));
     expect(aFrames).toEqual([1]);
@@ -341,16 +341,16 @@ describe('镜像侧读取与订阅（mock ioredis）', () => {
     sub.emit('messageBuffer', Buffer.from('itest:live:k'), encodeEvent(EV_FRAME, 2, JPEG));
     expect(aFrames).toEqual([1]);
     expect(bFrames).toEqual([1, 2]);
-    expect(sub.callsOf('unsubscribe')).toHaveLength(0); // b 还在
+    expect(sub.callsOf('unsubscribe')).toHaveLength(0); // b is still in
 
     unsubB();
     expect(sub.callsOf('unsubscribe')[0]!.args).toEqual(['itest:live:k']);
-    unsubA(); // 幂等
+    unsubA(); // idempotent
     expect(sub.callsOf('unsubscribe')).toHaveLength(1);
   });
 });
 
-// ── liveView × bus 集成（mock 整个 bus 模块，断言钩子调用与镜像 fallback）─────────
+// ── liveView × bus integration (mocking the whole bus module; asserts hook calls and mirror fallback)─────────
 
 const JPEG2 = Buffer.from([0xff, 0xd8, 0xff, 0xda]);
 const FRAME_HEADER = Buffer.from('--frame\r\nContent-Type: image/jpeg');
@@ -365,7 +365,7 @@ function countBytes(buf: Buffer, pat: Buffer): number {
   return n;
 }
 
-/** fake req/res（同 live-view.test.ts 的 fakeConn：捕获 writeHead/write/end 与 close 回调）。 */
+/** Fake req/res (same fakeConn as live-view.test.ts: captures writeHead/write/end and the close callback). */
 function fakeConn() {
   let onClose: (() => void) | null = null;
   const chunks: Array<string | Buffer> = [];
@@ -397,7 +397,7 @@ function fakeConn() {
   };
 }
 
-/** 动态载入挂了 spy bus 的全新 liveView 模块。redisReady 默认 true（fallback 可测），按用例覆写。 */
+/** Dynamically load a fresh liveView module with a spy bus attached. redisReady defaults to true (fallback is testable); override per case. */
 async function freshLiveViewWithBus() {
   vi.resetModules();
   const bus = {
@@ -450,8 +450,8 @@ describe('liveView × bus 集成', () => {
     expect(bus.clearRecording).toHaveBeenCalledWith('planrun:it');
     expect(bus.heartbeatSet).toHaveBeenCalledWith('planrun:it');
 
-    live.setPage({ screenshot: async () => JPEG } as never); // 无 context() → screencast 静默失败走轮询
-    await vi.advanceTimersByTimeAsync(1); // 首 tick：心跳 + 截图 → fanout → publishFrame + appendRecording
+    live.setPage({ screenshot: async () => JPEG } as never); // no context() → screencast fails silently, falling back to polling
+    await vi.advanceTimersByTimeAsync(1); // first tick: heartbeat + screenshot → fanout → publishFrame + appendRecording
     expect(bus.heartbeatSet).toHaveBeenCalledWith('planrun:it');
     expect(bus.publishFrame).toHaveBeenCalledWith('planrun:it', expect.any(Number), JPEG);
     expect(bus.appendRecording).toHaveBeenCalledWith('planrun:it', expect.any(Number), JPEG);
@@ -468,7 +468,7 @@ describe('liveView × bus 集成', () => {
     bus.redisReady.mockReturnValue(false);
     const conn = fakeConn();
     void mod.handleLiveView(conn.req, conn.res, 'nope');
-    expect(conn.res.status).toBe(404); // 同步路径（无 await 插入）
+    expect(conn.res.status).toBe(404); // synchronous path (no await inserted)
     expect(bus.remoteSourceAlive).not.toHaveBeenCalled();
 
     const meta = fakeConn();
@@ -517,15 +517,15 @@ describe('liveView × bus 集成', () => {
     await mod.handleLiveView(conn.req, conn.res, 'planrun:tw');
     expect(bus.viewersIncr).toHaveBeenCalledWith('planrun:tw');
 
-    handlers!.onFrame(1, JPEG); // 首帧即 touch（lastTouchAt=0 → 立即续期一次）
-    handlers!.onFrame(2, JPEG); // 紧随次帧 → 节流窗内，不再 touch
+    handlers!.onFrame(1, JPEG); // first frame touches immediately (lastTouchAt=0 → renewed once right away)
+    handlers!.onFrame(2, JPEG); // immediately-following frame → inside the throttle window, no touch
     expect(bus.viewersTouch).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5000);
-    handlers!.onFrame(3, JPEG); // 过窗 → 第二次 touch（长静默流计数不先行过期）
+    handlers!.onFrame(3, JPEG); // past the window → second touch (long-silent streams don't expire the counter early)
     expect(bus.viewersTouch).toHaveBeenCalledTimes(2);
 
-    handlers!.onEnd(); // 源收尾 → finish：退订 + DECR + 日志
-    conn.close(); // 正常 end 后 Node 仍触发 close → done 守卫，不得重复 DECR
+    handlers!.onEnd(); // source finishes → finish: unsubscribe + DECR + log
+    conn.close(); // Node still fires close after a normal end → done guard, must not DECR twice
     expect(bus.viewersDecr).toHaveBeenCalledTimes(1);
     expect(logger.info).toHaveBeenCalledWith(
       { key: 'planrun:tw', path: 'mirror', durationMs: expect.any(Number), bytes: JPEG.length * 3 },
@@ -539,21 +539,21 @@ describe('liveView × bus 集成', () => {
     bus.viewersGet.mockImplementation(async () => viewers);
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
     const pollDelays = (): number[] =>
-      // 轮询档只有 500/2000 两档；截图软超时的 2500ms 定时器排除在外
+      // The polling tiers only have 500/2000; the screenshot soft-timeout's 2500ms timer is excluded
       setTimeoutSpy.mock.calls.map((c) => c[1] as number).filter((d) => d === 500 || d === 2000);
     const screenshot = vi.fn(async () => JPEG);
     const newCDPSession = vi.fn(async () => { throw new Error('no cdp'); });
     const live = mod.registerLiveView('it-cross');
     live.setPage({ screenshot, context: () => ({ newCDPSession }) } as never);
-    await vi.advanceTimersByTimeAsync(4000); // 首 tick（2000ms 旧档）+ 若干拍：remoteViewers 已刷成 1
-    expect(pollDelays()).toContain(500); // 桥上有人看 → 观看档
-    expect(newCDPSession).toHaveBeenCalled(); // → screencast 尝试启动（fake 失败静默走轮询兜底）
+    await vi.advanceTimersByTimeAsync(4000); // first tick (old 2000ms tier) + several beats: remoteViewers has refreshed to 1
+    expect(pollDelays()).toContain(500); // someone on the bridge is watching → viewer tier
+    expect(newCDPSession).toHaveBeenCalled(); // → screencast attempted (fake fails silently, falls back to polling)
 
     viewers = 0;
-    await vi.advanceTimersByTimeAsync(2500); // 等 remoteViewers 刷新为 0 并完成切档
+    await vi.advanceTimersByTimeAsync(2500); // wait for remoteViewers to refresh to 0 and the tier switch to complete
     setTimeoutSpy.mockClear();
     await vi.advanceTimersByTimeAsync(4000);
-    expect(pollDelays()).not.toContain(500); // 归零后回落无人档
+    expect(pollDelays()).not.toContain(500); // after zeroing out, falls back to the no-viewer tier
     expect(pollDelays()).toContain(2000);
   });
 
@@ -586,9 +586,9 @@ describe('liveView × bus 集成', () => {
     await mod.handleLiveReplay(conn.req, conn.res, 'k');
     expect(conn.res.status).toBe(200);
     expect(conn.res.headers?.['Content-Type']).toBe('multipart/x-mixed-replace; boundary=frame');
-    expect(countBytes(conn.body(), FRAME_HEADER)).toBe(1); // 首帧即出
+    expect(countBytes(conn.body(), FRAME_HEADER)).toBe(1); // first frame out immediately
     expect(conn.hasJpeg()).toBe(true);
-    await vi.advanceTimersByTimeAsync(2600); // 帧差 2000 → 次帧 + end
+    await vi.advanceTimersByTimeAsync(2600); // frame gap 2000 → next frame + end
     const body = conn.body();
     expect(countBytes(body, FRAME_HEADER)).toBe(2);
     expect(body.includes(JPEG2)).toBe(true);
@@ -599,7 +599,7 @@ describe('liveView × bus 集成', () => {
     const { mod, bus } = await freshLiveViewWithBus();
     const live = mod.registerLiveView('local-rec');
     live.setPage({ screenshot: async () => JPEG } as never);
-    await vi.advanceTimersByTimeAsync(1); // 录入首帧
+    await vi.advanceTimersByTimeAsync(1); // first frame recorded
     live.close();
     const rp = fakeConn();
     await mod.handleLiveReplay(rp.req, rp.res, 'local-rec');

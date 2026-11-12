@@ -1,4 +1,4 @@
-/** R3.6 会话指标+嫌疑分纯函数（无 DB；fixture turns 直接构造）。 */
+/** R3.6 session metrics + suspicion score pure functions (no DB; fixture turns constructed directly). */
 import { describe, it, expect } from 'vitest';
 import type { ParsedTurn } from '../src/scheduler/trajectoryParse.js';
 import { DEFAULT_SESSIONS_ROOT, computeSessionMetrics, sessionSuspicionScore } from '../src/pi/space/sessionSignals.js';
@@ -45,9 +45,9 @@ describe('computeSessionMetrics', () => {
   it('repeatedIdenticalToolCalls：同 name+arguments 重复出现计数（超出首现的次数）', () => {
     const turns = [
       asstCall('a', 'verify_case', { caseId: 'x' }),
-      asstCall('b', 'verify_case', { caseId: 'x' }), // 同参重复 1 次
-      asstCall('c', 'verify_case', { caseId: 'x' }), // 再重复 → 累计 2
-      asstCall('d', 'verify_case', { caseId: 'y' }), // 不同参不算
+      asstCall('b', 'verify_case', { caseId: 'x' }), // same-args repeat, 1
+      asstCall('c', 'verify_case', { caseId: 'x' }), // repeat again → total 2
+      asstCall('d', 'verify_case', { caseId: 'y' }), // different args don't count
     ];
     expect(computeSessionMetrics(turns).repeatedIdenticalToolCalls).toBe(2);
     expect(computeSessionMetrics([asstCall('a', 't', {})]).repeatedIdenticalToolCalls).toBe(0);
@@ -88,7 +88,7 @@ describe('sessionSuspicionScore', () => {
 
   it('组合样本：长会话+verify 死循环+错误+重复+轮数+负反馈 逐项相加', () => {
     const m = { durationMs: 35 * 60_000, turns: 25, toolCallsByName: {}, toolResultErrors: 2, verifyCalls: 7, repeatedIdenticalToolCalls: 3 };
-    // 3(时长) + 4(verify) + 4(错误封顶) + 2(重复) + 1(轮数) + 3(负反馈) = 17
+    // 3(duration) + 4(verify) + 4(error cap) + 2(repeats) + 1(turns) + 3(negative feedback) = 17
     expect(sessionSuspicionScore(m, { negativeFeedback: true, nlAiFailCount: 0 })).toBe(17);
   });
 });

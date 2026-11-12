@@ -1,9 +1,9 @@
 /**
- * 探索式测试会话 runner：charter 驱动的独立 AI 浏览器会话——无 case/步骤绑定，
- * 模板 = pi/space/tools/login.ts perform_login（launch → newContext → registerLiveView → runAiTask）。
- * 产出 findings 缺陷候选（onFindings 即时截图落库）+ live view 整段录像。
- * 终止语义：正常 done → completed；shouldAbort 闭包标志分类（用户取消 → cancelled、
- * 预算耗尽 → completed+注记），绝不解析 runAiTask 的错误文案（文案是执行语境的，不可靠）。
+ * Exploratory-testing session runner: a charter-driven standalone AI browser session — no case/step binding.
+ * Template = pi/space/tools/login.ts perform_login (launch → newContext → registerLiveView → runAiTask).
+ * Produces findings defect candidates (onFindings screenshots persisted immediately) + a live view full recording.
+ * Termination semantics: normal done → completed; the shouldAbort closure flag is classified (user cancel → cancelled,
+ * budget exhausted → completed+note); runAiTask's error wording is never parsed (it is execution-context wording, unreliable).
  */
 import { eq } from 'drizzle-orm';
 import { rm } from 'node:fs/promises';
@@ -59,18 +59,18 @@ import { logger } from '../logger.js';
 import { loginStateKey, getLoginState, saveLoginState, type LoginStorageState } from '../pi/space/tools/loginStateCache.js';
 import { resolveLlmClient } from '../agent/llmSettings.js';
 
-// 轮次预算/墙钟常量移至 explorationShared.ts（pi 链路 runner 同用一份），按既有对外表面再导出。
+// Turn-budget/wall-clock constants moved to explorationShared.ts (the pi-chain runner uses the same copy); re-exported over the existing public surface.
 export { EXPLORATION_MAX_TURNS, explorationWallClockMs } from './explorationBudget.js';
 
-/** 单次只读取证的等待侧超时（只截断等待，不取消底层查询——只读查询代价可接受）。 */
+/** Waiting-side timeout for a single read-only evidence probe (only truncates the wait, never cancels the underlying query — an acceptable cost for read-only queries). */
 const SQL_PROBE_TIMEOUT_MS = 10_000;
 
-/** 留痕里单条 SQL 的最长文本：审计要看"查了什么"，但超长 query 不该让留痕膨胀。 */
+/** Max text length of a single SQL entry in the action trail: audit needs to see "what was queried", but an overlong query shouldn't bloat the trail. */
 const SQL_STEP_TARGET_MAX = 1000;
 
-/** 运行时分派开关：EXPLORATION_RUNTIME=pi 走新链路（pi agent + Playwright 工具集），
- *  其余值走 legacy（runAiTask JSON 动作协议，完整保留可随时回退）。默认 legacy。
- *  idleTimeoutMs：空闲看门狗阈值（挂死判据），默认走常量；测试可注入小值。 */
+/** Runtime dispatch switch: EXPLORATION_RUNTIME=pi takes the new chain (pi agent + Playwright toolset),
+ *  any other value takes legacy (the runAiTask JSON action protocol, fully kept for rollback anytime). Default legacy.
+ *  idleTimeoutMs: idle watchdog threshold (hang criterion), defaults to the constant; tests may inject a small value. */
 export async function runExplorationSession(input: { sessionId: string; idleTimeoutMs?: number }): Promise<void> {
   if ((process.env.EXPLORATION_RUNTIME ?? 'legacy').trim().toLowerCase() === 'pi') {
     return runExplorationSessionPi(input);
@@ -78,13 +78,13 @@ export async function runExplorationSession(input: { sessionId: string; idleTime
   return runLegacyExplorationSession(input);
 }
 
-/** legacy runner（2026-11-11 前的执行核心，保留为回退链路；新链路见 pi/exploration/runner.ts）。 */
+/** Legacy runner (the execution core before 2026-11-11, kept as the fallback chain; the new chain is pi/exploration/runner.ts). */
 async function runLegacyExplorationSession(input: { sessionId: string }): Promise<void> {
   const { sessionId } = input;
   const session = (await db.select().from(explorationSessions).where(eq(explorationSessions.id, sessionId)))[0];
   if (!session) return;
   if (!(await claimSession(sessionId))) return;
-  // pending 期被取消：不开浏览器直接收尾
+  // Cancelled while pending: finish up directly without opening a browser
   if (session.cancelRequested) {
     await db.update(explorationSessions).set({ status: 'cancelled', finishedAt: new Date(), updatedAt: new Date() }).where(eq(explorationSessions.id, sessionId));
     return;
@@ -92,26 +92,26 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
 
   let envCtx: Awaited<ReturnType<typeof resolveEnv>> | undefined;
   let live: ReturnType<typeof registerLiveView> | undefined;
-  // 轮次预算：用户创建会话时可配（null=默认）。墙钟不随它放大（防单轮卡死与探索深度无关）。
+  // Turn budget: user-configurable at session creation (null = default). The wall clock doesn't scale up with it (a single stuck turn is unrelated to exploration depth).
   const maxTurns = session.budgetTurns ?? EXPLORATION_MAX_TURNS;
   const usage = newAiUsage();
   let turnCount = 0;
   let userCancelled = false;
   let budgetExceeded = false;
-  /** findings 计数（函数作用域：catch 分支也要用来说明「模型报 N 条、落库 M 条」）。 */
+  /** Findings count (function scope: the catch branch also uses it to state "model reported N, persisted M"). */
   let savedCount = 0;
   let modelReported = 0;
-  /** 数据库取证次数（会话级配额，防模型把预算烧在扫库上）。 */
+  /** Database evidence probe count (session-level quota, keeping the model from burning its budget scanning the DB). */
   let sqlProbeCount = 0;
-  /** 最近一次查库的结果摘要（平台侧记录的行数/首行）——挂进动作留痕，findings 的复现步骤据此可见取证内容。 */
+  /** Summary of the latest DB query result (row count/first row recorded platform-side) — attached to the action trail so findings' repro steps can show what was probed. */
   let lastSqlDetail = '';
-  /** 会话级动作留痕（整场动作序列，永不重置）——详情页「会话过程」的逐步视图。
-   *  与 finding 级 trail 的差别：finding 级是"自上一条 finding 起"的片段，
-   *  这里连最后一条 finding 之后的尾段也留住（否则收尾前的动作无处可查）。 */
+  /** Session-level action trail (the whole run's action sequence, never reset) — the step view of the detail page's "session activity".
+   *  Difference from the finding-level trail: the finding level is the fragment "since the previous finding",
+   *  while this keeps even the tail after the last finding (otherwise actions before finishing would be untraceable). */
   const sessionSteps: ExplorationStep[] = [];
-  /** 落库串行链：并发写同一行时后发请求可能先落库，旧快照覆盖新快照会丢步。 */
+  /** Persistence serialization chain: with concurrent writes to one row a later request may land first, and an old snapshot overwriting a newer one would drop steps. */
   let persistChain: Promise<void> = Promise.resolve();
-  /** 会话级动作留痕 + 负面结果账本落库。失败只记日志——留痕是审计辅助，不能因此掀翻整场会话。 */
+  /** Persists the session-level action trail + the negative-result ledger. Failures are only logged — the trail is an audit aid and must not topple the whole session. */
   const persistSessionState = async (): Promise<void> => {
     persistChain = persistChain
       .then(async () => {
@@ -126,10 +126,10 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
     return persistChain;
   };
   /**
-   * 动作级落库防抖：onAction 是同步回调（不能 await），连续动作合并成一次写。
-   * 窗口 1s——详情页 2s 轮询一次，1s 足够让步骤在跑动中逐条长出来；
-   * 不做防抖的话每个动作一次 UPDATE，长会话把库打爆。
-   * 定时器不续期（第一个待写动作起算）：动作流不断时也不会饿死这次写。
+   * Action-level persistence debounce: onAction is a synchronous callback (can't await), so consecutive actions merge into one write.
+   * Window 1s — the detail page polls every 2s, so 1s suffices for steps to grow one by one while running;
+   * without the debounce, one UPDATE per action would pound the DB flat over long sessions.
+   * The timer is not renewed (counts from the first pending action): a continuous action stream won't starve this write either.
    */
   const TRAIL_PERSIST_DEBOUNCE_MS = 1000;
   let trailTimer: NodeJS.Timeout | undefined;
@@ -140,7 +140,7 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
       void persistSessionState();
     }, TRAIL_PERSIST_DEBOUNCE_MS);
   };
-  /** 立刻落库（收尾用）：清掉待触发的防抖写，保证此刻库里的留痕是全的。 */
+  /** Persist immediately (for finishing): cancel the pending debounced write so the trail in the DB is complete at this moment. */
   const flushTrailPersist = async (): Promise<void> => {
     if (trailTimer) {
       clearTimeout(trailTimer);
@@ -149,11 +149,11 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
     await persistSessionState();
   };
   /**
-   * 负面结果账本（外化记忆最小切片）：模型申报的「已排除的假设 + 依据」。
-   * 只存排除项不存信念——黑板存信念会把观察冻成结论、自我印证。
+   * Negative-result ledger (the smallest slice of externalized memory): the model-declared "excluded hypotheses + evidence".
+   * Store exclusions, never beliefs — a blackboard storing beliefs freezes observations into conclusions and self-confirms.
    */
   const excludedLedger: Array<{ claim: string; evidence: string }> = [];
-  /** 模型申报排除项 → 累加去重 + 落库（跑动中详情页即可见）。 */
+  /** Model-declared exclusions → accumulate, dedupe, persist (visible on the detail page while running). */
   const onExcluded = (items: Array<{ claim: string; evidence: string }>): void => {
     for (const e of items) {
       if (excludedLedger.length >= EXPLORATION_MAX_EXCLUDED) break;
@@ -164,37 +164,37 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
   };
 
   try {
-    // —— 代码提交范围解析（charter 自然语言 → git 范围；LLM+git 可达 180s，浏览器启动前做）——
-    // 前后各一次心跳：解析期间看门狗不至于误杀，顺带捕捉解析期间的取消请求。
-    // none/failed → codeScope undefined，探索照常全站跑（软失败，会话不掀翻）。
+    // — Code commit scope resolution (charter natural language → git scope; LLM+git can take 180s, done before browser launch) —
+    // A heartbeat before and after: the watchdog won't miskill during resolution, and a cancel request during it is caught too.
+    // none/failed → codeScope undefined, exploration proceeds site-wide as usual (soft failure, the session isn't toppled).
     await heartbeat(sessionId);
     const { scope: codeScope } = await resolveCodeScope({ sessionId, charter: session.charter, versionId: session.versionId });
     if (await heartbeat(sessionId)) {
       await finishSession(sessionId, { status: 'cancelled', turnsUsed: 0, usage: usage.stat }).catch(() => undefined);
       return;
     }
-    // 探索墙钟从范围解析结束后起算——预算全部留给智能体阶段。
-    // 墙钟由轮次物化（不再固定 15 分钟）：轮次是深度的唯一旋钮。
+    // The exploration wall clock starts after scope resolution ends — the whole budget goes to the agent phase.
+    // The wall clock is materialized from turns (no longer a fixed 15 minutes): turns are the only depth knob.
     const deadline = Date.now() + explorationWallClockMs(maxTurns);
 
     envCtx = await resolveEnv({ versionId: session.versionId }, { expectedProjectId: session.projectId });
-    // 探针闭包里要用 env（envCtx 是 let，闭包内 TS 不做窄化）
+    // The probe closures need env (envCtx is a let; TS doesn't narrow it inside closures)
     const env = envCtx;
     const client = (await resolveLlmClientForExploration()).client;
     const webRef = defaultWebRef({ envCtx });
     const cred = webRef ? envCtx.resolveLogin(webRef) : null;
     const startUrl = session.startUrl?.trim() || envCtx.baseUrl || cred?.loginUrl || '';
     if (!startUrl) throw new Error('缺少探索起点 URL（会话未填 startUrl，且环境未配置 baseUrl/loginUrl）');
-    // 探索范围白名单 = 起点 origin（唯一）。
-    // runAiTask 侧对越界 navigate 事前拒收——charter 的「禁止离开」只是提示词约束，
-    // 2026-11-10 prod 实证过它拦不住模型（SUT 挂掉 → 自主导航到真实系统 + 真凭据登录 + 写数据）。
-    // 刻意不加「环境 web 资源的 loginUrl origin」：那个 origin 往往正是真实被测系统本身
-    // （prod 的 SOC 192.168.30.123:1688），加进白名单等于把上面那条越界写数据路径重新打开。
-    // 起点 origin 不可解析 → 白名单为空数组 = navigate 全拒（保守收口，模型输出 fail）。
+    // Exploration scope whitelist = the starting origin (the only entry).
+    // runAiTask rejects out-of-scope navigates upfront — the charter's "no leaving" is only a prompt constraint;
+    // proven on 2026-11-10 prod that it can't stop the model (SUT down → autonomous navigation to the real system + login with real credentials + data writes).
+    // Deliberately NOT adding "the environment web resources' loginUrl origin": that origin is often the real SUT itself
+    // (prod's SOC 192.168.30.123:1688), and whitelisting it would reopen the out-of-scope data-write path above.
+    // Unresolvable starting origin → empty whitelist array = all navigates rejected (conservative closure; the model outputs fail).
     const startOrigin = originOf(startUrl);
     const scopeOrigins = startOrigin ? [startOrigin] : [];
-    // 数据库取证通道：环境配了 db 对象才有（label 即 ref；提示词里逐个列出，模型可点名查哪个库）。
-    // 通道本身是只读的——只读守卫在 aiTask 侧先过一道，runSql 内部再兜一道。
+    // Database evidence channel: exists only when the environment has db objects (label is the ref; listed one by one in the prompt so the model can name which DB to query).
+    // The channel itself is read-only — the read-only guard passes first on the aiTask side, and runSql backs it up internally.
     const dbRefs = envCtx.dbs.map((d) => ({ label: d.label, dialect: d.dialect }));
 
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -203,8 +203,8 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
       const cachedState = loginKey ? getLoginStateFor(loginKey) : null;
       const context = await browser.newContext({
         ignoreHTTPSErrors: true,
-        // 两态视口：会话建时给了成对宽高=自定义；缺省 1280×800（与用例「默认最大化」headless
-        // 近似值一致）。aiTask 坐标系按视口归一化 0-1000 动态读 viewportSize，任意尺寸兼容。
+        // Two-state viewport: a width/height pair at session creation = custom; default 1280×800 (matching the case's "default maximize" headless
+        // approximation). The aiTask coordinate system reads viewportSize dynamically (viewport-normalized 0-1000), compatible with any size.
         viewport:
           session.windowWidth && session.windowHeight
             ? { width: session.windowWidth, height: session.windowHeight }
@@ -212,11 +212,11 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
         ...(cachedState ? { storageState: cachedState } : {}),
       });
       const page = await context.newPage();
-      // 实时画面 + 整段录像（key 稳定 = 会话回放能力；结束 close 收流，录制留供回放）
+      // Live view + full recording (a stable key = session replay capability; close collects the stream at the end, the recording kept for replay)
       live = registerLiveView(`exploration:${sessionId}`);
       live.setPage(page);
 
-      // findings 收集闭包：seenTitles 跨轮去重、trail 自上一条 finding 起累积、order 递增
+      // Findings collection closure: seenTitles dedupes across turns, the trail accumulates since the previous finding, order increments
       const seenTitles = new Set<string>();
       const trail: ExplorationStep[] = [];
       const onAction = (a: AiAction, ok: boolean): void => {
@@ -228,8 +228,8 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
         } else if (a.type === 'navigate') {
           target = a.url;
         } else if (a.type === 'sql') {
-          // 留完整 SQL（审计要看到"到底查了什么"），只归一空白并限长——
-          // 模型可以吐出超长 query，守卫虽会拒，但留痕不能因此膨胀。
+          // Keep the full SQL (audit must see "what was actually queried"); only normalize whitespace and cap length —
+          // the model can emit an overlong query; the guard may reject it, but the trail must not bloat because of that.
           target = a.query.replace(/\s+/g, ' ').slice(0, SQL_STEP_TARGET_MAX);
           detail = lastSqlDetail || undefined;
         } else if (a.type === 'repo') {
@@ -247,16 +247,16 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
           target,
           ok,
           ...(detail ? { detail } : {}),
-          // 原形字段（升格用例的机械映射需要；onAction 收到的动作 value 仍是模型输出的
-          // 占位符字面量/普通文本，绝不是替换后的真实凭据——替换发生在执行器内部）。
+          // Raw-shape fields (the promoted case's mechanical mapping needs them; the action value onAction receives is still the model's output —
+          // placeholder literals/plain text, never the substituted real credentials — substitution happens inside the executor).
           ...(a.type === 'fill' ? { value: a.value } : {}),
           ...(a.type === 'wait' ? { ms: a.ms } : {}),
           ...(a.type === 'press' ? { key: a.key } : {}),
         };
         trail.push(step);
         sessionSteps.push(step);
-        // 动作级增量落库（防抖）：跑动中详情页就能看到步骤逐条长出来，
-        // 而不是攒到下一条 finding 才整块跳一次（甚至全程不报 finding 时拖到收尾才出现）。
+        // Action-level incremental persistence (debounced): the detail page sees steps grow one by one while running,
+        // instead of jumping in one block only at the next finding (or dragging all the way to the finish when no findings are ever reported).
         scheduleTrailPersist();
       };
       const onFindings = async (raw: unknown[]): Promise<void> => {
@@ -274,7 +274,7 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
           let screenshotPath: string | null = null;
           try {
             await waitForPageSettled(page, { timeoutMs: 2500 });
-          } catch { /* settle 尽力而为：失败也截图 */ }
+          } catch { /* best-effort settle: screenshot even on failure */ }
           try {
             await page.screenshot({ path: screenshotDiskPath(sessionId, order) });
             screenshotPath = `/screenshots/${sessionId}/finding-${order}.png`;
@@ -295,20 +295,20 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
             });
             seenTitles.add(f.title);
           } catch (e) {
-            savedCount -= 1; // 落库失败回退配额，下轮可重报
+            savedCount -= 1; // roll back the quota on persistence failure so the next round can re-report
             logger.warn({ err: e, sessionId }, 'exploration finding insert failed');
           }
         }
-        // 只有落了 finding 才重置留痕：整批被去重丢弃时，动作序列要留给下一条 finding，
-        // 否则「自上一条 finding 起累积」的语义会被丢弃批次截断。
+        // Reset the trail only when a finding actually persisted: when a whole batch was dropped as duplicates, the action sequence must be kept for the next finding,
+        // otherwise the "accumulated since the previous finding" semantics would be truncated by the dropped batch.
         if (accepted.length > 0) trail.length = 0;
-        // 会话级留痕同步落库（跑动中就能在详情页看到进度，不等会话结束）
+        // Persist the session-level trail synchronously (progress is visible on the detail page while running, not waiting for the session to end)
         await flushTrailPersist();
       };
 
-      /** 数据库取证探针：模型给一条只读查询 → 对被测库执行 → 行摘要回灌下一轮。
-       *  只读守卫在 aiTask 侧先过一道（守卫不过绝不调到这里），runSql 内部再兜一道。
-       *  配额按会话计：查库是取证手段不是探索主路径，超额即拒。 */
+      /** Database evidence probe: the model supplies a read-only query → executed against the SUT DB → a row summary is fed back next turn.
+       *  The read-only guard passes first on the aiTask side (a guarded-out query never reaches here), and runSql backs it up internally.
+       *  Quota is per session: DB queries are an evidence channel, not the main exploration path — over quota is rejected. */
       const runSqlProbe = async (query: string, opts: { limit: number; db?: string }): Promise<SqlProbeResult> => {
         if (sqlProbeCount >= EXPLORATION_MAX_SQL_PROBES) {
           lastSqlDetail = '取证次数已用尽';
@@ -347,9 +347,9 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
         }
       };
 
-      /** 仓库读码通道（只在有代码提交范围的会话挂上）：read/grep/ls/diff 四 op 全只读，
-       *  沙箱限版本工作树内 + 会话级配额 + 输出封顶都收口在 createRepoReadChannel。
-       *  这里只包一层留痕摘要——「会话过程」每条 repo 动作要带一行结果摘要。 */
+      /** Repo code-reading channel (mounted only on sessions with a code commit scope): all four ops read/grep/ls/diff are read-only;
+       *  the sandbox confined to the version worktree + session quota + output caps all close inside createRepoReadChannel.
+       *  This only wraps a trail summary — each repo action in "session activity" carries a one-line result summary. */
       let lastRepoDetail = '';
       const repoReadChannel = createRepoReadChannel({
         repoDir: versionWorkspaceDir(session.versionId),
@@ -384,23 +384,23 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
         client,
         false,
         {
-          // 轮次软预算由 shouldAbort 先触发；+16 硬闸仅 runaway 兜底（随预算放大）
+          // The soft turn budget fires via shouldAbort first; the +16 hard gate only catches runaway (scales with the budget)
           maxTurns: maxTurns + 16,
           valueSub: cred ? makeCredentialValueSub(buildCredentialSource({ envCtx })) : undefined,
           resourceManifest: renderWebResourceManifest({ envCtx }),
           scopeOrigins,
-          // 有代码范围才追加 repo 读码协议（无范围会话的系统提示词与今天逐字节一致——零回归）
+          // The repo-reading protocol is appended only with a code scope (scopeless sessions' system prompt stays byte-identical to today — zero regression)
           systemPromptBase: codeScope ? EXPLORATION_SYSTEM_PROMPT_BASE + '\n\n' + renderRepoActionProtocol() : EXPLORATION_SYSTEM_PROMPT_BASE,
           runSqlProbe: dbRefs.length > 0 ? runSqlProbe : undefined,
           runRepoRead: codeScope ? runRepoRead : undefined,
-          // 破坏性动作闸：默认拒（会话建时显式授权才放行）。charter 说辞不算授权。
+          // Destructive-action gate: rejected by default (passes only with explicit authorization at session creation). Charter wording is not authorization.
           destructivePolicy: { allow: !!session.allowDestructive },
           onUsage: (r) => usage.add(r),
           onAction,
           onFindings,
           onExcluded,
           shouldAbort: async () => {
-            // 心跳 + 取消标志同一条 SQL（每轮一次）：看门狗据此判死僵死会话。
+            // Heartbeat + cancel flag in the same SQL (once per turn): the watchdog declares zombie sessions dead by it.
             if (await heartbeat(sessionId)) {
               userCancelled = true;
               return true;
@@ -414,8 +414,8 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
           },
         },
       );
-      // 先落留痕再置终态：详情页一看到终态就停轮询（前端只在 running 时轮询），
-      // 顺序反了则「最后一条 finding 之后的尾段」永远拉不到，得手动刷新才看得到。
+      // Persist the trail before setting the final state: the detail page stops polling the moment it sees a final state (the frontend polls only while running);
+      // in the wrong order, "the tail after the last finding" would never be fetched — only a manual refresh would show it.
       await flushTrailPersist();
       await finishSession(sessionId, {
         status: userCancelled ? 'cancelled' : 'completed',
@@ -431,9 +431,9 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
         turnsUsed: turnCount,
         usage: usage.stat,
       }).catch(() => undefined);
-      // A3 独立评审（fire-and-forget：评审不改终态，失败也不影响会话）。
+      // A3 independent review (fire-and-forget: the review doesn't change the final state, and its failure doesn't affect the session).
       void judgeExplorationSession(sessionId).catch(() => undefined);
-      // 暖登录态缓存回馈 verify_case/perform_login（fire-and-forget，失败不影响会话终态）
+      // Warm login-state cache fed back to verify_case/perform_login (fire-and-forget; failure doesn't affect the session's final state)
       if (loginKey) void context.storageState().then((s) => saveLoginStateFor(loginKey, s)).catch(() => {});
     } finally {
       live?.close();
@@ -442,10 +442,10 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logger.warn({ err: e, sessionId, userCancelled, budgetExceeded }, 'exploration session failed');
-    // 用户取消/预算耗尽不算失败（ findings 已捕获的都保留）；其余真异常 → failed
-    // 预算耗尽走的是 shouldAbort 抛出的中断（runAiTask 抛错而非正常返回），
-    // 所以总结只能在这里补——否则会话以「completed 但无总结」收尾，看不出为何停下。
-    // 同上：置终态前先落留痕，终态那一刻库里的步骤序列必须是全的。
+    // User cancel/budget exhaustion is not a failure (findings already captured are all kept); other real exceptions → failed
+    // Budget exhaustion arrives as the interruption thrown by shouldAbort (runAiTask throws rather than returning normally),
+    // so the summary can only be filled in here — otherwise the session ends as "completed with no summary", hiding why it stopped.
+    // Same as above: persist the trail before setting the final state; the step sequence in the DB must be complete at that moment.
     await flushTrailPersist();
     await finishSession(sessionId, {
       status: userCancelled ? 'cancelled' : budgetExceeded ? 'completed' : 'failed',
@@ -458,18 +458,18 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
     }).catch(() => undefined);
     void judgeExplorationSession(sessionId).catch(() => undefined);
   } finally {
-    // 兜底落库：正常/失败路径都已在置终态前 flush 过，这里只防意外漏写。
+    // Fallback persistence: both the normal and failure paths already flushed before setting the final state; this only guards an accidental missed write.
     await flushTrailPersist();
     if (envCtx) await envCtx.close().catch(() => {});
   }
 }
 
-/** 删除会话时清理证据截图目录（reports.unlinkReportScreenshots 同约定）。 */
+/** Cleans up the evidence screenshot directory when a session is deleted (same contract as reports.unlinkReportScreenshots). */
 export async function removeExplorationScreenshots(sessionId: string): Promise<void> {
   await rm(join(process.cwd(), 'screenshots', sessionId), { recursive: true, force: true }).catch(() => undefined);
 }
 
-// —— 间接依赖（测试可 mock 的缝）：loginStateCache / llmSettings 以函数引用收口 ——
+// — Indirect dependencies (the seams tests can mock): loginStateCache / llmSettings closed over as function references —
 function loginCacheKey(envId: string, user: string | undefined): string {
   return loginStateKey(envId, user);
 }

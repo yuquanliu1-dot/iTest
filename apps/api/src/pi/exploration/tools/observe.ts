@@ -1,10 +1,14 @@
 /**
- * 观察类工具（只读）：observe（截图+元素清单）、screenshot（放大取证）、read_text（文本取证）。
+ * Observation tools (read-only): observe (screenshot + element list), screenshot (zoomed
+ * forensics), read_text (text forensics).
  *
- * 铁律（pi 工具层通用，交互工具同守）：
- * - 工具永不 throw——抛异常会打断 pi agent 循环；失败一律 isError:true + 可行动中文说明。
- * - 全部 executionMode:'sequential'——证据帧竞态防线（观察/动作交错并行会让「截图=决策那一刻」失效）。
- * - vision=false（渠道剥图降级）时不附图，文本里显式说明——绝不静默剥图。
+ * Iron rules (shared across the pi tool layer; interaction tools follow them too):
+ * - Tools never throw — a thrown exception breaks the pi agent loop; failures are always
+ *   isError:true + an actionable message.
+ * - All use executionMode:'sequential' — the evidence-frame race defense (interleaved parallel
+ *   observe/action would invalidate "screenshot = the moment of decision").
+ * - When vision=false (channel strips images, degraded mode) no image is attached and the text
+ *   says so explicitly — never silently strip images.
  */
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
@@ -16,32 +20,32 @@ import { brittleSelectorReason } from '../../../execute/gates.js';
 import { toolErr, toolOk, toolOkImage } from './result.js';
 import { logger } from '../../../logger.js';
 
-/** 工具集依赖（runner 装配时注入；工厂形态便于测试替换 page）。 */
+/** Tool-set dependencies (injected by the runner at assembly; the factory shape makes page swappable in tests). */
 export interface ToolDeps {
   page: Page;
-  /** 视觉探针结果：false = 渠道剥图，观察类工具不附图（纯文本元素清单模式）。 */
+  /** Vision probe result: false = channel strips images; observation tools attach no image (plain-text element-list mode). */
   vision: boolean;
-  /** 探索范围白名单（起点 origin 唯一；空数组 = navigate 全拒）。 */
+  /** Exploration scope whitelist (start origin only; empty array = every navigate rejected). */
   scopeOrigins: string[];
-  /** 凭据占位符替换（fill 用）；缺省时占位符原样填入。 */
+  /** Credential placeholder substitution (used by fill); when absent the placeholder is filled as-is. */
   valueSub?: (value: string) => string;
-  /** 终止性错误回调（fill 凭据缺失 EnvMissing/SecretMissing → runner 终止会话）。 */
+  /** Fatal error callback (fill with missing credentials EnvMissing/SecretMissing → runner terminates the session). */
   onFatal?: (err: Error) => void;
-  /** 破坏性操作显式授权位（false/缺省 = click 判中即拒；章程说辞不算授权）。 */
+  /** Destructive-operation explicit authorization bit (false/absent = click hits rejected outright; charter wording does not count). */
   allowDestructive?: boolean;
-  /** 错误信号增量（observe 回灌：自上次 drain 起 console/pageerror/HTTP 4xx-5xx）。
-   *  同时给条数——留痕摘要要写「本轮新增 N 条错误信号」，这是「观察」这一步最有价值的结论。 */
+  /** Error-signal delta (fed back by observe: console/pageerror/HTTP 4xx-5xx since last drain).
+   *  Also gives the count — the trail summary states "N new error signals this round", the observe step's most valuable conclusion. */
   errorSignals?: () => { text: string; count: number };
-  /** 覆盖账本摘要（observe 回灌：已覆盖路径/交互，别重复）。 */
+  /** Coverage ledger digest (fed back by observe: covered paths/interactions — do not repeat). */
   coverageSummary?: () => string;
 }
 
-/** 元素清单 → 模型文本（与 legacy aiTask 的 userMessage 同口径：box 与截图对齐）。 */
+/** Element list → model text (same semantics as legacy aiTask's userMessage: box aligned with the screenshot). */
 function renderElements(elements: ElementInfo[]): string {
   return `可交互元素（box=[x1,y1,x2,y2] 为视口归一化 0-1000 坐标框，与截图对齐）：${JSON.stringify(elements)}`;
 }
 
-/** observe：等渲染静默 → 视口截图 + 元素清单（image + text 双 content）。 */
+/** observe: wait for render settle → viewport screenshot + element list (image + text dual content). */
 export function createObserveTool(deps: ToolDeps) {
   return defineTool({
     name: 'observe',
@@ -54,7 +58,7 @@ export function createObserveTool(deps: ToolDeps) {
       try {
         await waitForPageSettled(deps.page, { timeoutMs: 2500, settleMs: 200 });
       } catch {
-        // settle 尽力而为：超时按当前帧继续
+        // settle is best-effort: on timeout continue with the current frame
       }
       const vp = deps.page.viewportSize() ?? { width: 1280, height: 800 };
       let elements: ElementInfo[] = [];
@@ -63,12 +67,12 @@ export function createObserveTool(deps: ToolDeps) {
       } catch (e) {
         logger.warn({ err: e }, 'exploration observe dumpElements failed');
       }
-      // 回灌块：覆盖账本（已覆盖别重复）+ 错误信号增量（console/pageerror/HTTP 4xx-5xx）。
-      // 错误信号放最前——「页面报错了」比「页面长什么样」优先级更高。
+      // Feed-back blocks: coverage ledger (covered paths not repeated) + error-signal delta (console/pageerror/HTTP 4xx-5xx).
+      // Error signals go first — "the page errored" outranks "what the page looks like".
       const signals = deps.errorSignals?.() ?? { text: '', count: 0 };
       const blocks = [signals.text, deps.coverageSummary?.() ?? ''].filter(Boolean);
       const text = [...blocks, `当前 URL：${deps.page.url()}`, `视口：${vp.width}x${vp.height}`, renderElements(elements)].join('\n');
-      // 结果摘要（留痕正文）：这一步「看到了什么」——URL、视口、可交互元素数、本轮新错误信号数。
+      // Result summary (trail body): what this step "saw" — URL, viewport, interactive element count, new error-signal count this round.
       const summary = [
         `URL ${deps.page.url()}`,
         `视口 ${vp.width}x${vp.height}`,
@@ -81,8 +85,8 @@ export function createObserveTool(deps: ToolDeps) {
           `${text}\n（当前渠道无视觉通道：无截图附图，请依据元素清单的 selector/tag/text/value 操作）`,
         );
       }
-      // 主截图 JPEG q85：坐标指认不需要无损精度（与 legacy aiTask 同取舍）
-      // 15s：截图超时静默退化成「本轮无图」，宁长勿短（prod228 实证 5s 偶发超时）。
+      // Main screenshot JPEG q85: coordinate pointing needs no lossless precision (same tradeoff as legacy aiTask).
+      // 15s: a screenshot timeout silently degrades to "no image this round"; longer beats shorter (prod228 saw occasional 5s timeouts).
       const buf = await deps.page.screenshot({ timeout: 15_000, type: 'jpeg', quality: 85 }).catch(() => null);
       if (!buf) {
         return toolOk(`${summary}（本轮截图失败）`, `${text}\n（本轮截图失败，请依据元素清单操作）`);
@@ -92,7 +96,7 @@ export function createObserveTool(deps: ToolDeps) {
   });
 }
 
-/** screenshot：selector 指定元素 → 4 倍放大白底截图（验证码/小字辨认）；无 selector → 全页图。 */
+/** screenshot: selector targets an element → 4x zoomed white-background screenshot (captcha/small text); without selector → full-page image. */
 export function createScreenshotTool(deps: ToolDeps) {
   return defineTool({
     name: 'screenshot',
@@ -173,7 +177,7 @@ export function createScreenshotTool(deps: ToolDeps) {
   });
 }
 
-/** read_text：元素文本 / aria-live 区域文本（toast 一手证据，截图读不清不成为漏报理由）。 */
+/** read_text: element text / aria-live region text (first-hand toast evidence; illegible screenshots are no excuse for missed reports). */
 export function createReadTextTool(deps: ToolDeps) {
   return defineTool({
     name: 'read_text',
@@ -206,7 +210,7 @@ export function createReadTextTool(deps: ToolDeps) {
           );
         }
       }
-      // 无 selector：toast/提示一手文本 + 页面主体文本兜底（都封顶，反馈不能无限膨胀）
+      // Without selector: first-hand toast/message text + page body text as fallback (both capped; feedback must not bloat unboundedly)
       const msgs = await captureLiveRegionMessages(deps.page).catch(() => [] as string[]);
       const body = await deps.page
         .evaluate(() => (document.body?.innerText ?? '').replace(/\n{2,}/g, '\n').trim())

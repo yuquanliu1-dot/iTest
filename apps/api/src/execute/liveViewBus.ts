@@ -1,21 +1,21 @@
 /**
- * live view 跨副本桥（Redis）：多 api 副本 + nginx 轮询下，执行 job 落在某一副本，
- * 帧源/录制/心跳都只在该副本进程内存；其余副本的 /live 请求会 404（前端据此隐藏画面卡）。
- * 本模块把帧流（PUBLISH）、录制（LIST + TTL）、源活跃心跳（SET PX）搬上 Redis：
- * - 源副本：fanout/record/tick/teardown 顺手发布（全部 fire-and-forget，Redis 抖动不阻塞帧泵）；
- * - 其他副本：handleLive* 在本地无源时按心跳/录制键回退成「镜像」（subscribeMirror 收帧转发）。
- * 无 REDIS_URL（本地 dev / vitest）时全部 no-op，行为与单进程版完全一致。
+ * live view cross-replica bridge (Redis): with multiple api replicas + nginx round-robin, the execution job lands on one replica,
+ * and the frame source/recording/heartbeat live only in that replica's process memory; other replicas' /live requests would 404 (the frontend hides the picture card accordingly).
+ * This module lifts the frame stream (PUBLISH), recordings (LIST + TTL), and source-alive heartbeats (SET PX) onto Redis:
+ * - Source replica: fanout/record/tick/teardown publish in passing (all fire-and-forget; Redis jitter never blocks the frame pump);
+ * - Other replicas: handleLive* falls back to a "mirror" keyed on the heartbeat/recording keys when there's no local source (subscribeMirror receives frames and forwards).
+ * Without REDIS_URL (local dev / vitest) everything is no-op, behavior identical to the single-process version.
  *
- * 信封（单帧单消息二进制）：[type:1B][ts:8B float64BE][jpeg bytes]；0x01=帧、0x02=结束。
- * 与 planRunBus 不同：镜像订阅只在「本地无源」时建立，本地路径不经 Redis 回环，无需 origin 去重。
+ * Envelope (one frame per message, binary): [type:1B][ts:8B float64BE][jpeg bytes]; 0x01=frame, 0x02=end.
+ * Unlike planRunBus: the mirror subscription is established only when there's no local source; the local path never loops through Redis, so no origin dedup is needed.
  */
 import IORedis, { type Redis } from 'ioredis';
 
-/** 每份录制帧数上限（与 liveView 的录制有界一致；镜上回放最多看到这么多帧）。 */
+/** Per-recording frame cap (matches liveView's bounded recording; a bridge replay shows at most this many frames). */
 export const MAX_REC_FRAMES = 1200;
-/** 录制保留时长（ms）：teardown 后自此刻起过期；appendRecording 滚动续期（执行器崩溃也能自清）。 */
+/** Recording retention (ms): expires from the teardown moment; appendRecording rolls the TTL forward (self-cleans even if the executor crashes). */
 export const REC_TTL_MS = 30 * 60_000;
-/** 源心跳 TTL（ms）：帧泵死亡 10s 内新镜像连接即 404。 */
+/** Source heartbeat TTL (ms): new mirror connections get a 404 within 10s of the frame pump dying. */
 const HEARTBEAT_TTL_MS = 10_000;
 
 export const EV_FRAME = 0x01;
@@ -48,16 +48,16 @@ export function decodeEvent(buf: Buffer): LiveEvent | null {
 
 let _pub: Redis | null = null;
 let _sub: Redis | null = null;
-/** key → 本副本上的镜像连接回调集（share 一条 SUBSCRIBE 连接，末个离开才退订频道）。 */
+/** key → set of mirror-connection callbacks on this replica (shares one SUBSCRIBE connection; the channel is unsubscribed only when the last one leaves). */
 const _handlers = new Map<string, Set<{ onFrame: (ts: number, jpeg: Buffer) => void; onEnd: () => void }>>();
 const _subscribed = new Set<string>();
 
-/** 桥是否启用（无 REDIS_URL 时 liveView 的 fallback 全部走同步 no-op 路径）。 */
+/** Whether the bridge is enabled (without REDIS_URL, liveView's fallbacks all take the synchronous no-op path). */
 export function redisReady(): boolean {
   return !!process.env.REDIS_URL;
 }
 
-/** 发布/读共用一条普通连接（订阅模式连接不能跑 LRANGE 等命令）。 */
+/** Publish/read share one ordinary connection (a subscription-mode connection can't run commands like LRANGE). */
 function getPub(): Redis | null {
   if (!redisReady()) return null;
   if (!_pub) {
@@ -72,7 +72,7 @@ function getSub(): Redis | null {
   if (!_sub) {
     _sub = new IORedis(process.env.REDIS_URL!, { maxRetriesPerRequest: null });
     _sub.on('error', () => undefined);
-    // 帧是二进制信封，必须走 messageBuffer（message 事件会按 utf8 解码破坏 jpeg 字节）
+    // Frames are binary envelopes; must use messageBuffer (the message event decodes as utf8, corrupting the jpeg bytes)
     _sub.on('messageBuffer', (chan: Buffer, msg: Buffer) => {
       const channel = chan.toString();
       if (!channel.startsWith(CH_PREFIX)) return;
@@ -92,7 +92,7 @@ function getSub(): Redis | null {
   return _sub;
 }
 
-// ── 源侧（执行副本发布，全部 fire-and-forget）─────────────────────────────────
+// ── Source side (the executing replica publishes; all fire-and-forget) ──────
 
 export function heartbeatSet(key: string): void {
   void getPub()?.set(`${ACTIVE_PREFIX}${key}`, '1', 'PX', HEARTBEAT_TTL_MS).catch(() => undefined);
@@ -110,7 +110,7 @@ export function publishEnd(key: string): void {
   void getPub()?.publish(`${CH_PREFIX}${key}`, encodeEvent(EV_END, Date.now())).catch(() => undefined);
 }
 
-/** 录制追加（有界 + 滚动 TTL：末帧后 30min 自清）。 */
+/** Recording append (bounded + rolling TTL: self-cleans 30min after the last frame). */
 export function appendRecording(key: string, ts: number, jpeg: Buffer): void {
   const r = getPub();
   if (!r) return;
@@ -124,22 +124,22 @@ export function appendRecording(key: string, ts: number, jpeg: Buffer): void {
     .catch(() => undefined);
 }
 
-/** teardown：录制 TTL 从结束时刻起算（覆盖运行中的滚动续期）。 */
+/** teardown: the recording TTL starts from the finish moment (overriding the rolling renewal while running). */
 export function expireRecording(key: string): void {
   void getPub()?.pexpire(`${REC_PREFIX}${key}`, REC_TTL_MS).catch(() => undefined);
 }
 
-/** 同 key 重注册：清掉上一轮录制，避免新旧混流。 */
+/** Same-key re-registration: clears the previous run's recording so old and new don't mix. */
 export function clearRecording(key: string): void {
   void getPub()?.del(`${REC_PREFIX}${key}`).catch(() => undefined);
 }
 
-// ── 观看者回写（跨副本降档治理）───────────────────────────────────────────────
+// ── Viewer feedback (cross-replica downgrade governance) ────────────────────
 
-/** 观看者计数 TTL：镜像流断开方 DECR；崩溃残留靠 TTL 自清（期间源多出几档帧率，无害）。 */
+/** Viewer-count TTL: the mirror stream's disconnect side DECRs; crash residue self-cleans via TTL (the source briefly runs a tier or two higher meanwhile — harmless). */
 export const VIEWERS_TTL_MS = 15_000;
 
-/** 镜像流建立：计数 +1 并起 TTL。 */
+/** Mirror stream established: count +1 and start the TTL. */
 export function viewersIncr(key: string): void {
   const r = getPub();
   if (!r) return;
@@ -147,17 +147,17 @@ export function viewersIncr(key: string): void {
   void r.pipeline().incr(vk).pexpire(vk, VIEWERS_TTL_MS).exec().catch(() => undefined);
 }
 
-/** 镜像流断开：计数 -1（崩溃残留可能已过期 → 可为负，读取端钳 0）。 */
+/** Mirror stream disconnected: count -1 (crash residue may have expired → can go negative; readers clamp to 0). */
 export function viewersDecr(key: string): void {
   void getPub()?.decr(`${VIEWERS_PREFIX}${key}`).catch(() => undefined);
 }
 
-/** 镜像流保活：长静默（无帧转发）时续 TTL，防计数先行过期、源端误判无人观看。 */
+/** Mirror stream keepalive: renews the TTL during long silences (no frame forwarding), preventing the count from expiring early and the source misjudging nobody-watching. */
 export function viewersTouch(key: string): void {
   void getPub()?.pexpire(`${VIEWERS_PREFIX}${key}`, VIEWERS_TTL_MS).catch(() => undefined);
 }
 
-/** 源侧读取（tick 每拍一次）：无 Redis/无键/错误 → 0。 */
+/** Source-side read (once per tick): no Redis / no key / error → 0. */
 export async function viewersGet(key: string): Promise<number> {
   const r = getPub();
   if (!r) return 0;
@@ -169,7 +169,7 @@ export async function viewersGet(key: string): Promise<number> {
   }
 }
 
-// ── 镜像侧（非执行副本读取/订阅）─────────────────────────────────────────────
+// ── Mirror side (non-executing replicas read/subscribe) ─────────────────────
 
 export async function remoteSourceAlive(key: string): Promise<boolean> {
   const r = getPub();
@@ -188,7 +188,7 @@ export interface RemoteRecordingInfo {
   ttlMs: number;
 }
 
-/** 远端录制可用性（不拉全量：LLEN + 首末帧 + PTTL）。无录制/无 Redis → null。 */
+/** Remote recording availability (no full pull: LLEN + first/last frame + PTTL). No recording / no Redis → null. */
 export async function remoteRecordingInfo(key: string): Promise<RemoteRecordingInfo | null> {
   const r = getPub();
   if (!r) return null;
@@ -235,7 +235,7 @@ export interface MirrorHandlers {
   onEnd: () => void;
 }
 
-/** 镜像订阅：本地无源的副本借 Redis 收帧转发给本机 HTTP 订阅者。返回退订函数（幂等）。 */
+/** Mirror subscription: replicas without a local source receive frames via Redis and forward them to local HTTP subscribers. Returns an unsubscribe function (idempotent). */
 export function subscribeMirror(key: string, h: MirrorHandlers): () => void {
   let set = _handlers.get(key);
   const first = !set || set.size === 0;

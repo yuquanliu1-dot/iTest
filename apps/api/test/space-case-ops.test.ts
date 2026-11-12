@@ -6,8 +6,8 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 import type { ToolExecutor } from '../src/pi/tools.js';
 
-// 注意:case-ops-tools 链上静态引入 db/client(DATABASE_URL 在 beforeAll 才指向容器),
-// 必须在测试体内动态 import(与 space-tools-cases.test.ts 同模式),否则查询打到默认本地库。
+// Note: the case-ops-tools chain statically imports db/client (DATABASE_URL only points at the container inside beforeAll),
+// so it must be dynamically imported inside the test body (same pattern as space-tools-cases.test.ts), otherwise queries hit the default local database.
 async function buildStageCaseOpTool(ctx: SpaceToolsContext): Promise<ToolExecutor> {
   const { buildCaseOpsTools } = await import('../src/pi/space/tools/case-ops-tools.js');
   return buildCaseOpsTools(ctx)[0]!;
@@ -21,7 +21,7 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // ai_stage_case_ops 已收录进 SCHEMA_SQL；保留幂等自建兜底（与 src/db/schema.ts 对齐）
+  // ai_stage_case_ops is already included in SCHEMA_SQL; keep the idempotent self-create fallback (aligned with src/db/schema.ts)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ai_stage_case_ops (
       thread_id text NOT NULL,
@@ -81,17 +81,17 @@ describe('stage_case_op 工具', () => {
     const tool = await buildStageCaseOpTool(ctx);
     const { applyCaseOp } = await import('../src/pi/space/tools/case-ops-tools.js');
 
-    // 暂存绑定
+    // Stage the binding
     const staged = await tool.execute({ localId: randomUUID(), action: 'update_case', caseId, patch: { datasetId: ds.id } });
     expect(staged.ok).toBe(true);
     expect((staged as { ok: true; data: string }).data).toContain('已暂存');
 
-    // 落库 → dataset_id 已绑定
+    // Persist → dataset_id bound
     await applyCaseOp('update_case', JSON.parse(JSON.stringify({ action: 'update_case', caseId, patch: { datasetId: ds.id } })), ctx);
     const bound = (await pool.query(`SELECT dataset_id FROM test_cases WHERE id=$1`, [caseId])).rows[0]!;
     expect(bound.dataset_id).toBe(ds.id);
 
-    // 解绑:patch.datasetId = null → NULL
+    // Unbind: patch.datasetId = null → NULL
     const staged2 = await tool.execute({ localId: randomUUID(), action: 'update_case', caseId, patch: { datasetId: null } });
     expect(staged2.ok).toBe(true);
     await applyCaseOp('update_case', JSON.parse(JSON.stringify({ action: 'update_case', caseId, patch: { datasetId: null } })), ctx);
@@ -134,7 +134,7 @@ describe('stage_case_op 工具', () => {
     const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await buildStageCaseOpTool(ctx);
 
-    // 引用绑定数据集列 → 体检通过
+    // Reference a bound dataset column → health check passes
     const good = await tool.execute({
       localId: randomUUID(), action: 'insert_step', caseId, instruction: '填用户名',
       compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#u' }], value: '{{username}}' }],
@@ -142,7 +142,7 @@ describe('stage_case_op 工具', () => {
     expect(good.ok).toBe(true);
     expect((good as { ok: true; data: string }).data).toContain('变量体检:通过');
 
-    // 引用未定义变量 → 体检点名 ghost
+    // Reference an undefined variable → health check names ghost
     const bad = await tool.execute({
       localId: randomUUID(), action: 'insert_step', caseId, instruction: '填幽灵',
       compiled: [{ kind: 'fill', locator: [{ strategy: 'css', value: '#g' }], value: '{{ghost}}' }],
@@ -153,7 +153,7 @@ describe('stage_case_op 工具', () => {
     expect(badData).not.toContain('变量体检:通过');
     expect(badData).toContain('ghost');
 
-    // update_step 同样附体检
+    // update_step carries the health check too
     const stepId = (await pool.query(`SELECT id FROM test_steps WHERE case_id=$1 ORDER BY "order" LIMIT 1`, [caseId])).rows[0]!.id as string;
     const up = await tool.execute({
       localId: randomUUID(), action: 'update_step', caseId, stepId,

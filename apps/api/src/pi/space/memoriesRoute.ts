@@ -1,11 +1,11 @@
 /**
- * assistant_memories 管理端（设置页「助手记忆」）：GET 分页列表 + DELETE 软删。
- * 挂载于 /api/assistant/memories，router.ts 处 requireManager 保护。
- * 可见性（guidesRoute 同口径）：global 实例级共享；product_line 归属组织，
- * 仅该组织子树用户可见（visibleProductLineIds），跨组织一律不返回。
+ * assistant_memories admin side (settings page "assistant memories"): GET paginated list + DELETE soft delete.
+ * Mounted at /api/assistant/memories, protected by requireManager at router.ts.
+ * Visibility (same criteria as guidesRoute): global instance-level shared; product_line org-owned,
+ * visible only to that org's subtree users (visibleProductLineIds), never returned across orgs.
  *
- * 可见性在 SQL 里过滤（而非查完再 JS filter）：分页后 total 必须与列表同口径，
- * 且「先 limit 后过滤」会把本组织的旧行静默挤出窗口（R1 终审教训）。
+ * Visibility is filtered in SQL (not JS-filtered after fetching): after pagination, total must use the same criteria as the list,
+ * and "limit first, filter later" would silently push this org's old rows out of the window (R1 final-review lesson).
  */
 import { Router } from 'express';
 import { and, count, desc, eq, inArray, or, type SQL } from 'drizzle-orm';
@@ -28,8 +28,8 @@ memoriesRoute.get('/', async (req, res) => {
   if (q.scope === 'global') conds.push(eq(assistantMemories.scope, 'global'));
   else if (q.scope === 'product_line') conds.push(eq(assistantMemories.scope, 'product_line'));
 
-  // 可见性下推 SQL：global 全员可见 + 本组织子树下的线。visible 为空时只剩 global
-  // （inArray 不吃空数组，故分两支而不是 or(..., inArray(..., []))）。
+  // Visibility pushed down into SQL: global visible to everyone + lines under this org's subtree. When visible is empty only global remains
+  // (inArray rejects empty arrays, hence two branches instead of or(..., inArray(..., []))).
   const visible = await visibleProductLineIds(user);
   conds.push(
     visible.length > 0
@@ -59,7 +59,7 @@ memoriesRoute.get('/', async (req, res) => {
       .from(assistantMemories)
       .leftJoin(productLines, eq(assistantMemories.productLineId, productLines.id))
       .where(where)
-      // updatedAt 非唯一 → 追加 id 作 tiebreaker，否则跨页会重复/漏行
+      // updatedAt is not unique → append id as tiebreaker, otherwise pages overlap/skip rows
       .orderBy(desc(assistantMemories.updatedAt), desc(assistantMemories.id))
       .limit(limit)
       .offset((page - 1) * limit),
@@ -75,7 +75,7 @@ memoriesRoute.delete('/:id', async (req, res) => {
   if (existing.scope === 'product_line' && existing.productLineId) {
     await assertProductLineVisible(existing.productLineId, user);
   }
-  // 软删保审计（R3/R5 消费轨迹）；注入与工具只取 active → 删除即从助手侧消失
+  // Soft delete to preserve audit (R3/R5 consumption trails); injection and tools only take active → deleted means gone from the assistant's side
   await db.update(assistantMemories)
     .set({ status: 'deleted', updatedAt: new Date() })
     .where(eq(assistantMemories.id, req.params.id));

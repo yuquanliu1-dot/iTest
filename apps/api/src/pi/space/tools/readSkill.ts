@@ -1,12 +1,12 @@
 /**
- * Skills 按需阅读（全局共享库 .data/skills 目录树）：
- *  - readSkillDir：SKILL.md 正文 + **递归文件树清单**（路径走 skillPaths 守卫）
- *  - readSkillFile：读树里任意单个文件（模型无内置 read 工具，这是它读 references/agents 的唯一途径）
- *  - buildReadSkillTool：read_skill 工具（补 catalog-only 缺的「取正文」能力）
- *  - buildSkillsSectionContent：skills 段自渲染 XML（identity 的 forceSystemPrompt 之前必须就位）
+ * Skills on-demand reading (global shared library .data/skills directory tree):
+ *  - readSkillDir: SKILL.md body + **recursive file-tree listing** (paths go through the skillPaths guard)
+ *  - readSkillFile: read any single file in the tree (the model has no built-in read tool; this is its only way to open references/agents files)
+ *  - buildReadSkillTool: the read_skill tool (fills the "fetch body" gap the catalog-only list lacks)
+ *  - buildSkillsSectionContent: renders the skills section itself as XML (must be in place before identity's forceSystemPrompt)
  *
- * 为什么必须有 file 参数：session.ts 是 noTools:'builtin'，没有内置 read/bash。
- * SKILL.md 正文里会引用 references/ agents/ assets/ 下的文件，模型只能靠本工具打开它们。
+ * Why the file parameter must exist: session.ts is noTools:'builtin', so there is no built-in read/bash.
+ * The SKILL.md body references files under references/ agents/ assets/, and the model can only open them through this tool.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,7 +17,7 @@ import { resolveInSkill } from '../skillPaths.js';
 
 const MAX_BODY_CHARS = 60_000;
 
-/** 脚本 runtime 推断：优先 shebang（#!/usr/bin/env python3 等），回退扩展名，缺省 node。 */
+/** Script runtime inference: prefer the shebang (#!/usr/bin/env python3 etc.), fall back to the extension, default node. */
 export function runtimeOfFirstLine(filename: string): string {
   if (/\.py/i.test(filename)) return 'python3';
   if (/\.sh/i.test(filename)) return 'bash';
@@ -25,8 +25,8 @@ export function runtimeOfFirstLine(filename: string): string {
   return 'node';
 }
 
-/** 去 SKILL.md 前置 YAML 前言（import 时写入的 name/description）；无/残缺直接原样返回。
- *  读出的 body 不含前言——catalog 已有 name/description，把 YAML 塞给模型是噪音。 */
+/** Strips the SKILL.md leading YAML preface (the name/description written at import time); missing/malformed → returned as-is.
+ *  The extracted body excludes the preface — the catalog already has name/description; feeding the YAML to the model is noise. */
 function stripFrontmatter(content: string): string {
   if (!content.startsWith('---')) return content;
   const end = content.indexOf('\n---');
@@ -40,8 +40,8 @@ export interface ReadSkillHit {
   truncated: boolean;
 }
 
-/** 读 skill 目录：SKILL.md 正文（剥 frontmatter，60k 上限）+ 递归文件树清单。
- *  skillName 走 resolveInSkill（逐段校验 + realpath），软链/隐藏文件/越界一律 null。 */
+/** Reads a skill directory: the SKILL.md body (frontmatter stripped, 60k cap) + a recursive file-tree listing.
+ *  skillName goes through resolveInSkill (per-segment validation + realpath); symlinks/hidden files/out-of-bounds all yield null. */
 export function readSkillDir(root: string, skillName: string): ReadSkillHit | null {
   const skillDir = resolveInSkill(root, skillName);
   if (!skillDir) return null;
@@ -52,7 +52,7 @@ export function readSkillDir(root: string, skillName: string): ReadSkillHit | nu
   return { body, files, truncated: files.length >= 200 };
 }
 
-/** 单文件读取（模型要读 SKILL.md 里提到的 references/ agents/ assets/ 时用）；越界/不存在 → null。 */
+/** Single-file read (for when the model needs to open references/ agents/ assets/ files mentioned in SKILL.md); out-of-bounds/nonexistent → null. */
 export function readSkillFile(root: string, skillName: string, rel: string): string | null {
   const skillDir = resolveInSkill(root, skillName);
   if (!skillDir) return null;
@@ -72,7 +72,7 @@ export function buildReadSkillTool(): ToolExecutor {
     }),
     execute: async (input) => {
       const { skillName, file } = input as { skillName: string; file?: string };
-      // 停用/不存在的技能一律不可达——否则 enabled 只是个 UI 装饰。
+      // Disabled/nonexistent skills are unreachable outright — otherwise enabled would be mere UI decoration.
       const gate = await assertSkillEnabled(skillName);
       if (gate) return { ok: false, error: gate };
       if (file) {
@@ -87,8 +87,8 @@ export function buildReadSkillTool(): ToolExecutor {
   };
 }
 
-/** skills 段自渲染（agentskills.io 风格 XML）：name/description/location + 使用方法。
- *  只列 catalog 与一句使用说明，不含正文——正文由模型需要时调 read_skill 取（pi 原语义）。 */
+/** Renders the skills section itself (agentskills.io-style XML): name/description/location + usage.
+ *  Only the catalog and one usage line, not the bodies — bodies are fetched by read_skill when the model needs them (pi's original semantics). */
 export function buildSkillsSectionContent(
   skills: Array<{ name: string; description: string; location: string }>,
 ): string {

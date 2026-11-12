@@ -1,15 +1,16 @@
 /**
- * 探索式测试会话 runner（pi 链路）：pi agent 原生工具调用循环 + Playwright 自定义工具集——
- * 与「Claude Code + chrome-devtools MCP」同构（原生工具调用 + 视觉工具结果 + 可中断）。
+ * Exploratory testing session runner (pi chain): pi agent's native tool-calling loop + a Playwright custom tool set —
+ * isomorphic to "Claude Code + chrome-devtools MCP" (native tool calls + visual tool results + interruptible).
  *
- * 编排沿用 explorationShared 的共享底座（认领/心跳/收尾与 legacy 同一份语义：
- * 认领幂等、先落留痕再置终态、1s 防抖），差异在执行核心：
- * - 能力探针开跑前做：渠道不支持工具调用 → 立刻 failed + 可行动报错（不空跑轮次预算）；
- *   视觉探针读不出唯一码 → 降级纯文本模式（工具不附图），会话照常跑。
- * - 心跳/取消/预算挂在 message_end + tool_execution_end（pi 一轮可链多个工具，
- *   只挂 message_end 会饿死 5min 看门狗）；命中即 session.abort()。
- * - 动作留痕：tool_execution_start 登记（入参可见）、end 回填 ok——
- *   tool_execution_end 事件不带 args（pi-agent-core AgentEvent 联合），必须在 start 登记。
+ * Orchestration reuses the shared foundation in explorationShared (claim/heartbeat/wrap-up share the same semantics as
+ * legacy: idempotent claim, trail persisted before the final state is set, 1s debounce); the difference is the execution core:
+ * - Capability probes run before the start: a channel without tool-call support → immediate failed + actionable error
+ *   (no burning the turn budget); a vision probe that cannot read the unique code → degrade to plain-text mode (tools
+ *   attach no images), session runs as usual.
+ * - Heartbeat/cancel/budget hang off message_end + tool_execution_end (one pi round can chain multiple tools;
+ *   hanging only off message_end would starve the 5min watchdog); a hit calls session.abort().
+ * - Action trail: registered at tool_execution_start (args visible), ok backfilled at end —
+ *   the tool_execution_end event carries no args (pi-agent-core AgentEvent union), so registration must happen at start.
  */
 import { eq } from 'drizzle-orm';
 import { chromium } from 'playwright-core';
@@ -45,18 +46,18 @@ import { createCoverageTracker, coverageDigest } from './coverage.js';
 import { createErrorSignalCollector } from './observation.js';
 import { fallbackFailureReason, readToolSummary } from './trail.js';
 
-/** 覆盖账本计数的交互动作类型（观察/判定类动作不算交互——账本回答「动过哪些地方」）。 */
+/** Interaction action kinds counted by the coverage ledger (observation/verdict actions are not interactions — the ledger answers "where did it act"). */
 const INTERACTION_KINDS = new Set(['click', 'fill', 'press', 'select', 'scroll', 'back', 'navigate']);
 
 /**
- * 探索式测试会话 runner（pi 链路）入口：EXPLORATION_RUNTIME=pi 时由 execute/exploration.ts 分派到这里。
+ * Exploratory testing session runner (pi chain) entry point: dispatched here by execute/exploration.ts when EXPLORATION_RUNTIME=pi.
  */
 export async function runExplorationSessionPi(input: { sessionId: string; idleTimeoutMs?: number }): Promise<void> {
   const { sessionId } = input;
   const sessionRow = (await db.select().from(explorationSessions).where(eq(explorationSessions.id, sessionId)))[0];
   if (!sessionRow) return;
   if (!(await claimSession(sessionId))) return;
-  // pending 期被取消：不开浏览器直接收尾
+  // Cancelled during pending: wrap up directly without opening a browser
   if (sessionRow.cancelRequested) {
     await db
       .update(explorationSessions)
@@ -67,43 +68,45 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
 
   let envCtx: Awaited<ReturnType<typeof resolveEnv>> | undefined;
   let live: ReturnType<typeof registerLiveView> | undefined;
-  /** D2 故障控制器（声明在 try 外——收尾 finally 要能复位）。 */
+  /** D2 fault controller (declared outside the try — the wrap-up finally must be able to reset it). */
   let fault: FaultController | undefined;
   const maxTurns = sessionRow.budgetTurns ?? EXPLORATION_MAX_TURNS;
   const usage = newAiUsage();
   let turnCount = 0;
   let userCancelled = false;
   let budgetExceeded = false;
-  /** 模型调用挂死（超过 EXPLORATION_IDLE_TIMEOUT_MS 没有任何 pi 事件）→ 中止会话。 */
+  /** Model call hung (no pi event for over EXPLORATION_IDLE_TIMEOUT_MS) → abort the session. */
   let idleTimedOut = false;
-  /** 最后一次 pi 事件时间（空闲看门狗的判据；流式期间每个数据块都刷新）。 */
+  /** Time of the last pi event (the idle watchdog's criterion; refreshed on every chunk during streaming). */
   let lastEventAt = Date.now();
-  /** 空闲看门狗定时器（finally 必清）。 */
+  /** Idle watchdog timer (must be cleared in finally). */
   let idleTimer: NodeJS.Timeout | undefined;
-  /** 挂死判据：这么久没有任何 pi 事件 = 这一轮永远回不来。默认 5 分钟——
-   *  推理型网关可能长时间不出首字节（思考阶段不出 token），阈值太小会误杀正常调用。 */
+  /** Hung criterion: no pi event for this long = this round is never coming back. Default 5 minutes —
+   *  reasoning gateways can take a long time before the first byte (no tokens during the thinking phase);
+   *  a threshold too small would falsely kill normal calls. */
   const idleTimeoutMs = input.idleTimeoutMs ?? EXPLORATION_IDLE_TIMEOUT_MS;
-  /** 看门狗轮询间隔（不超过阈值本身——阈值很小时要跟得上）。 */
+  /** Watchdog polling interval (never above the threshold itself — must keep up when the threshold is small). */
   const idleCheckMs = Math.min(30_000, idleTimeoutMs);
-  /** DB 心跳刷新间隔：墙钟放大后（最长 240 分钟），心跳不能只在轮次边界刷——
-   *  一轮长思考/长流式输出可能超过外层看门狗的判死窗口（5 分钟），届时活会话
-   *  会被误判成「执行器中断」。30s 一次：心跳常新，挂死的裁决权留给本 runner
-   *  的空闲看门狗（终态给得出「长时间无响应」这种可行动原因，而不是 failed）。 */
+  /** DB heartbeat refresh interval: after the wall-clock enlargement (up to 240 minutes), the heartbeat cannot be
+   *  refreshed only at turn boundaries — one long thinking/streaming round can exceed the outer watchdog's
+   *  dead-session window (5 minutes), at which point a live session would be misjudged as "executor interrupted".
+   *  Every 30s: the heartbeat stays fresh, and the ruling on hangs is left to this runner's idle watchdog
+   *  (the final state can then give an actionable reason like "no response for a long time" instead of failed). */
   const HEARTBEAT_REFRESH_MS = 30_000;
   let heartbeatTimer: NodeJS.Timeout | undefined;
-  /** 最后一条 assistant 文本（done summary：pi 循环自然结束时的总结）。 */
+  /** Last assistant text (done summary: the summary when the pi loop ends naturally). */
   let summaryText = '';
-  /** finish 工具提交的总结（finish 后 abort，正常/异常路径都以它为终态总结）。 */
+  /** Summary submitted by the finish tool (finish aborts afterwards; both normal/error paths use it as the final summary). */
   let finishSummary: string | null = null;
-  /** 终止性错误（fill 凭据缺失等）：终止会话并按 failed 收尾。 */
+  /** Fatal error (missing fill credentials etc.): terminates the session and wraps up as failed. */
   let fatalErr: Error | undefined;
-  /** finding store（页内创建；catch 路径读 savedCount 拼总结用）。 */
+  /** Finding store (created in-page; the catch path reads savedCount to assemble the summary). */
   let findingStore: FindingStore | undefined;
-  /** 会话级动作留痕（工具事件 → ExplorationStep），落库防抖同 legacy。 */
+  /** Session-level action trail (tool events → ExplorationStep), persisted with the same debounce as legacy. */
   const sessionSteps: ExplorationStep[] = [];
-  /** 自上一条 finding 起的留痕片段（finding 落库成功时清空，进 finding.actions_trail）。 */
+  /** Trail fragment since the last finding (cleared when a finding persists successfully; goes into finding.actions_trail). */
   let trailSince: ExplorationStep[] = [];
-  /** 负面结果账本（同 legacy：只存排除项不存信念，dedup + 封顶）。 */
+  /** Exclusion ledger (same as legacy: stores exclusions, not beliefs; dedup + cap). */
   const excludedLedger: Array<{ claim: string; evidence: string }> = [];
   const pendingTrail = new Map<string, ExplorationStep>();
   let coverageLedger: ReturnType<typeof createCoverageTracker> | undefined;
@@ -128,7 +131,7 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
       });
     return persistChain;
   };
-  /** 动作级落库防抖（同 legacy：窗口 1s，详情页 2s 轮询可见逐步长出）。 */
+  /** Action-level persistence debounce (same as legacy: 1s window; the detail page's 2s polling sees it grow step by step). */
   const TRAIL_PERSIST_DEBOUNCE_MS = 1000;
   let trailTimer: NodeJS.Timeout | undefined;
   const scheduleTrailPersist = (): void => {
@@ -145,10 +148,10 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
     }
     await persistSessionState();
   };
-  /** 终态总结：finish 提交 > 预算/挂死注记 > 最后一条 assistant 文本；缺陷计数与覆盖摘要两路径都带。 */
+  /** Final summary: finish submission > budget/hang annotation > last assistant text; the defect count and coverage digest ride along on both paths. */
   const terminalSummary = (): string | null => {
     const countsNote = (findingStore?.savedCount ?? 0) > 0 ? `（报告缺陷 ${findingStore!.savedCount} 条）` : '';
-    // 覆盖摘要：盖住了多少、哪些子目标没盖到——探索深度不只看跑了几轮。
+    // Coverage digest: how much was covered and which sub-goals were not — exploration depth is not just rounds run.
     const coverageNote = coverageLedger ? `（覆盖：${coverageDigest(coverageLedger.snapshot())}）` : '';
     if (finishSummary) return `${finishSummary}${countsNote}${coverageNote}`.trim();
     const stopNote = idleTimedOut
@@ -156,14 +159,15 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
       : budgetExceeded
         ? `（预算耗尽，${turnCount} 轮后停止）`
         : '';
-    // finish 未提交：末条 assistant 文本不是正式总结（可能是中途观察记录/英文闲聊），
-    // 诚实标注再引用——用户不该把残骸当结论读。
+    // finish never submitted: the last assistant text is not a formal summary (may be a mid-run observation note / English chatter),
+    // so label it honestly before quoting — the user should not read wreckage as conclusions.
     const body = summaryText ? `模型未提交正式总结（以下为末条发言）：${summaryText}` : '探索结束';
     return `${body}${stopNote}${countsNote}${coverageNote}`.trim();
   };
 
   try {
-    // 会话存活证据：定时刷新（会话跑动全程覆盖，含长思考轮——期间轮次边界的心跳不会触发）。
+    // Session liveness evidence: refreshed on a timer (covers the whole session run, including long thinking rounds —
+    // the turn-boundary heartbeat does not fire during them).
     heartbeatTimer = setInterval(() => {
       void heartbeat(sessionId).catch((e) => logger.warn({ err: e, sessionId }, 'exploration heartbeat refresh failed'));
     }, HEARTBEAT_REFRESH_MS);
@@ -173,12 +177,13 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
     const cred = webRef ? envCtx.resolveLogin(webRef) : null;
     const startUrl = sessionRow.startUrl?.trim() || envCtx.baseUrl || cred?.loginUrl || '';
     if (!startUrl) throw new Error('缺少探索起点 URL（会话未填 startUrl，且环境未配置 baseUrl/loginUrl）');
-    // 范围白名单 = 起点 origin 唯一（口径与 legacy 一致；不可解析 → 空数组 = navigate 全拒）。
+    // Scope whitelist = the start origin, the only one allowed (same rule as legacy; unparseable → empty array = all navigate rejected).
     const startOrigin = originOf(startUrl);
     const scopeOrigins = startOrigin ? [startOrigin] : [];
 
-    // —— 代码提交范围（charter 自然语言 → git 范围；前后各一次心跳：解析期间看门狗不误杀、
-    // 顺带捕捉取消。none/failed → codeScope null，探索照常全站跑，repo_read 不挂载）——
+    // —— Code commit scope (charter natural language → git scope; a heartbeat before and after: the watchdog does not
+    // falsely kill during parsing and a cancel is caught along the way. none/failed → codeScope null, the exploration
+    // runs the whole site as usual, repo_read not mounted) ——
     await heartbeat(sessionId);
     const { scope } = await resolveCodeScope({ sessionId, charter: sessionRow.charter, versionId: sessionRow.versionId });
     const codeScope: CodeScope | null = scope ?? null;
@@ -187,7 +192,7 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
       return;
     }
 
-    // —— 模型解析 + 工具调用探针（浏览器启动前：渠道不行立刻失败，不空跑轮次预算）——
+    // —— Model resolution + tool-calling probe (before the browser starts: a bad channel fails immediately, no burning the turn budget) ——
     const { model, channelName } = await resolveExplorationModel();
     await heartbeat(sessionId);
     const toolProbe = await toolCallingProbeFailure(model);
@@ -197,17 +202,17 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
       return;
     }
 
-    // —— C2 章程分解（开跑前 1 次 LLM 调用 → 2~12 条子目标；软失败 = 无子目标，探索照常跑）——
-    //  子目标进 system prompt（压缩安全）并落 coverage_ledger.goals（终态快照供人工评估覆盖度）。
-    //  放在探针之后：探针不过这场会话直接失败，没必要再烧一次分解调用。
+    // —— C2 charter decomposition (one LLM call before the run → 2~12 sub-goals; soft failure = no sub-goals, exploration runs as usual) ——
+    //  Sub-goals go into the system prompt (compression-safe) and land in coverage_ledger.goals (final-state snapshot for human coverage assessment).
+    //  Placed after the probes: if a probe fails the session fails outright, so there is no point burning another decomposition call.
     const persona = getExplorationPersona(sessionRow.persona);
     const goals = await decomposeCharter({ charter: sessionRow.charter, persona: persona.directive });
     if (await heartbeat(sessionId)) {
       await finishSession(sessionId, { status: 'cancelled', turnsUsed: 0, usage: usage.stat }).catch(() => undefined);
       return;
     }
-    // 探索墙钟从范围解析 + 探针 + 章程分解后起算——预算全部留给智能体阶段。
-    // 墙钟由轮次物化（不再是固定 15 分钟）：轮次是深度的唯一旋钮，墙钟只是它的物化 + 兜底。
+    // The exploration wall clock starts after scope parsing + probes + charter decomposition — the whole budget goes to the agent phase.
+    // The wall clock is materialized from turns (no longer a fixed 15 minutes): turns are the only depth knob; the wall clock is its materialization + backstop.
     const deadline = Date.now() + explorationWallClockMs(maxTurns);
 
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -216,7 +221,7 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
       const cachedState = loginKey ? getLoginState(loginKey) : null;
       const context = await browser.newContext({
         ignoreHTTPSErrors: true,
-        // 两态视口与 legacy 一致：会话建时给了成对宽高=自定义；缺省 1280×800。
+        // Two-state viewport, same as legacy: a width/height pair given at session creation = custom; default 1280×800.
         viewport:
           sessionRow.windowWidth && sessionRow.windowHeight
             ? { width: sessionRow.windowWidth, height: sessionRow.windowHeight }
@@ -225,9 +230,9 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
       });
       const page = await context.newPage();
 
-      // —— 视觉探针（浏览器内渲染唯一码读回）：失败不掀翻会话，降级纯文本模式 ——
-      //    必须在 registerLiveView 之前：live view 会对同一 page 起 CDP screencast 镜像，
-      //    prod228 实证镜像活跃时探针截图 5s 超时 → 会话被误降级为纯文本模式。
+      // —— Vision probe (render the unique code in-browser and read it back): failure does not capsize the session; degrade to plain-text mode ——
+      //    Must run before registerLiveView: live view starts a CDP screencast mirror on the same page;
+      //    proven on prod228: with the mirror active the probe screenshot timed out at 5s → the session was wrongly degraded to plain-text mode.
       const visionProbe = await visionProbeFailure(page, model);
       const vision = visionProbe === null;
       if (visionProbe) {
@@ -237,18 +242,18 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
       live = registerLiveView(`exploration:${sessionId}`);
       live.setPage(page);
 
-      // —— D2 故障注入控制器：控制器始终创建（收尾 finally 要能复位），
-      //    但工具**只在会话带显式授权位时装配**（未授权 = 工具不出现）。——
+      // —— D2 fault-injection controller: the controller is always created (the wrap-up finally must be able to reset it),
+      //    but the tools are **assembled only when the session carries an explicit authorization flag** (unauthorized = the tools do not exist). ——
       fault = createFaultController(context, page);
 
-      // —— C1 覆盖账本 + D3 错误信号采集（observe 回灌 + 终态落库）——
+      // —— C1 coverage ledger + D3 error signal collection (observe feedback + final-state persistence) ——
       const coverage = createCoverageTracker();
       coverage.setGoals(goals);
       coverageLedger = coverage;
       const collector = createErrorSignalCollector(page);
       errorSignals = collector;
 
-      // —— A1 证据帧：finding 落库（决策帧截图 + 自上一条 finding 起的留痕片段）——
+      // —— A1 evidence frame: finding persistence (decision-frame screenshot + trail fragment since the last finding) ——
       const store = createFindingStore({
         sessionId,
         page,
@@ -263,12 +268,12 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
       });
       findingStore = store;
 
-      // 凭据占位符替换器（fill 用）；替换失败（EnvMissing/SecretMissing）= 终止性错误 → onFatal。
+      // Credential placeholder substituter (used by fill); a substitution failure (EnvMissing/SecretMissing) = fatal error → onFatal.
       const valueSub = cred ? makeCredentialValueSub(buildCredentialSource({ envCtx })) : undefined;
 
-      // 数据库取证通道（环境配了 db 对象才有；SqlProbeEnv 结构子集由 envCtx 直接满足）。
+      // DB forensics channel (only when the environment has a db object configured; the SqlProbeEnv structural subset is satisfied by envCtx directly).
       const dbRefs = envCtx.dbs.map((d) => ({ label: d.label, dialect: d.dialect }));
-      // 仓库读码通道（有代码提交范围才挂载；diff op 需要 from→to 基线）。
+      // Repo-reading channel (mounted only with a code commit scope; the diff op needs a from→to baseline).
       const repoChannel = codeScope
         ? createRepoReadChannel({
             repoDir: versionWorkspaceDir(sessionRow.versionId),
@@ -305,7 +310,7 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
         },
         onFinish: (summary, goalUpdates) => {
           finishSummary = summary;
-          // 模型回告的子目标完成情况 → 账本（终态快照随之落库）。
+          // The model-reported sub-goal completion → ledger (the final-state snapshot is persisted along with it).
           if (goalUpdates && goalUpdates.length > 0) {
             coverage.markGoals(goalUpdates);
             void persistSessionState();
@@ -335,10 +340,10 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
         }),
       });
 
-      // 取消/预算检查：心跳顺带读取消标志（同 legacy 一句 SQL 语义）；命中即 abort。
-      // 轮次计数只认 assistant message_end（= 一次 LLM 轮，与 legacy shouldAbort 口径一致）——
-      // tool_execution_end 只做心跳（pi 一轮可链多个工具，若逐工具计数 turnsUsed 会虚胖）。
-      // 串行链执行：多个事件同拍到达时心跳不并发、计数不重复。
+      // Cancel/budget check: the heartbeat also reads the cancel flag (same single-SQL semantics as legacy); a hit aborts.
+      // Turn counting only counts assistant message_end (= one LLM round, consistent with legacy shouldAbort) —
+      // tool_execution_end only drives the heartbeat (one pi round can chain multiple tools; counting per tool would bloat turnsUsed).
+      // Serial chain execution: when multiple events arrive in the same tick, heartbeats do not run concurrently and counts do not duplicate.
       let abortCheckChain: Promise<void> = Promise.resolve();
       const scheduleAbortCheck = (turnBoundary: boolean): void => {
         abortCheckChain = abortCheckChain
@@ -361,8 +366,8 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
       };
 
       piSession.subscribe((ev) => {
-        // 任何事件都算「会话还活着」——流式输出期间 message_update 每块都来，
-        // 空闲看门狗因此不会在模型正常思考/输出时误判挂死。
+        // Any event counts as "the session is alive" — during streaming, message_update arrives per chunk,
+        // so the idle watchdog will not misjudge a hang while the model is thinking/outputting normally.
         lastEventAt = Date.now();
         if (ev.type === 'tool_execution_start') {
           const step = trailStepOf(ev.toolName, ev.args);
@@ -372,11 +377,11 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
           pendingTrail.delete(ev.toolCallId);
           if (step) {
             step.ok = !ev.isError;
-            // 结果摘要（工具层产出）：这一步「看到了什么/变成了什么/为什么失败」——
-            // 没有它，「会话过程」里 observe/截图/页内脚本这些步骤只有 target="-"，用户看不到价值。
+            // Result summary (produced at the tool layer): what this step "saw / changed into / why it failed" —
+            // without it, steps like observe/screenshot/in-page scripts in the "session process" show only target="-" and users see no value.
             step.outcome = readToolSummary(ev.result) ?? (ev.isError ? fallbackFailureReason(ev.result) : undefined);
-            // sql/repo 取证的结果原文进留痕 detail（trailToSteps 的 expected 用）。
-            // 只取首行之后的部分：首行是「sql_probe（库）：N 行」这类抬头，已由 outcome 承担。
+            // The verbatim result of sql/repo forensics goes into the trail detail (used by trailToSteps' expected).
+            // Only the part after the first line is taken: the first line is a header like "sql_probe（库）：N 行", already covered by outcome.
             if (ev.toolName === 'sql_probe' || ev.toolName === 'repo_read') {
               const content = ev.result?.content as Array<{ type: string; text?: string }> | undefined;
               const firstText = content?.find((b) => b.type === 'text' && typeof b.text === 'string');
@@ -415,9 +420,9 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
 
       logger.info({ sessionId, channelName, vision, scopeOrigins, maxTurns }, 'exploration pi session starting');
 
-      // —— 空闲看门狗：墙钟放大到 240 分钟后，必须由它兜「模型调用挂死」——
-      //  这么久（EXPLORATION_IDLE_TIMEOUT_MS）没有任何 pi 事件 = 这一轮永远回不来。
-      //  命中即 abort：留痕全保留，终态注明是挂死中止而不是跑完了。
+      // —— Idle watchdog: after the wall clock grew to 240 minutes, it must be the one catching "model call hung" ——
+      //  No pi event for this long (EXPLORATION_IDLE_TIMEOUT_MS) = this round is never coming back.
+      //  A hit aborts: the trail is fully preserved, and the final state notes a hang-abort rather than a completed run.
       idleTimer = setInterval(() => {
         if (userCancelled || budgetExceeded || idleTimedOut) return;
         if (Date.now() - lastEventAt > idleTimeoutMs) {
@@ -427,8 +432,8 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
         }
       }, idleCheckMs);
 
-      // 起始指令 + 墙钟硬闸：事件驱动的 maybeAbort 覆盖正常轮转；这里兜「LLM 调用挂死无事件」
-      // 的路径——到点 abort 让 prompt 展开，收尾语义照常走（留痕全保留）。
+      // Kickoff instruction + wall-clock hard gate: the event-driven maybeAbort covers normal rotation; this catches the
+      // "LLM call hung with no events" path — aborting at the deadline lets the prompt settle, and wrap-up semantics run as usual (trail fully preserved).
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) budgetExceeded = true;
       if (!budgetExceeded && !userCancelled) {
@@ -449,16 +454,16 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
             });
         });
       }
-      // 取消/预算检查是事件驱动的异步链（链上心跳 SQL 在途时 prompt 可能已 resolve）——
-      // 收尾读标志前等最后一拍落定，否则终态分类（cancelled / completed+预算注记）
-      // 与 turns_used 会漏掉最后一轮的判定。
+      // The cancel/budget check is an event-driven async chain (while a heartbeat SQL on the chain is in flight, the prompt may already have resolved) —
+      // wait for the last tick to settle before reading the flags at wrap-up, otherwise the final-state classification
+      // (cancelled / completed+budget annotation) and turns_used would miss the last round's verdict.
       await abortCheckChain;
-      // fill 凭据缺失等终止性错误 → 按失败收尾（重试只会烧轮次，可行动指引在 message 里）。
+      // Fatal errors like missing fill credentials → wrap up as failure (retrying would only burn turns; actionable guidance is in the message).
       if (fatalErr) throw fatalErr;
 
-      // 先落留痕再置终态（详情页一看到终态就停轮询，顺序反了尾段永远拉不到）。
+      // Persist the trail before setting the final state (the detail page stops polling the moment it sees the final state; in the reverse order the tail segment would never be fetched).
       await flushTrailPersist();
-      // 暖登录态回馈（fire-and-forget，失败不影响终态；与 legacy 同语义）
+      // Warm login-state give-back (fire-and-forget; failure does not affect the final state; same semantics as legacy)
       if (loginKey) void context.storageState().then((s) => saveLoginState(loginKey, s)).catch(() => {});
       await finishSession(sessionId, {
         status: userCancelled ? 'cancelled' : 'completed',
@@ -466,10 +471,10 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
         turnsUsed: turnCount,
         usage: usage.stat,
       }).catch(() => undefined);
-      // A3 独立评审（fire-and-forget：评审不改终态，失败也不影响会话）。
+      // A3 independent review (fire-and-forget: review never changes the final state; its failure does not affect the session).
       void judgeExplorationSession(sessionId).catch(() => undefined);
     } finally {
-      // D2 故障必须复原——不给被测系统留污染（先复位再关浏览器）。
+      // D2 faults must be restored — leave no pollution in the SUT (reset before closing the browser).
       await fault?.reset();
       live?.close();
       await browser.close().catch(() => {});
@@ -479,8 +484,8 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
     logger.warn({ err: e, sessionId, userCancelled, budgetExceeded, idleTimedOut }, 'exploration pi session failed');
     await flushTrailPersist();
     await finishSession(sessionId, {
-      // finish 已提交总结的会话即使收尾链路抛错也按 completed 落终态（模型明确说完了）。
-      // 挂死中止同预算耗尽口径：不是失败，是被平台主动叫停（总结里注明原因）。
+      // A session whose finish submitted a summary still lands a completed final state even if the wrap-up chain throws (the model clearly said it was done).
+      // A hang-abort follows the budget-exhausted rule: not a failure, but a platform-initiated stop (the reason goes in the summary).
       status: finishSummary ? 'completed' : userCancelled ? 'cancelled' : budgetExceeded || idleTimedOut ? 'completed' : 'failed',
       error: finishSummary || userCancelled || budgetExceeded || idleTimedOut ? null : msg,
       summary: terminalSummary(),
@@ -489,7 +494,7 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
     }).catch(() => undefined);
     void judgeExplorationSession(sessionId).catch(() => undefined);
   } finally {
-    // 兜底落库：正常/失败路径都已在置终态前 flush 过，这里只防意外漏写。
+    // Backstop persistence: both the normal and failure paths already flushed before setting the final state; this only guards against an accidental missed write.
     if (idleTimer) {
       clearInterval(idleTimer);
       idleTimer = undefined;

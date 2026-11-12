@@ -1,14 +1,14 @@
 /**
- * 只读 SQL 守卫：sql 步骤执行前的词法检查。与词法白名单同级——
- * 都是字符串判定，**不是安全边界**（挡不住存储过程中的副作用与全部变体）。
- * 真正的防线是给被测库配只读账号；错误提示里也这么讲。
+ * Read-only SQL guard: lexical check run before a sql step executes. Same tier as the lexical whitelist —
+ * both are string judgments, **not a security boundary** (they can't stop side effects inside stored procedures, nor every variant).
+ * The real defense is configuring a read-only account for the SUT database; the error message says so too.
  *
- * 剥掉注释与字符串字面量后再判定，避免 `SELECT 'delete from t'` 这类误杀。
+ * Comments and string literals are stripped before judging, avoiding false kills like `SELECT 'delete from t'`.
  */
 
 export const MAX_SQL_CHARS = 8000;
 
-/** 去掉行注释、块注释与单引号/双引号字符串字面量（保留占位，保持长度可读）。 */
+/** Strips line comments, block comments, and single/double-quoted string literals (placeholders kept, length stays readable). */
 function stripLiteralsAndComments(sql: string): string {
   return sql
     .replace(/--[^\n]*/g, ' ')
@@ -17,10 +17,10 @@ function stripLiteralsAndComments(sql: string): string {
     .replace(/"(?:""|[^"])*"/g, '""');
 }
 
-/** 明确禁止的写/管理关键字（词边界匹配，避免命中列名如 `created_at`）。 */
+/** Explicitly forbidden write/admin keywords (word-boundary matched, so column names like `created_at` don't hit). */
 const FORBIDDEN = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COMMIT|ROLLBACK|VACUUM|COPY|REINDEX|CLUSTER|LOCK|CALL|DO|EXECUTE|PREPARE)\b/i;
 
-/** SELECT ... INTO：Postgres 建表、MySQL 写文件——都是写语义，单独拦。 */
+/** SELECT ... INTO: Postgres table creation, MySQL file writes — both write semantics, blocked separately. */
 const SELECT_INTO = /\bINTO\b/i;
 
 export function assertReadOnlySql(raw: string): void {
@@ -35,7 +35,7 @@ export function assertReadOnlySql(raw: string): void {
   if (!/^(SELECT|WITH)\b/i.test(body)) {
     throw sqlGuardError(`只允许 SELECT / WITH 开头的只读语句，当前以 "${body.slice(0, 40)}" 开头`);
   }
-  // 去尾分号后仍含分号 = 多语句
+  // Semicolons remaining after removing the trailing one = multiple statements
   const noTrail = body.replace(/;\s*$/, '');
   if (noTrail.includes(';')) {
     throw sqlGuardError('只允许单条语句：检测到多个语句分隔符 ";"');

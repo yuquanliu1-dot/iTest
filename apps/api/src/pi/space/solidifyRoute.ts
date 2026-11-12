@@ -1,6 +1,6 @@
 /**
- * R3 固化管线路由（requireManager）。scan 是 fire-and-forget：立即返回批次 id，
- * 蒸馏 inline 跑（R2 trajectoryQueue 同款），前端轮询批次状态；错误记在批次上不进响应。
+ * R3 solidification pipeline routes (requireManager). scan is fire-and-forget: returns the batch id immediately,
+ * distillation runs inline (same as R2's trajectoryQueue), the frontend polls batch status; errors are recorded on the batch, never in the response.
  */
 import { Router } from 'express';
 import { and, count, desc, eq, sql, type SQL } from 'drizzle-orm';
@@ -18,7 +18,7 @@ const router = Router();
 router.post('/scan', async (req, res) => {
   const user = req.user as AuthUser;
   const id = await startSolidifyScan(user.userId);
-  void runSolidifyScan(id).catch(() => {}); // inline fire-and-forget；失败已记批次
+  void runSolidifyScan(id).catch(() => {}); // inline fire-and-forget; failures are recorded on the batch
   res.status(202).json({ id });
 });
 
@@ -31,7 +31,7 @@ router.get('/batches', async (req, res) => {
   const [rows, totalRows] = await Promise.all([
     db.select().from(assistantSolidifyBatches)
       .where(where)
-      // createdAt 非唯一 → 追加 id 作 tiebreaker，否则跨页会重复/漏行
+      // createdAt is not unique → append id as tiebreaker, otherwise pages repeat/skip rows
       .orderBy(desc(assistantSolidifyBatches.createdAt), desc(assistantSolidifyBatches.id))
       .limit(limit).offset((page - 1) * limit),
     db.select({ count: count() }).from(assistantSolidifyBatches).where(where),
@@ -50,7 +50,7 @@ router.get('/proposals', async (req, res) => {
   const [rows, totalRows] = await Promise.all([
     db.select().from(assistantSolidifyProposals)
       .where(where)
-      // 待审优先（人工审批面）：pending 在前，其余按创建时间倒序；id 兜底防跨页重复
+      // Pending review first (the human approval surface): pending comes first, the rest by creation time descending; id as fallback against cross-page duplicates
       .orderBy(
         sql`CASE WHEN ${assistantSolidifyProposals.status} = 'pending' THEN 0 ELSE 1 END`,
         desc(assistantSolidifyProposals.createdAt),

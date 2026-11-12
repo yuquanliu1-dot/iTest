@@ -1,11 +1,11 @@
 /**
- * planSchedules.service 单测：直接调 service 函数，验证
- * - list / get / create / update / delete 行为
- * - validateCron 失败抛 HttpError(400, 'bad_cron_expr')
- * - DB 列写入正确（enabled / cronExpr / nextRunAt）
- * - delete 不存在 schedule 返回 deleted=false
+ * planSchedules.service unit tests: call service functions directly, verifying
+ * - list / get / create / update / delete behavior
+ * - validateCron throws HttpError(400, 'bad_cron_expr') on failure
+ * - DB columns written correctly (enabled / cronExpr / nextRunAt)
+ * - deleting a nonexistent schedule returns deleted=false
  *
- * 注：测试环境不连 Redis；upsertScheduleJob / removeScheduleJob 内部守门,DB 写入仍正常。
+ * Note: the test environment does not connect to Redis; upsertScheduleJob / removeScheduleJob gate internally, DB writes still go through.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';

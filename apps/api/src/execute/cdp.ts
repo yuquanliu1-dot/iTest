@@ -47,7 +47,7 @@ import { annotateAction, clearAnnotation, type LiveViewHandle } from './liveView
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
-/** 弹层/通知类元素 selector 兜底；用于 assertText errorMessage 目标。 */
+/** Fallback selectors for popup/notification-class elements; used for the assertText errorMessage target. */
 const ERROR_MESSAGE_SELECTORS = [
   '.ant-message',
   '.toast',
@@ -56,97 +56,97 @@ const ERROR_MESSAGE_SELECTORS = [
   '.ivu-message',
 ];
 
-/** Postgres uuid 列形状校验，避免非法 id 触发 22P02。 */
+/** Postgres uuid column shape validation; avoids 22P02 from malformed ids. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ExecStepResult {
   order: number;
   status: 'passed' | 'failed';
   durationMs: number;
-  /** 本步开始时刻（ISO 字符串）；老报告缺失，报告页据此隐藏「开始」标签。 */
+  /** Step start time (ISO string); missing in older reports — the report page hides the「开始」(start) label accordingly. */
   startedAt?: string;
   error?: string;
   screenshot?: string;
   warning?: string;
-  /** 失败归类（failureClassifier 产出）；成功步为空 */
+  /** Failure classification (produced by failureClassifier); empty for passed steps */
   failureReason?: FailureReason;
-  /** 面向用户的失败说明 */
+  /** User-facing failure explanation */
   humanMessage?: string;
-  /** 本步实际命中的定位 kind/value */
+  /** Locator kind/value actually hit by this step */
   hitLocator?: HitLocator;
-  /** switchTab 目标页在 tabMap 中的序号；非 tab 步为 0 */
+  /** Index of the switchTab target page in tabMap; 0 for non-tab steps */
   tabIndex?: number;
-  /** sql 步骤的结果（仅 sql 步携带，其它步 undefined） */
+  /** Result of a sql step (present only on sql steps, undefined otherwise) */
   sql?: SqlStepResult;
-  /** observeLog 步骤的结果（仅 observeLog 步携带，其它步 undefined） */
+  /** Result of an observeLog step (present only on observeLog steps, undefined otherwise) */
   log?: ObserveLogLineResult;
-  /** httpRequest 步骤的结果（仅 httpRequest 步携带，其它步 undefined） */
+  /** Result of an httpRequest step (present only on httpRequest steps, undefined otherwise) */
   http?: HttpStepResult;
-  /** sendSyslog 步骤的结果（仅 sendSyslog 步携带，其它步 undefined） */
+  /** Result of a sendSyslog step (present only on sendSyslog steps, undefined otherwise) */
   syslog?: SyslogStepResult;
-  /** Track 1 用例级 vision 判定的回写结果（仅最后一步或追加失败步携带，其它步 undefined）。 */
+  /** Write-back result of the Track 1 case-level vision verdict (present only on the last step or an appended failed step, undefined otherwise). */
   visionAssert?: { passed: boolean; reason: string; screenshot?: string; expected?: string; aiUsage?: AiUsageStat };
-  /** aiTask 步骤本轮回放走了动作缓存（机械执行，零 LLM）；报告据此展示"缓存命中"。 */
+  /** This aiTask step's replay took the action cache (mechanical execution, zero LLM); the report shows "cache hit" accordingly. */
   cached?: boolean;
-  /** 本步 LLM 用量（aiTask / 验证码 / vision 判定产生的调用累加）；零调用步缺省。 */
+  /** This step's LLM usage (accumulated from aiTask / captcha / vision verdict calls); absent for zero-call steps. */
   aiUsage?: AiUsageStat;
-  /** 缓存条目存在但重放分叉、AI 自愈通过（仅 passed 步携带；首跑无缓存不算）。 */
+  /** A cache entry existed but replay diverged, and the AI self-heal passed (present only on passed steps; a first run with no cache doesn't count). */
   healed?: boolean;
-  /** 本步机械执行受阻，由 AI 按步骤指令临场执行通过（回放 AI 降级）；报告据此醒目标注。 */
+  /** Mechanical execution was blocked and the AI executed the step on the spot per its instruction (replay AI fallback); the report highlights this accordingly. */
   degraded?: boolean;
-  /** 行级自然语言说明快照（执行时的步骤 instruction；录制用例为空）。报告页据此展示步骤意图。 */
+  /** Snapshot of the row-level natural-language description (the step's instruction at execution time; empty for recorded cases). The report page shows the step intent from it. */
   instruction?: string;
-  /** compiled DSL 快照（与 test_steps 落库内容一致，敏感值为模板/占位）。报告页据此生成动作摘要。 */
+  /** Snapshot of the compiled DSL (identical to what test_steps stores; sensitive values as templates/placeholders). The report page builds the action summary from it. */
   compiled?: unknown[];
-  /** 本步窗口内浏览器 console error / JS 未捕获异常（consoleCapture 按步骤 drain 归属；无错误或缺省不带）。 */
+  /** Browser console errors / uncaught JS exceptions within this step's window (attributed per step via consoleCapture drains; omitted when none or unset). */
   console?: ConsoleLogEntry[];
 }
 
 export interface ExecContext {
   reportId: string;
-  /** case 所属 project，用于 project-scoped 附件解析；缺省时不过滤（向后兼容） */
+  /** The project a case belongs to, for project-scoped attachment resolution; no filtering when absent (backward compatible) */
   projectId?: string;
   /** tabRef → Page（phase2 switchTab） */
   tabMap?: Map<string, Page>;
-  /** fileId → 附件元数据；缺省回落 db 查询 */
+  /** fileId → attachment metadata; falls back to a db query when absent */
   attachmentResolver?: (fileId: string) => Promise<{ storedPath: string; originalName: string } | null>;
-  /** stepId → 敏感字段明文；缺省回落 db 查询 + 解密 */
+  /** stepId → sensitive-field plaintext; falls back to a db query + decryption when absent */
   secretResolver?: (stepId: string) => Promise<string | null>;
-  /** LLMClient 注入；缺省时按需 resolveLlmClient */
+  /** Injected LLMClient; resolves via resolveLlmClient on demand when absent */
   llmClient?: import('../agent/llm-client.js').LLMClient;
-  /** 环境上下文（含 pg.Pool / syslog 连接）；由 runCase 层注入，跨步骤复用。 */
+  /** Environment context (incl. pg.Pool / syslog connections); injected by the runCase layer, reused across steps. */
   envCtx?: EnvCtx;
-  /** Track 1：用例级 expectedOutcome（自然语言）。最后一步执行完毕后由 vision LLM 拿最终截图判终态。 */
+  /** Track 1: case-level expectedOutcome (natural language). After the last step finishes, the vision LLM judges the final state from the final screenshot. */
   expectedOutcome?: string | null;
-  /** 验证码多轮验证：aiTask 识别步骤成功后登记，后续 click（提交）步骤完成时按失败信号重试。
-   *  hint = 录制时的语义定位（data-testid / name），重试识别时精确命中输入框。 */
+  /** Multi-round captcha verification: registered after the aiTask recognition step succeeds; retried on failure signals when a later click (submit) step completes.
+   *  hint = the semantic locator from recording time (data-testid / name), so retry recognition hits the input box precisely. */
   captchaRetry?: { hint: string | null; roundsLeft: number } | null;
-  /** 用例标题（兜底语义锚，给 vision prompt 用）。 */
+  /** Case title (fallback semantic anchor for the vision prompt). */
   caseTitle?: string;
-  /** 用例 url（兜底语义锚，给 vision prompt 用）。 */
+  /** Case url (fallback semantic anchor for the vision prompt). */
   caseUrl?: string | null;
-  /** 用例绑定 web 服务的 origin：中途 navigate 相对 url 拼接用；无环境 web 服务时缺省。 */
+  /** Origin of the case's bound web service: used to join relative navigate urls mid-run; absent when the environment has no web service. */
   caseWebOrigin?: string | null;
-  /** 用例绑定的 web 服务名（environment_objects payload.name）：无 @ref 占位符的第二级解析目标。 */
+  /** The case's bound web service name (environment_objects payload.name): the second-level resolution target for placeholders without an @ref. */
   caseWebServiceRef?: string | null;
-  /** 数据集行初始变量（解密后明文，仅存在于执行期内存，不落库）。 */
+  /** Dataset row initial variables (decrypted plaintext, kept only in execution-time memory, never persisted). */
   initialVars?: Record<string, string>;
-  /** 数据集敏感列名集合：错误信息落报告前对相关变量值打码（与 recorder 敏感处理对齐）。 */
+  /** Set of sensitive dataset column names: related variable values are masked before error messages land in the report (aligned with the recorder's sensitive handling). */
   sensitiveVarKeys?: string[];
-  /** playground 实时画面源：每页新开时 setPage，让画面跟随执行（计划运行/单用例执行）。 */
+  /** Playground live-view source: setPage on each new page so the view follows execution (plan runs / single-case execution). */
   liveView?: LiveViewHandle;
-  /** 页面创建就绪回调（本实例新建页完成后触发一次）：verify_case 恢复续跑需要拿到
-   *  机械回放创建的 page 继续 AI 相——runStepsInContext 内部 newPage，不显式返回 page，
-   *  而 onFailurePage 只在失败断点触发，成功路径拿不到。加此可选字段，实现在 setPage 之后调用。 */
+  /** Page-creation-ready callback (fired once after this instance finishes creating a page): the verify_case resume path needs the page
+   *  created by mechanical replay to continue the AI phase — runStepsInContext newPages internally without returning the page explicitly,
+   *  and onFailurePage only fires at failure breakpoints, so the success path can't get it. Added this optional field; invoked after setPage. */
   onPageReady?: (page: Page) => void;
-  /** 回放 AI 降级开关（全局设置，runCase 层读入注入；缺省全关 = 保持既有失败语义）。 */
+  /** Replay AI fallback switch (global setting, read and injected by the runCase layer; all off by default = keeps the existing failure semantics). */
   aiFallback?: AiFallbackSettings;
-  /** 计划运行终止探针（runPlan 注入 isCancelRequested）：每步开始前检查，命中即记
-   *  Cancelled 失败步并停止后续步骤——取消不再只能等整条用例跑完（用例边界）才生效。 */
+  /** Plan-run abort probe (runPlan injects isCancelRequested): checked before each step; on hit the step is recorded as a
+   *  Cancelled failed step and later steps stop — cancellation no longer has to wait for the whole case (the case boundary) to finish. */
   shouldAbort?: () => boolean | Promise<boolean>;
 }
 
-/** 用例级窗口策略（maximize/current/custom），custom 时携带 width/height。 */
+/** Case-level window strategy (maximize/current/custom); width/height carried when custom. */
 export interface CaseWindow {
   strategy: WindowStrategy;
   width?: number;
@@ -157,52 +157,52 @@ interface DispatchOpts {
   page: Page;
   vars: Record<string, string>;
   ctx: ExecContext;
-  /** 当前步骤 id（敏感填充解密用） */
+  /** Current step id (for sensitive-fill decryption) */
   stepId?: string;
-  /** 所属用例 id（aiTask 运行时缓存判定用；executeSteps 等无用例上下文的调用方缺省） */
+  /** Owning case id (for aiTask runtime-cache eligibility; absent for callers without case context like executeSteps) */
   caseId?: string;
-  /** 记录本步命中的定位 kind/value（由 tryFirstMatch 写入） */
+  /** Records the locator kind/value hit this step (written by tryFirstMatch) */
   hitSink?: { current: HitLocator | null };
-  /** 记录本步 sql 结果（由 sql 分支写入） */
+  /** Records this step's sql result (written by the sql branch) */
   sqlSink?: { current: SqlStepResult | null };
-  /** 记录本步 observeLog 结果（由 observeLog 分支写入） */
+  /** Records this step's observeLog result (written by the observeLog branch) */
   logSink?: { current: ObserveLogLineResult | null };
-  /** 记录本步 httpRequest 结果（由 httpRequest 分支写入） */
+  /** Records this step's httpRequest result (written by the httpRequest branch) */
   httpSink?: { current: HttpStepResult | null };
-  /** 记录本步 sendSyslog 结果（由 sendSyslog 分支写入） */
+  /** Records this step's sendSyslog result (written by the sendSyslog branch) */
   syslogSink?: { current: SyslogStepResult | null };
-  /** 记录本步 aiTask 是否命中动作缓存（由 aiTask 分支写入） */
+  /** Records whether this aiTask step hit the action cache (written by the aiTask branch) */
   cacheSink?: { current: boolean };
-  /** 本步 LLM 用量累加器（aiTask / 验证码分支每轮 complete 后 add；stepResult 组装时读） */
+  /** This step's LLM usage accumulator (the aiTask / captcha branches add after each complete; read when assembling the stepResult) */
   aiUsage?: AiUsageAccumulator;
-  /** 记录本步是否发生缓存分叉后 AI 自愈成功（由 aiTask 分支写入） */
+  /** Records whether a cache divergence this step was followed by a successful AI self-heal (written by the aiTask branch) */
   healedSink?: { current: boolean };
-  /** 本步的 locator 修复记忆（AI 降级成功时写入 step_locator_cache，步循环开始时读）；
-   *  按 kind 匹配注入 tryFirstMatch 候选链末位，零 LLM 兜底。 */
+  /** This step's locator repair memory (written to step_locator_cache on AI-fallback success, read at the start of the step loop);
+   *  matched by kind and injected at the tail of the tryFirstMatch candidate chain — a zero-LLM fallback. */
   repairLocator?: { current: { locator: Locator; actionKind: string } | null };
 }
 
-/** 当前动作可用的修复缓存 locator（kind 不匹配 → null，不注入）。 */
+/** The repair-cache locator available for the current action (null on kind mismatch, not injected). */
 function repairFor(opts: DispatchOpts, action: StepAction): Locator | null {
   const r = opts.repairLocator?.current;
   return r && r.actionKind === action.kind ? r.locator : null;
 }
 
-/** 交互动作：执行前先做稳定性检查 */
+/** Interactive actions: run the stability check before executing */
 const INTERACTIVE_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'press', 'check', 'select', 'upload', 'aiTask'];
-/** 验证码多轮验证的最大重试轮数（不含首轮识别提交）。 */
+/** Max retry rounds of multi-round captcha verification (excluding the first recognition+submit round). */
 const CAPTCHA_RETRY_ROUNDS = 2;
-/** 稳定性检查不过时可尝试 DOM 降级的动作 */
+/** Actions allowed to attempt DOM fallback when the stability check fails */
 const DOM_FALLBACK_KINDS: ReadonlyArray<StepAction['kind']> = ['click', 'fill', 'check', 'select'];
-/** 非浏览器步骤：不经 Playwright，直接发协议请求/查数据。AI 降级（浏览器内临场执行）对它们
- *  结构上无解，故 AI 降级路径跳过，避免白烧 LLM 轮次。 */
+/** Non-browser steps: issued directly as protocol requests/data queries without Playwright. AI fallback (on-the-spot execution in the browser)
+ *  is structurally impossible for them, so the AI-fallback path skips them, avoiding wasted LLM turns. */
 const NON_BROWSER_KINDS: ReadonlySet<string> = new Set(['httpRequest', 'sql', 'observeLog', 'sendSyslog']);
 
-/** DOM 降级：元素不稳定时绕过 playwright 直接在页面里派发事件。仅支持 click/fill/check/select。
- *  root 可为 Frame（带 frameChain 的步骤在帧上下文降级派发）。 */
+/** DOM fallback: when an element is unstable, bypass playwright and dispatch events in the page directly. Supports click/fill/check/select only.
+ *  root may be a Frame (steps with frameChain fall back in the frame context). */
 async function tryDomFallback(action: StepAction, opts: DispatchOpts, root: Page | Frame): Promise<{ ok: boolean; error?: string }> {
   const { vars } = opts;
-  // 与 playwright 路径一致：fill/select 的字符串值先过 substituteVars，缺变量直接失败，避免把 {{var}} 原样写进表单。
+  // Aligned with the playwright path: fill/select string values go through substituteVars first and fail outright on missing vars, avoiding writing {{var}} verbatim into the form.
   if (action.kind === 'fill' || action.kind === 'select') {
     const tpl = typeof action.value === 'string' ? action.value : '';
     if (tpl) {
@@ -224,21 +224,21 @@ async function tryDomFallback(action: StepAction, opts: DispatchOpts, root: Page
   }
 }
 
-/** 交互动作前置稳定性检查；不稳定时尝试 DOM 降级，降级也失败则抛 ElementNotStable。 */
+/** Pre-execution stability check for interactive actions; tries DOM fallback when unstable, throws ElementNotStable when the fallback also fails. */
 async function ensureStable(action: StepAction, opts: DispatchOpts, root: Page | Frame): Promise<string | undefined> {
   try {
-    // waitForStable 的 locator 参数当前未使用；不传 root.locator('body') 以避免多余的探测调用。
-    // 帧步骤探针 scoped 到帧文档（Frame.evaluate 同签名）；顶层步骤与旧行为一致。
+    // waitForStable's locator parameter is currently unused; root.locator('body') isn't passed to avoid redundant probe calls.
+    // Frame steps probe scoped to the frame document (Frame.evaluate shares the same signature); top-level steps match the old behavior.
     await waitForStable(root, undefined as never, { timeoutMs: 2000, pollMs: 100 });
     return undefined;
   } catch (e) {
     if (!(e instanceof ElementNotStable)) {
-      // 探测本身失败（evaluate 不可用等）→ 无法评估稳定性，放行由动作自身的超时兜底。
+      // The probe itself failed (evaluate unavailable etc.) → stability can't be assessed; let it through and rely on the action's own timeout.
       return undefined;
     }
     if (
       DOM_FALLBACK_KINDS.includes(action.kind) &&
-      // 敏感填充的明文只有 secretResolver 能解，DOM 降级会写入占位符，故跳过降级。
+      // Only secretResolver can decrypt sensitive-fill plaintext; DOM fallback would write the placeholder, so it's skipped.
       !(action.kind === 'fill' && action.sensitive)
     ) {
       const r = await tryDomFallback(action, opts, root);
@@ -248,8 +248,8 @@ async function ensureStable(action: StepAction, opts: DispatchOpts, root: Page |
   }
 }
 
-/** 默认附件解析：按 fileId 查 test_attachments（非 UUID 直接 miss，避免 22P02）。
- * 提供 projectId 时附加 project 过滤，避免跨 project 引用 fileId 解析。 */
+/** Default attachment resolver: looks up test_attachments by fileId (non-UUIDs miss directly, avoiding 22P02).
+ * With projectId provided, adds a project filter so a fileId from another project can't be resolved. */
 async function defaultAttachmentResolver(fileId: string, projectId?: string): Promise<{ storedPath: string; originalName: string } | null> {
   if (!fileId || !UUID_RE.test(fileId)) return null;
   const where = projectId
@@ -260,7 +260,7 @@ async function defaultAttachmentResolver(fileId: string, projectId?: string): Pr
   return row ? { storedPath: row.storedPath, originalName: row.originalName } : null;
 }
 
-/** 默认密钥解析：按 stepId 查 test_steps 并解密（非 UUID 或密文字段缺失 → null）。 */
+/** Default secret resolver: looks up test_steps by stepId and decrypts (non-UUID or missing ciphertext fields → null). */
 async function defaultSecretResolver(stepId: string): Promise<string | null> {
   if (!stepId || !UUID_RE.test(stepId)) return null;
   const rows = await db.select().from(testSteps).where(eq(testSteps.id, stepId));
@@ -273,14 +273,14 @@ async function defaultSecretResolver(stepId: string): Promise<string | null> {
   });
 }
 
-/** 机械派发路径的 fill 值替换器——与 AI 相共用 makeCredentialValueSub（同一实现，
- *  避免两处各写一套字面量精确匹配后再次分叉，2026-10-21 prod228 即此根因）。
- *  机械路径没有 web 归属语义，ref 链固定落在用例绑定的 web 服务上。 */
+/** fill-value replacer for the mechanical dispatch path — shares makeCredentialValueSub with the AI phase (one implementation,
+ *  avoiding a second hand-rolled literal-exact matcher that forks again; this was exactly the 2026-10-21 prod228 root cause).
+ *  The mechanical path has no web-attribution semantics; the ref chain always lands on the case's bound web service. */
 function resolveEnvCredential(raw: string, ctx: ExecContext): string {
   const parsed = parseCredentialPlaceholder(raw);
   if (!parsed) return raw;
   if (parsed.kind === 'secret' && !parsed.ref) {
-    // 步骤级密文只有 sensitive 分支（secretResolver）能解；compiled 里写占位符无处可解。
+    // Step-level ciphertext is only decryptable by the sensitive branch (secretResolver); a placeholder written in compiled has no way to be resolved.
     const e = new Error(`secret-missing: 步骤 compiled 含 ${SECRET_PH}，敏感值只能走 sensitive=true + 密文，不能写占位符`);
     e.name = 'SecretMissing';
     throw e;
@@ -288,8 +288,8 @@ function resolveEnvCredential(raw: string, ctx: ExecContext): string {
   return makeCredentialValueSub(buildCredentialSource(ctx))(raw);
 }
 
-/** 指令引用敏感占位符时解密当步密文供 AI 相 valueSub；引用但没有可用密文 → SecretMissing（fail-fast，
- *  不烧 LLM 轮次）。不引用则不碰密文。 */
+/** When the instruction references the sensitive placeholder, decrypts this step's ciphertext for the AI-phase valueSub; referenced but no usable ciphertext → SecretMissing (fail-fast,
+ *  no LLM turns burned). Untouched when not referenced. */
 async function resolveStepSecretForAi(ctx: ExecContext, stepId: string | undefined, inst: string): Promise<string | undefined> {
   if (!inst.includes(SECRET_PH) || !stepId) return undefined;
   const secret = ctx.secretResolver ? await ctx.secretResolver(stepId) : await defaultSecretResolver(stepId);
@@ -301,8 +301,8 @@ async function resolveStepSecretForAi(ctx: ExecContext, stepId: string | undefin
   return secret;
 }
 
-/** AI 相预检：指令引用的凭据占位符（含 @ref）在当前环境不可解析 → 命名 EnvMissing。
- *  在烧 LLM 轮次之前拦截——占位符原样进登录表单必败（2026-10-21 prod228 实测整轮空转 12+ 次调用）。 */
+/** AI-phase pre-check: a credential placeholder (incl. @ref) referenced by the instruction but unresolvable in the current environment → named EnvMissing.
+ *  Intercepted before burning LLM turns — a placeholder typed verbatim into the login form always fails (2026-10-21 prod228 measured a whole idle run of 12+ calls). */
 function credentialPreflightError(inst: string, ctx: ExecContext): Error | null {
   const phs = inst.match(new RegExp(CREDENTIAL_PLACEHOLDER_SCAN.source, 'g')) ?? [];
   if (phs.length === 0) return null;
@@ -322,25 +322,25 @@ function credentialPreflightError(inst: string, ctx: ExecContext): Error | null 
   return null;
 }
 
-/** AI 相（降级 / aiTask 编译动作）的凭据 valueSub：与机械相共用同一构造点，
- *  只是多了步骤密文。真实值只在 fill 执行瞬间替换、不进 LLM 上下文/反馈/日志。 */
+/** Credential valueSub for the AI phase (fallback / compiled aiTask actions): built at the same construction point as the mechanical phase,
+ *  plus the step ciphertext. Real values are substituted only at fill-execution time and never enter LLM context/feedback/logs. */
 function aiCredentialSub(ctx: ExecContext, secret: string | undefined): (v: string) => string {
   return makeCredentialValueSub(buildCredentialSource(ctx, secret));
 }
 
 /**
- * 执行单步；返回 warning 文本（无则 undefined）。失败抛错由调用方记 failed。
- * 入口包 finally 清除动作高亮（blackboard）：无论动作成败，其后的 step 截图 / vision 断言 /
- * aiTask 轮截图都发生在清除之后，永不被描边框污染。递归（aiTask 缓存重放 dispatch 子动作）同样经过本入口。
+ * Executes a single step; returns warning text (undefined if none). Throws on failure; the caller records failed.
+ * The entry wraps a finally that clears the action highlight (blackboard): whether the action succeeds or not, the subsequent step screenshot / vision assertion /
+ * aiTask turn screenshots all happen after the clear and are never polluted by the drawn border. Recursion (aiTask cache replay dispatching sub-actions) also passes through this entry.
  */
 async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   try {
     const warning = await dispatchInner(action, opts);
-    // 点击后静默期：pre-action 稳定性检查（waitForStable/waitTargetEnabled）拦不住「点击成功
-    // 但效果被后到的异步重渲染冲掉」（prod228 14dd97e2/e3f9a616：行点击落在 Search 响应到达
-    // 前 275ms，响应到来后 el-table 重渲染清掉 current-row 选中态，下一步等 Modify 到
-    // target-disabled）。best-effort 等落定，绝不失败本步；dom-fallback 警告路径的 click 同样生效。
-    // press（Enter 提交）与 click 同族——提交后同样有导航/重渲染落定期。
+    // Post-click quiet period: the pre-action stability checks (waitForStable/waitTargetEnabled) can't catch "the click succeeded
+    // but its effect was wiped by a later async re-render" (prod228 14dd97e2/e3f9a616: the row click landed 275ms before
+    // the Search response arrived; once it did, the el-table re-render cleared the current-row selection and the next step
+    // waited for Modify until target-disabled). Best-effort wait for settle, never fails the step; also applies to clicks on the dom-fallback warning path.
+    // press (Enter submit) is the same family as click — a submit also has a navigation/re-render settle window.
     if (action.kind === 'click' || action.kind === 'press') await waitForDomQuiet(opts.page);
     return warning;
   } finally {
@@ -349,12 +349,12 @@ async function dispatch(action: StepAction, opts: DispatchOpts): Promise<string 
 }
 
 /**
- * 定位表达式里的变量替换：locator 的 value 常带数据集变量（如 waitFor text={{expectedError}}）。
+ * Variable substitution in locator expressions: a locator's value often carries dataset variables (e.g. waitFor text={{expectedError}}).
  *
- * 2026-10-26 prod228 实测踩过的坑：waitFor / assertVisible 分支漏了替换，机械层实际在等
- * **字面文本 `{{expectedError}}`**——这个字符串永远不存在，于是「等错误提示出现」这一步
- * 必然 count=0 失败，进而把整步交给 AI 降级验收（AI 又倾向造现象 → 假通过）。
- * fill 分支早有替换（action.value），断言类分支则完全缺失——同类问题一次修齐。
+ * Gotcha measured on 2026-10-26 prod228: the waitFor / assertVisible branches missed substitution, so the mechanical layer was actually waiting for
+ * **the literal text `{{expectedError}}`** — a string that never exists, so the「wait for the error message to appear」step
+ * inevitably failed with count=0, handing the whole step to AI-fallback acceptance (where the AI tends to fabricate the phenomenon → false positive).
+ * The fill branch already substituted (action.value); the assertion branches lacked it entirely — the same class of problem fixed in one pass.
  */
 function substituteLocators(
   locator: Locator[] | undefined,
@@ -370,14 +370,14 @@ function substituteLocators(
   return { locator: out, missing };
 }
 
-/** 交互目标的有界就绪等待：目标元素（或其祖先 button——录制定位器常落在 button
- *  内的 span 上，disabled 属性在祖先）处于禁用/加载态时等它恢复。录制回放的快节奏步骤会
- *  抢跑页面加载（prod228 报告 2b64ba27：Modify 在表格 spinner 期被点，应用从未进入编辑
- *  模式）。已就绪零等待（一次 evaluate 开销）；探测失败（strict-mode 多匹配等）视为已就绪
- *  保持现状；到点仍禁用返回 false——调用方必须放弃操作（prod228 5b86de6e 实录：对仍禁用
- *  的 Modify 强点是无效点击，不进编辑态却继续走，引发 fill 超时+连锁降级；等不到宁可失败，
- *  交给 AI 降级或直接红，都比静默无效动作好）。预算 15s：MRM 编辑态激活实测可超 15s，
- *  5s 不够；只在目标真禁用时才轮询，健康应用零成本。 */
+/** Bounded readiness wait for interactive targets: while the target element (or its ancestor button — recorded locators often land
+ *  on a span inside a button, with the disabled attribute on the ancestor) is disabled/loading, wait for it to recover. The fast-paced steps of
+ *  recorded replay can outrun page loading (prod228 report 2b64ba27: Modify was clicked during the table's spinner phase and the app never entered
+ *  edit mode). Zero wait when already ready (one evaluate of overhead); a probe failure (strict-mode multi-match etc.) is treated as ready,
+ *  keeping current behavior; still disabled at the deadline → returns false — the caller must give up (prod228 5b86de6e record: force-clicking
+ *  a still-disabled Modify is an ineffective click that doesn't enter edit mode yet keeps going, triggering fill timeout + cascade fallback;
+ *  if it can't be waited out, failing is better — handing to AI fallback or going red outright both beat a silent no-op action). Budget 15s: MRM edit-mode
+ *  activation measured over 15s, so 5s isn't enough; polls only while the target is genuinely disabled — zero cost for healthy apps. */
 const WAIT_TARGET_ENABLED_MS = 15000;
 
 async function waitTargetEnabled(
@@ -403,21 +403,21 @@ async function waitTargetEnabled(
   const maxIters = Math.max(2, Math.ceil(timeoutMs / Math.max(1, pollMs)) + 5);
   for (let iter = 0; iter < maxIters && Date.now() < deadline; iter++) {
     const r = await notReady();
-    if (!r) return true; // false=已就绪；null=探不了（strict-mode 多匹配等）→ 按现状直接操作
+    if (!r) return true; // false=ready; null=unprobeable (strict-mode multi-match etc.) → operate as-is
     await page.waitForTimeout(pollMs).catch(() => undefined);
   }
-  return false; // 到点仍禁用：调用方放弃操作
+  return false; // still disabled at the deadline: the caller gives up
 }
 
 async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<string | undefined> {
   const { page, vars } = opts;
-  // 帧链解析：带 frameChain 的步骤在目标 frame 上下文执行；解析失败宁失败不误定位
-  // （无链回落顶层文档会在错误目标上执行）。页级语义（navigate/switchTab/页级断言）不带链，恒为 page。
-  // 'in' 守卫：13 个 DOM 动作声明了 frameChain（可选），navigate/switchTab 等无此字段。
+  // Frame-chain resolution: steps with frameChain execute in the target frame's context; on resolution failure, fail outright rather than mis-target
+  // (falling back to the top document without a chain would execute on the wrong target). Page-level semantics (navigate/switchTab/page-level assertions) carry no chain and are always page.
+  // The 'in' guard: 13 DOM actions declare frameChain (optional); navigate/switchTab etc. lack the field.
   const root: Page | Frame = 'frameChain' in action && action.frameChain?.length
     ? await resolveFrameRoot(page, action.frameChain)
     : page;
-  // 交互动作前置稳定性检查；不稳定且 DOM 降级成功时以 warning 短路返回。
+  // Pre-execution stability check for interactive actions; on instability with a successful DOM fallback, short-circuits with a warning.
   if (INTERACTIVE_KINDS.includes(action.kind)) {
     const stableWarning = await ensureStable(action, opts, root);
     if (stableWarning) return stableWarning;
@@ -426,7 +426,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     case 'navigate': {
       const { value, missing } = substituteVars(action.url, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${action.url}")`);
-      // 相对 url(/开头)拼用例绑定 web 服务 origin;绝对直通;其余形态报错(spec 2026-10-16)。
+      // Relative urls (leading /) get joined onto the case's bound web service origin; absolute pass through; other shapes error (spec 2026-10-16).
       const target = value.startsWith('/')
         ? `${opts.ctx.caseWebOrigin ?? ''}${value}`
         : value;
@@ -434,28 +434,28 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         throw new Error(`invalid-navigate-url: ${target}${value.startsWith('/') ? '(环境未配置 web 服务,无法拼接相对地址)' : ''}`);
       }
       await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      // navigate 同样需要等 SPA hydrate 后再让后续步骤探测元素（与 init-goto 行为对齐）。
+      // navigate also waits for SPA hydration before later steps probe elements (aligned with init-goto).
       await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
       return;
     }
     case 'click':
       try {
-        // React 受控表单的 button 经常在 onChange → setState → re-render 之前仍是 disabled。
-        // 这里用 force: true 跳过 enabled 检查直接 click（按钮在 click 时只要 password state 非空就能触发 submit）。
-        // 但抢跑真实加载态会丢点击（见 waitTargetEnabled 注释）——先有界等目标恢复；
-        // 到点仍禁用则抛错放弃：对禁用元素强点是无效操作，宁失败不误做（5b86de6e 实录）。
+        // React controlled forms' buttons often remain disabled until onChange → setState → re-render.
+        // Here force: true skips the enabled check and clicks directly (a button triggers submit on click as long as the password state is non-empty).
+        // But outrunning a genuine loading state loses the click (see the waitTargetEnabled comment) — first do a bounded wait for recovery;
+        // if still disabled at the deadline, throw and give up: force-clicking a disabled element is a no-op — prefer failing over doing it wrongly (5b86de6e record).
         const clickLoc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
         if (!(await waitTargetEnabled(page, clickLoc))) {
           throw new Error(`target-disabled: 目标等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，拒绝无效强点`);
         }
-        // clickCount: 2/3 = 双击/三连击（录制器捕获原生 dblclick 时置 2）；缺省 1 与历史行为一致。
+        // clickCount: 2/3 = double/triple click (set to 2 when the recorder captures a native dblclick); default 1 matches historical behavior.
         await clickLoc.click({ timeout: 5000, force: true, clickCount: action.clickCount ?? 1 });
       } catch (e) {
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
           const loc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
-          // 不能裸 first()：Element-UI 在 .el-table 首子节点渲染 display:none 的 .hidden-columns
-          // 模板克隆（.el-table__fixed 里还有隐藏克隆），DOM 顺序早于真实元素，first() 会抓到
-          // 不可见副本等 5s 超时（规则查看 回测根因）。与 assertVisible 兜底同款 visible 过滤。
+          // No bare first(): Element-UI renders a display:none .hidden-columns template clone as .el-table's first child
+          // (.el-table__fixed holds hidden clones too), which precedes the real element in DOM order, so first() grabs
+          // an invisible copy and times out after 5s (the 规则查看 replay root cause). Same visible filtering as the assertVisible fallback.
           await loc.filter({ visible: true }).first().click({ timeout: 5000, clickCount: action.clickCount ?? 1 });
           return;
         }
@@ -463,9 +463,9 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       }
       return;
     case 'scroll': {
-      // 绝对位置滚动：locator 指实际滚动容器（窗口级滚动录的是 document.scrollingElement）。
-      // evaluate 设 scrollTop/scrollLeft，浏览器自动钳到内容边界 → 回放与起点无关、确定性。
-      // 只读位置写入，不需要稳定性检查/strict 兜底。
+      // Absolute-position scrolling: the locator points at the actual scrolling container (window-level scrolling records document.scrollingElement).
+      // evaluate sets scrollTop/scrollLeft and the browser clamps to content bounds automatically → replay is deterministic and independent of the starting point.
+      // A read-only position write; no stability check/strict fallback needed.
       const scrollLoc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       await scrollLoc.evaluate(
         (el, [top, left]) => { el.scrollTop = top; el.scrollLeft = left; },
@@ -495,19 +495,19 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         throw new Error(`target-disabled: 输入框等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，无法填入`);
       }
       try {
-        // React 受控表单：fill() 只改 DOM value，onChange 不一定冒泡。
-        // 先 fill('')，再用 pressSequentially 模拟真实键入，确保组件重新计算 state（disabled 状态、错误信息等）。
+        // React controlled forms: fill() only changes the DOM value; onChange doesn't necessarily fire.
+        // fill('') first, then pressSequentially to simulate real typing, ensuring the component recomputes state (disabled status, error messages, etc.).
         await fillLoc.fill('', { timeout: 5000 });
         await fillLoc.pressSequentially(value, { delay: 20 });
-        // 触发 blur 让 onChange 提交（Antd 等库在 blur 时同步校验/格式化）
-        // 但目标是「已展开下拉的过滤框」时不能失焦：blur 会清空查询词、关掉候选列表
-        // （远程搜索下拉致命），保持焦点与面板，后续步骤才能点中候选。
+        // Trigger blur so onChange commits (Antd and friends validate/format synchronously on blur)
+        // but the target being an「expanded dropdown's filter box」must not blur: blur clears the query text and closes the candidate list
+        // (fatal for remote-search dropdowns); keeping focus and the panel open lets later steps click a candidate.
         if (!(await isOpenDropdownFilter(fillLoc))) {
           await page.keyboard.press('Tab').catch(() => undefined);
         }
       } catch (e) {
-        // strict-mode violation（getByRole 命中多个同名元素）→ 退到可见匹配的 first()
-        // （visible 过滤防隐藏克隆劫持，同 click 兜底）
+        // strict-mode violation (getByRole hits multiple same-named elements) → fall back to the visible match's first()
+        // (visible filtering guards against hidden-clone hijacking, same as the click fallback)
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
           await fillLoc.filter({ visible: true }).first().fill(value, { timeout: 5000 });
           return;
@@ -517,9 +517,9 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'press': {
-      // 2026-11-04: 录制器捕获的输入框内按键（Enter 提交等）。与 fill 同构：
-      // tryFirstMatch → 禁用态有界等待 → strict violation 兜底 visible first()。
-      // 不进 DOM_FALLBACK_KINDS：合成 KeyboardEvent 触发不了浏览器原生表单提交，降级不可靠。
+      // 2026-11-04: in-input key presses captured by the recorder (Enter submit etc.). Isomorphic with fill:
+      // tryFirstMatch → bounded wait for the disabled state → strict violation fallback to visible first().
+      // Not in DOM_FALLBACK_KINDS: a synthetic KeyboardEvent can't trigger the browser's native form submit, so fallback is unreliable.
       const pressLoc = await tryFirstMatch(page, root, action.locator, action.intentLocator, opts.hitSink, repairFor(opts, action));
       if (!(await waitTargetEnabled(page, pressLoc))) {
         throw new Error(`target-disabled: 目标等待 ${WAIT_TARGET_ENABLED_MS}ms 仍处禁用/加载态，无法按键`);
@@ -540,8 +540,8 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       try {
         await hoverLoc.hover({ timeout: 5000 });
       } catch (e) {
-        // strict-mode violation（文本/role 命中多个元素，录制场景常见：表格里重复的日期、同名链接）
-        // → 退到可见匹配的 first()，与 click/fill 的兜底一致（visible 过滤防隐藏克隆劫持）。
+        // strict-mode violation (text/role hits multiple elements; common in recorded scenarios: repeated dates in tables, same-named links)
+        // → fall back to the visible match's first(), consistent with the click/fill fallbacks (visible filtering guards against hidden-clone hijacking).
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
           await hoverLoc.filter({ visible: true }).first().hover({ timeout: 5000 });
           return;
@@ -551,18 +551,18 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'waitFor': {
-      // 空定位 = 固定时长等待（不等待任何元素），睡满 timeoutMs。
+      // Empty locator = fixed-duration wait (waiting on no element), sleeping the full timeoutMs.
       if (!action.locator || action.locator.length === 0) {
         await page.waitForTimeout(action.timeoutMs ?? 5000);
         return;
       }
-      // 定位值可能是数据集变量（text={{expectedError}}）——不替换则等的是字面模板串，必然超时。
+      // The locator value may be a dataset variable (text={{expectedError}}) — without substitution it waits on the literal template string and always times out.
       const { locator: waitLoc, missing: waitMissing } = substituteLocators(action.locator, vars);
       if (waitMissing.length > 0) {
         throw new Error(`var-missing: {{${waitMissing[0]!}}} (locator="${action.locator[0]?.value}")`);
       }
-      // tryFirstMatch 的 count() 是单帧探测：waitFor 语义是「等元素出现」，
-      // 点击/导航后元素尚不存在时必须轮询重试，否则 t=0 探测一次 count=0 立即失败。
+      // tryFirstMatch's count() is a single-frame probe: waitFor's semantics are「wait for the element to appear」,
+      // so after a click/navigation when the element doesn't exist yet it must poll and retry; otherwise a single t=0 probe with count=0 fails immediately.
       const timeoutMs = action.timeoutMs ?? 5000;
       const deadline = Date.now() + timeoutMs;
       let lastErr: unknown;
@@ -589,10 +589,10 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
           throw new Error(`assertVisible failed: ${assertLocArr[0]?.value}`);
         }
       } catch (e) {
-        // strict-mode violation（text/role 命中多个元素，如表格列头+筛选区同名文本）
-        // → 退到「任一匹配可见」即通过，与 click/fill/hover 的兜底一致。
-        // 注意不能只查 first()：Element-UI 固定列会在 .el-table__fixed 里渲染隐藏克隆，
-        // DOM 顺序靠前的匹配可能是 visibility:hidden 的副本，必须过滤后再判。
+        // strict-mode violation (text/role hits multiple elements, e.g. same-named text in a table column header + the filter area)
+        // → fall back to「any match visible」passing, consistent with the click/fill/hover fallbacks.
+        // Note you can't just check first(): Element-UI fixed columns render hidden clones in .el-table__fixed,
+        // and DOM-earlier matches may be visibility:hidden copies — must filter before judging.
         if (e instanceof Error && /strict mode violation/.test(e.message)) {
           if (!(await assertLoc.filter({ visible: true }).first().isVisible())) {
             throw new Error(`assertVisible failed: ${assertLocArr[0]?.value}`);
@@ -607,7 +607,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       const a = action as StepAction & { kind: 'assertText' };
       const { value, missing } = substituteVars(a.equals, vars);
       if (missing.length > 0) throw new Error(`var-missing: {{${missing[0]!}}} (template="${a.equals}")`);
-      // 定位值可能带数据集变量（text={{expectedError}}）——不替换则找不到目标元素。
+      // The locator value may carry a dataset variable (text={{expectedError}}) — without substitution the target element can't be found.
       const { locator: assertLocArr, missing: locMissing } = substituteLocators(a.locator, vars);
       if (locMissing.length > 0) {
         throw new Error(`var-missing: {{${locMissing[0]!}}} (locator="${a.locator[0]?.value}")`);
@@ -685,22 +685,22 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     case 'switchTab': {
       let target = opts.ctx.tabMap?.get(action.tabRef);
       if (!target) {
-        // 模糊匹配兜底：tabMap 未命中时取 context 中最后一个 page。
+        // Fuzzy-match fallback: when tabMap misses, take the last page in the context.
         try {
           const pages = page.context().pages();
           if (pages.length > 0) target = pages[pages.length - 1]!;
         } catch {
-          // context 不可用（已关闭/测试桩）→ 维持 tab-missing 语义
+          // context unavailable (closed/test stub) → keep the tab-missing semantics
         }
         if (!target) throw new Error(`tab-missing: ${action.tabRef}`);
         opts.ctx.tabMap?.set(action.tabRef, target);
         await target.bringToFront();
-        // 后续步骤（含截图）都落在切换后的页面上。
+        // Subsequent steps (incl. screenshots) all land on the switched-to page.
         opts.page = target;
         return 'tab-fuzzy-match';
       }
       await target.bringToFront();
-      // 后续步骤（含截图）都落在切换后的页面上。
+      // Subsequent steps (incl. screenshots) all land on the switched-to page.
       opts.page = target;
       return;
     }
@@ -725,22 +725,22 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         const m = matches[0]!;
         resolved = group === 0 ? (m[0] ?? '') : (m[group] ?? '');
       }
-      // completeValue 与 smartExtract 都用 raw；smartExtract 已编译为 regex 但保留 mode 字段以便 UI 标注
+      // completeValue and smartExtract both use raw; smartExtract is compiled to regex but keeps the mode field for UI labeling
       vars[action.varName] = resolved;
       return;
     }
     case 'aiTask': {
       const { value, missing } = substituteVars(action.instruction, vars);
-      // 凭据占位符不来自数据集 vars（substituteVars 对 {{ITEST_USERNAME}} 恒报 missing）：
-      // 只缺凭据不算缺变量——由 valueSub 在动作执行时刻替换真实值；缺真实变量仍按 var-missing 判死。
+      // Credential placeholders don't come from dataset vars (substituteVars always reports {{ITEST_USERNAME}} missing):
+      // missing credentials alone isn't a missing variable — valueSub substitutes the real value at action-execution time; a missing real variable is still judged dead as var-missing.
       const realMissing = missing.filter((m) => !referencesCredential(m));
       if (realMissing.length > 0) {
         throw new Error(`var-missing: {{${realMissing[0]!}}} (template="${action.instruction}")`);
       }
       const preErr = credentialPreflightError(value, opts.ctx);
       if (preErr) throw preErr;
-      // 运行时动作缓存（自动挡固化）：可缓存 = DB 步骤（UUID stepId）+ 用例回放上下文
-      // + 非验证码（每次必须真识别）+ 指令无数据集变量（缓存值含物化数据，跨行复用必错）。
+      // Runtime action cache (automatic-solidify): cacheable = a DB step (UUID stepId) + a case-replay context
+      // + non-captcha (every run must genuinely recognize) + an instruction with no dataset variables (cached values hold materialized data; cross-row reuse is always wrong).
       const cacheable = !!opts.caseId && !!opts.stepId && UUID_RE.test(opts.stepId)
         && !CAPTCHA_TASK_RE.test(action.instruction)
         && value === action.instruction;
@@ -749,13 +749,13 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         if (cached && cached.length > 0) {
           let cacheDiverged = false;
           try {
-            // 缓存动作经完整 dispatch：稳定性检查 / 多候选探测 / DOM 降级 / hitSink 全部生效。
+            // Cached actions go through the full dispatch: stability check / multi-candidate probing / DOM fallback / hitSink all take effect.
             for (const sub of cached) await dispatch(sub, opts);
             void bumpAiTaskCacheHit(opts.stepId!).catch(() => undefined);
             if (opts.cacheSink) opts.cacheSink.current = true;
             return `aiTask(缓存命中): ${cached.length} 个机械动作`;
           } catch {
-            // 页面分叉：静默回退 AI 重做（自愈），成功后覆写缓存。
+            // Page diverged: silently fall back to an AI redo (self-heal); overwrite the cache on success.
             cacheDiverged = true;
           }
           if (cacheDiverged && opts.healedSink) opts.healedSink.current = true;
@@ -768,17 +768,17 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         onAction: (a, ok) => { if (ok) collected.push(a); },
       };
       if (opts.aiUsage) aiOpts.onUsage = (r) => opts.aiUsage!.add(r);
-      // 凭据能力按需授予：只有指令显式引用凭据占位符才挂 valueSub / 资源清单。
-      // 无条件挂载会让 AI 看到占位符形态后主动去重填账号/密码框——负向用例（超长/非法账号）
-      // 会被"修正"成环境真实凭据从而真登录成功（2026-10-26 prod228 实测：含凭据段时 AI 会输出
-      // fill __ITEST_USERNAME@web__；不含则只填字面量）。
+      // Credential capability granted on demand: valueSub / the resource manifest mount only when the instruction explicitly references a credential placeholder.
+      // Unconditional mounting lets the AI see the placeholder form and actively refill the account/password boxes — negative cases (overlong/illegal accounts)
+      // get "corrected" to the environment's real credentials and genuinely log in (2026-10-26 prod228 measured: with the credential section the AI outputs
+      // fill __ITEST_USERNAME@web__; without it, only literals).
       if (referencesCredential(value)) {
         aiOpts.valueSub = aiCredentialSub(opts.ctx, await resolveStepSecretForAi(opts.ctx, opts.stepId, value));
         if (resourceManifest) aiOpts.resourceManifest = resourceManifest;
       }
       const summary = await runAiTask(opts.page, value, client, undefined, aiOpts);
-      // 验证码类指令：登记多轮验证上下文。提交（后续 click 步骤）若被系统判验证码错误/过期，
-      // 执行器自动重新识别（失败后验证码通常已被前端换新）并重新提交，而非直接判用例失败。
+      // Captcha-class instructions: register the multi-round verification context. If the submit (a later click step) is judged wrong/expired captcha by the system,
+      // the executor automatically re-recognizes (the captcha is usually refreshed by the frontend after a failure) and resubmits, instead of failing the case outright.
       if (CAPTCHA_TASK_RE.test(value)) {
         opts.ctx.captchaRetry = { hint: action.intentLocator?.semanticRole ?? null, roundsLeft: CAPTCHA_RETRY_ROUNDS };
       }
@@ -791,7 +791,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return summary ? `aiTask: ${summary}` : undefined;
     }
     case 'sql': {
-      // 查被测系统自己的库。dbRef 缺省 = 环境默认 db 对象。
+      // Queries the SUT's own database. dbRef absent = the environment's default db object.
       const envCtx = opts.ctx.envCtx;
       if (!envCtx) {
         const e = new Error('env-db-missing: 当前环境未配置数据库连接');
@@ -806,11 +806,11 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
         vars: opts.vars,
         dbRef: envCtx.resolveDb(dbRef)?.label ?? null,
       });
-      // 绑定参数值可能含数据集敏感列的值，落报告前打码（SQL 文本是占位符形态，本身不含明文）。
+      // Bound parameter values may contain sensitive dataset column values; masked before landing in the report (the SQL text is placeholder-shaped and holds no plaintext itself).
       if (result.params && opts.ctx.sensitiveVarKeys?.length) {
         result.params = maskSqlParams(result.params, opts.vars, opts.ctx.sensitiveVarKeys);
       }
-      // 先写 sink 再判断言：断言失败时报告里仍要能看到 rows
+      // Write the sink before judging the assertion: the rows must still be visible in the report when the assertion fails
       if (opts.sqlSink) opts.sqlSink.current = result;
       if (result.assertion && !result.assertion.matched) {
         const e = new Error('sql assertion failed'); e.name = 'SqlAssertionFailed'; throw e;
@@ -820,14 +820,14 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     case 'observeLog': {
       const a = action as StepAction & { kind: 'observeLog' };
       const envCtx = opts.ctx.envCtx;
-      // 显式 syslogRef 落空即硬错误，绝不静默回落默认——连错机器会读到别人的日志，
-      // 断言误判比直接失败更难排查。
+      // An explicit syslogRef miss is a hard error, never a silent fallback to the default — connecting to the wrong machine reads someone else's logs,
+      // and a misjudged assertion is far harder to troubleshoot than an outright failure.
       const conn = envCtx?.resolveSyslog(a.syslogRef ?? null);
       if (!conn) {
         const ref = a.syslogRef ?? null;
         const available = envCtx?.syslogs.map((s) => s.label).join('、') || '(无)';
-        // 空 ref 且默认 syslog 存在但不完整 → 点名它并说明缺什么，
-        // 不能说「未配置任何 syslog 对象」——那句与同句的可用清单自相矛盾。
+        // Empty ref and the default syslog exists but is incomplete → name it and state what's missing,
+        // never say「未配置任何 syslog 对象」(no syslog objects configured) — that sentence contradicts the available list in the same message.
         const defaultIncomplete = !ref && (envCtx?.syslogs.length ?? 0) !== 0 && !envCtx?.syslog;
         const e = new Error(
           defaultIncomplete
@@ -849,10 +849,10 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
     }
     case 'httpRequest': {
       const result = await runHttpRequest({ action, page: opts.page, vars: opts.vars });
-      // saveAs 提取的变量写回 vars，后续步骤 {{var}} 可消费
+      // Variables extracted via saveAs are written back to vars for later steps' {{var}} consumption
       if (result.saved) opts.vars[result.saved.varName] = result.saved.value;
       if (result.assertion && !result.assertion.matched) {
-        // 先把结果写到 sink，调用方即便抛错也能在 step.result.http 里看到请求/响应
+        // Write the result to the sink first so the caller still sees the request/response in step.result.http even when throwing
         if (opts.httpSink) opts.httpSink.current = result;
         const e = new Error('httpRequest assertion failed'); e.name = 'HttpRequestAssertionFailed'; throw e;
       }
@@ -860,7 +860,7 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
       return;
     }
     case 'sendSyslog': {
-      // UDP/TCP 发送（不依赖 page）；失败（连不上/超时）向上抛由统一失败路径处理
+      // UDP/TCP send (page-independent); failures (unreachable/timeout) propagate up to the unified failure path
       const result = await runSendSyslog({ action, vars: opts.vars });
       if (opts.syslogSink) opts.syslogSink.current = result;
       return;
@@ -868,23 +868,23 @@ async function dispatchInner(action: StepAction, opts: DispatchOpts): Promise<st
   }
 }
 
-/** 把 test_steps.assertion 规整为 dispatch 认识的 StepAction；非法形态返回 undefined 表示跳过断言。
- *  Track 1：target:'page' + match:'contains' + 空 locator 的「整页模糊文本断言」一律跳过；
- *  AI 写出来的描述性断言（"登录表单正常展示"等）正是这个形态，过滤后回放不再因 page innerText 命中失败。
- *  真正的元素断言（specifiedElement + 非空 locator）继续生效。 */
+/** Normalizes test_steps.assertion into a StepAction dispatch understands; invalid shapes return undefined meaning skip the assertion.
+ *  Track 1: the「whole-page fuzzy text assertion」shape (target:'page' + match:'contains' + empty locator) is always skipped;
+ *  descriptive assertions written by the AI ("登录表单正常展示" etc.) are exactly this shape, and after filtering, replay no longer fails on page innerText misses.
+ *  Real element assertions (specifiedElement + non-empty locator) keep working. */
 function normalizeStepAssertion(raw: unknown): StepAction | undefined {
   if (raw == null) return undefined;
   const migrated = migrateAssertion(raw);
   if (!migrated || typeof migrated !== 'object') return undefined;
-  // 只放行 assertText（唯一支持的步骤级断言类型）；其它 kind 当作未设置以免污染错误信息。
+  // Only assertText passes (the sole supported step-level assertion type); other kinds are treated as unset to keep error messages clean.
   if ((migrated as { kind?: string }).kind !== 'assertText') return undefined;
   const a = migrated as StepAction & { target?: string; match?: string; locator?: ReadonlyArray<unknown> };
-  // 整页模糊文本断言 → 跳过（用例级 expectedOutcome + vision 才是终态判定）
+  // Whole-page fuzzy text assertion → skip (the case-level expectedOutcome + vision is the final-state verdict)
   if (a.target === 'page' && (a.locator?.length ?? 0) === 0) return undefined;
   return migrated as StepAction;
 }
 
-/** 依命中的候选 kind 反解出可读的定位表达式（用于报告展示）。 */
+/** Reverse-resolves a readable locator expression from the hit candidate kind (for report display). */
 function locatorForCandidate(locator: Locator[], intent: IntentLocator | undefined, kind: string): string {
   if (kind === 'intent-testid' && intent?.semanticRole) return `[data-testid="${intent.semanticRole}"]`;
   if (kind === 'intent-text' && intent?.contextText) return `text=${intent.contextText}`;
@@ -899,17 +899,17 @@ function locatorForCandidate(locator: Locator[], intent: IntentLocator | undefin
   return kind;
 }
 
-/** tryFirstMatch 探测视角的 locator 形状：count() 探测存在性，filter({visible}) 取可见子集。 */
+/** The locator shape as tryFirstMatch probes it: count() probes existence, filter({visible}) takes the visible subset. */
 interface ProbeLocator {
   count?: () => Promise<number>;
   filter?: (opts: { visible: boolean }) => ProbeLocator;
 }
 
 /**
- * 三层定位候选顺序尝试；任一成功即返回。所有候选失败抛错。
- * 使用 buildCandidates 构造候选；优先用 intent.testid / contextText，再稳定 #id CSS，最后是 XPath / 其它 CSS。
- * 候选探测通过 count()，避免后续动作（如 click）抛错；text/role 路径可能没有 count()，接受即成功。
- * 命中时把候选 kind/value 写入 hitSink（若提供），供 step 结果记录 hitLocator。
+ * Tries locator candidates in order, three tiers; returns on the first success. Throws when all candidates fail.
+ * Builds candidates via buildCandidates: intent.testid / contextText first, then stable #id CSS, finally XPath / other CSS.
+ * Candidates probe via count() so later actions (e.g. click) don't throw; text/role paths may lack count() and succeed on acceptance.
+ * On hit, writes the candidate's kind/value into hitSink (if provided) for the step result's hitLocator.
  */
 async function tryFirstMatch(
   page: Page,
@@ -919,17 +919,17 @@ async function tryFirstMatch(
   hitSink?: { current: HitLocator | null },
   repairLoc?: Locator | null,
 ): Promise<ReturnType<Page['locator']>> {
-  // 2026-10-07: mobile-only locator strategy 在 web engine dispatcher 中标 unsupported,
-  // 避免误用(如 web case 误用 accessibilityId 命中空节点导致 fail)。
-  // 这里 guard 早于 buildCandidates：buildCandidates 是纯 web 形态,接受 mobile-only strategy 会误生成 css 候选,
-  // 因此直接在此处抛错。MobileEngine 不走 buildCandidates,不会受影响。
+  // 2026-10-07: mobile-only locator strategies are marked unsupported in the web engine dispatcher,
+  // guarding against misuse (e.g. a web case using accessibilityId, hitting an empty node and failing).
+  // This guard runs before buildCandidates: buildCandidates is purely web-shaped; accepting a mobile-only strategy would wrongly generate css candidates,
+  // so it throws right here. MobileEngine doesn't go through buildCandidates and is unaffected.
   for (const l of locator) {
     if (l.strategy === 'accessibilityId' || l.strategy === 'label' || l.strategy === 'predicate') {
       throw new Error(`locator strategy '${l.strategy}' is mobile-only; cannot run on web engine`);
     }
   }
   const cands = buildCandidates(root, { locator, intentLocator, repair: repairLoc });
-  // hitSink 展示值：修复缓存候选不在作者 locator 数组里，直接用其 DSL value；其余反查。
+  // hitSink display value: repair-cache candidates aren't in the author's locator array, so use their DSL value directly; reverse-lookup for the rest.
   const hitFor = (c: { kind: string; src?: string }): HitLocator => ({
     kind: c.kind,
     value: c.kind === 'repair-cache' ? (c.src ?? '') : locatorForCandidate(locator, intentLocator, c.kind),
@@ -937,35 +937,35 @@ async function tryFirstMatch(
   if (cands.length === 0) {
     throw new Error('locator array is empty');
   }
-  // 2026-10-10: 候选探测从「单候选 count=0 后单次 150ms 重试」改为有界轮询窗口——
-  // 首轮立即按序探测全部候选,全部落空则每 250ms 轮转再探,任一命中即返回,最多 12 轮(≈3s)。
-  // 根因一(a11y 滞后,150ms 够用):playwright 的 count() 走 a11y 树,rebuild 是 lazy 的,
-  //   networkidle 后 DOM 已渲染但 a11y 树可能滞后 ~100-200ms(实测 SOC 登录页 150ms 后变 1)。
-  // 根因二(SPA 挂载滞后,150ms 差一个数量级):深链路由挂载在 networkidle 后仍可持续秒级,
-  //   实测 8a178d83 回测 step-1 探测放弃约 2s 后页面才挂载完成(失败截图已是完整渲染页)。
-  // 用轮数上限而非墙钟 deadline:窗口语义固定(12×250ms≈3s),且测试里 mock 的 waitForTimeout
-  // 不推进墙钟,墙钟 deadline 会死循环。探测异常按该轮落空处理进下一轮(瞬时错误可自愈);
-  // 无 count() 的候选(如 getByText 路径)保持直接接受。
+  // 2026-10-10: candidate probing changed from "single candidate, one 150ms retry after count=0" to a bounded polling window —
+  // the first round probes all candidates in order immediately; on a total miss it re-probes in rotation every 250ms, returning on any hit, up to 12 rounds (≈3s).
+  // Root cause one (a11y lag; 150ms suffices): playwright's count() walks the a11y tree whose rebuild is lazy —
+  //   after networkidle the DOM is rendered but the a11y tree may lag ~100-200ms (measured: the SOC login page turned to 1 after 150ms).
+  // Root cause two (SPA mount lag; 150ms off by an order of magnitude): deep-link route mounting can keep running for seconds after networkidle —
+  //   measured on the 8a178d83 replay: probing gave up on step-1 about 2s before the page finished mounting (the failure screenshot already showed a fully rendered page).
+  // A round cap rather than a wall-clock deadline: the window semantics are fixed (12×250ms≈3s), and mocked waitForTimeout in tests
+  // doesn't advance the wall clock, where a wall-clock deadline would spin forever. Probe exceptions are treated as that round's miss and flow into the next (transient errors can self-heal);
+  // candidates without count() (e.g. the getByText path) keep being accepted directly.
   let lastErr: unknown;
   for (let round = 0; round < LOCATOR_PROBE_ROUNDS; round++) {
     if (round > 0) await page.waitForTimeout(LOCATOR_PROBE_INTERVAL_MS);
     for (const c of cands) {
       const probe = c.loc as unknown as ProbeLocator;
       if (!probe || typeof probe.count !== 'function') {
-        // 没有 count()（如 getByText 路径）直接接受
+        // No count() (e.g. the getByText path): accept directly
         if (hitSink) hitSink.current = hitFor(c);
         await annotateAction(page, () => c.loc.boundingBox().catch(() => null));
         return c.loc;
       }
       const n = await probe.count().catch((e) => { lastErr = e; return -1; });
       if (n > 0) {
-        // 2026-10-10 Fix C（可见性感知探测）: raw 命中后还需存在「可见」实例才返回,
-        // 并把可见子集交给后续动作。Element-UI 固定列/模板克隆会让链式选择器解析到
-        // 不可见副本,生产上有两种失败形态:
-        //  ① 单匹配不可见 → click 无坐标可算,~1s 抛 "Element is not visible"(克隆/导入导出);
-        //  ② force:true 点中不可见副本"通过"但实际无效果,后续步骤 count=0(查看/编辑)。
-        // 可见子集为空 → 视为本轮落空,继续轮询/下一候选(行重渲染竞态下下轮会出现可见实例);
-        // 可见性探测异常或 locator 无 filter() → 维持旧行为返回原 locator。
+        // 2026-10-10 Fix C (visibility-aware probing): after a raw hit, a「visible」instance must exist before returning,
+        // and the visible subset is handed to the subsequent action. Element-UI fixed columns/template clones make chained selectors resolve to
+        // invisible copies; production saw two failure shapes:
+        //  ① single match invisible → click has no coordinates to compute, throwing "Element is not visible" after ~1s (clone/import-export);
+        //  ② force:true clicking the invisible copy "passes" but has no real effect, and later steps hit count=0 (查看/编辑).
+        // Empty visible subset → treated as this round's miss; keep polling / move to the next candidate (a visible instance shows up next round under row re-render races);
+        // visibility probe failure or a locator without filter() → keep the old behavior and return the original locator.
         const visibleLoc = probe.filter?.({ visible: true });
         const vn = visibleLoc && typeof visibleLoc.count === 'function'
           ? await visibleLoc.count().catch((e) => { lastErr = e; return -1; })
@@ -985,9 +985,9 @@ async function tryFirstMatch(
   throw lastErr instanceof Error ? lastErr : new Error('all locator candidates failed');
 }
 
-/** 解析帧链单级：候选逐个探测（count→elementHandle→contentFrame），返回该 iframe 的 Frame。
- *  用 buildCandidates 复用候选构造（Frame 与 Page 的 locator/getBy* 同签名）。
- *  不用 FrameLocator：它无 count()/evaluate，strict 多匹配要等动作期才炸，且做不了逐候选探测。 */
+/** Resolves a single level of the frame chain: probes candidates one by one (count→elementHandle→contentFrame) and returns that iframe's Frame.
+ *  Reuses buildCandidates for candidate construction (Frame and Page share signatures for locator/getBy*).
+ *  FrameLocator is not used: it has no count()/evaluate, strict multi-matches only explode at action time, and it can't probe candidates one by one. */
 async function resolveFrameLevel(root: Page | Frame, candidates: Locator[]): Promise<Frame | null> {
   const cands = buildCandidates(root, { locator: candidates });
   let lastErr: unknown;
@@ -1006,9 +1006,9 @@ async function resolveFrameLevel(root: Page | Frame, candidates: Locator[]): Pro
   return null;
 }
 
-/** 解析步骤的 iframe 帧链 → 最内层 Frame（无链返回原 page）。逐级下钻；任一级候选全落空抛
- *  frame-unresolved——帧链是录制器对帧结构的确定性描述，落空说明页面结构已变，宁失败不误定位。
- *  导出供单测（mock root 注入）。 */
+/** Resolves a step's iframe frame chain → the innermost Frame (returns the original page with no chain). Drills level by level; any level whose candidates all miss throws
+ *  frame-unresolved — the frame chain is the recorder's deterministic description of the frame structure, so a miss means the page structure changed; fail outright rather than mis-target.
+ *  Exported for unit tests (mock root injection). */
 export async function resolveFrameRoot(page: Page, chain: FrameChain): Promise<Page | Frame> {
   let root: Page | Frame = page;
   for (let level = 0; level < chain.length; level++) {
@@ -1021,8 +1021,8 @@ export async function resolveFrameRoot(page: Page, chain: FrameChain): Promise<P
   return root;
 }
 
-/** resolveAssertTextActual: 根据 action.target 决定 actual 字符串的来源。
- *  root 仅 specifiedElement 分支使用（帧链解析出的 Frame）；page/url/errorMessage 是页级语义，恒看顶层 page。 */
+/** resolveAssertTextActual: decides the actual string's source from action.target.
+ *  root is used only by the specifiedElement branch (the Frame resolved from the frame chain); page/url/errorMessage are page-level semantics and always look at the top-level page. */
 async function resolveAssertTextActual(
   page: Page,
   root: Page | Frame,
@@ -1043,13 +1043,13 @@ async function resolveAssertTextActual(
     await loc.waitFor({ state: 'visible', timeout: 5000 });
     return (await loc.innerText({ timeout: 5000 })).trim();
   }
-  // specifiedElement（默认）
+  // specifiedElement (default)
   if (action.locator.length === 0) throw new Error('assertText: specifiedElement 模式需要 locator');
   const loc = await tryFirstMatch(page, root, action.locator, action.intentLocator, hitSink, repairLoc);
   return (await loc.innerText({ timeout: 5000 })).trim();
 }
 
-/** matchAssertText: 断言匹配规则（equals/contains/notContains/regex）。 */
+/** matchAssertText: assertion matching rules (equals/contains/notContains/regex). */
 function matchAssertText(actual: string, expected: string, match: 'equals' | 'contains' | 'notContains' | 'regex'): boolean {
   switch (match) {
     case 'equals': return actual.trim() === expected.trim();
@@ -1059,9 +1059,9 @@ function matchAssertText(actual: string, expected: string, match: 'equals' | 'co
   }
 }
 
-/** 验证码多轮验证：提交（click）后页面出现验证码失败提示时，重新识别并重新提交。
- *  兼容两类真实失败：LLM 识别错误、验证码过期——多数系统登录失败后前端自动换新验证码，
- *  直接识别当前图重试即可。轮数耗尽仍有失败提示 → 抛错判本步失败。返回 warning 文本。 */
+/** Multi-round captcha verification: when a captcha-failure notice appears after the submit (click), re-recognize and resubmit.
+ *  Covers both real failure modes: LLM recognition errors and expired captchas — most systems refresh the captcha on the frontend after a failed login,
+ *  so recognizing the current image and retrying suffices. Failure notice persisting after the rounds are exhausted → throw, failing the step. Returns warning text. */
 async function runCaptchaRetry(opts: DispatchOpts, clickActions: StepAction[]): Promise<string | undefined> {
   const pending = opts.ctx.captchaRetry;
   if (!pending) return undefined;
@@ -1069,14 +1069,14 @@ async function runCaptchaRetry(opts: DispatchOpts, clickActions: StepAction[]): 
   const notes: string[] = [];
   try {
     while (pending.roundsLeft > 0) {
-      // 给登录接口往返和错误提示渲染留时间
+      // Leaves time for the login API round-trip and the error notice to render
       await opts.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => undefined);
       await opts.page.waitForTimeout(600);
       const onUsage = opts.aiUsage ? (r: AiUsageAddend) => opts.aiUsage!.add(r) : undefined;
       if (!(await isCaptchaFailed(opts.page, client, onUsage))) break;
       pending.roundsLeft--;
       const round = CAPTCHA_RETRY_ROUNDS - pending.roundsLeft;
-      // 快路径一次 vision 调用（~10s，抢 TTL）；机械失败回落通用多轮回路。
+      // Fast path: one vision call (~10s, racing the TTL); on mechanical failure falls back to the generic multi-turn loop.
       const solved = await solveCaptchaOnce(opts.page, client, pending.hint, onUsage).catch(() => null)
         ?? await runAiTask(opts.page, '识别当前验证码图片中的字符并填入验证码输入框', client, undefined, onUsage ? { onUsage } : undefined).catch(() => null);
       if (!solved) {
@@ -1104,8 +1104,8 @@ async function runCaptchaRetry(opts: DispatchOpts, clickActions: StepAction[]): 
 
 export async function writeStepScreenshot(reportId: string, stepIndex: number, page: Page): Promise<string | undefined> {
   try {
-    // navigate/click 触发跳转后立即截图会拍到白屏（SPA 在 domcontentloaded 后才渲染）。
-    // 先等 networkidle 让渲染落地；带 2s 兜底，长连接页面等不到 idle 也不阻塞截图。
+    // Screenshotting right after a navigate/click-triggered navigation captures a white screen (SPAs render only after domcontentloaded).
+    // Wait for networkidle first to let rendering land; with a 2s fallback so long-connection pages that never idle don't block the screenshot.
     await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => undefined);
     const dir = join(SCREENSHOTS_DIR, reportId);
     await mkdir(dir, { recursive: true });
@@ -1118,10 +1118,10 @@ export async function writeStepScreenshot(reportId: string, stepIndex: number, p
   }
 }
 
-/** 每步后机械捕获页面文本快照（过程证据）：用例级 vision 判定等页面静默后才截终态图，
- *  toast 这类短时提示到那时已从 DOM 卸载——文本必须在它存活的窗口内由确定性代码采走。
- *  与步骤截图同一时刻捕获（writeStepScreenshot 之后）。折叠空白 + 截断控制判定 token 成本；
- *  纯读取 best-effort，失败返回 null 不影响步骤。 */
+/** Mechanically captures a page-text snapshot after each step (process evidence): the case-level vision verdict takes its final screenshot only after the page settles,
+ *  by which time short-lived notices like toasts have already unmounted from the DOM — the text must be gathered by deterministic code within its living window.
+ *  Captured at the same moment as the step screenshot (after writeStepScreenshot). Whitespace collapsing + truncation bound the verdict's token cost;
+ *  pure read, best-effort; returns null on failure without affecting the step. */
 export async function capturePageTextSnapshot(page: Page): Promise<string | null> {
   try {
     const raw = await page.evaluate(() => document.body?.innerText ?? '');
@@ -1132,9 +1132,9 @@ export async function capturePageTextSnapshot(page: Page): Promise<string | null
   }
 }
 
-/** 报告侧脱敏：把 text 中出现的敏感变量值全部替换为 ******。
- *  用 split/join 而非 RegExp，避免值里含正则元字符；
- *  按值长度降序替换，防止短值是长值子串时留下残段。 */
+/** Report-side masking: replaces every occurrence of sensitive variable values in text with ******.
+ *  Uses split/join rather than RegExp to avoid values containing regex metacharacters;
+ *  substitutes in descending value-length order so a short value that's a substring of a longer one leaves no residue. */
 export function maskSensitiveValues(text: string, vars: Record<string, string>, keys: readonly string[]): string {
   const vals = keys
     .map((k) => vars[k])
@@ -1145,8 +1145,8 @@ export function maskSensitiveValues(text: string, vars: Record<string, string>, 
   return out;
 }
 
-/** 报告侧脱敏：SQL 绑定参数值里可能含数据集敏感列的值（如按密码查用户）。
- *  SQL 文本本身是占位符形态（$n / ?）不含明文，只有 params 里的值需要打码。 */
+/** Report-side masking: SQL bound parameter values may contain sensitive dataset column values (e.g. looking up a user by password).
+ *  The SQL text itself is placeholder-shaped ($n / ?) with no plaintext; only the values inside params need masking. */
 function maskSqlParams(params: unknown[], vars: Record<string, string>, keys: readonly string[]): unknown[] {
   if (keys.length === 0) return params;
   return params.map((p) =>
@@ -1154,14 +1154,14 @@ function maskSqlParams(params: unknown[], vars: Record<string, string>, keys: re
   );
 }
 
-/** 行级预期物化：expectedOutcome 模板按当次运行最终 vars（数据集初始变量 + extract）替换后交 vision 判定。
- *  missing 保留字面量 —— vision 大概率不匹配 → 该行失败且报告可见原因，诚实失败优于静默跳过。 */
+/** Row-level expectation materialization: the expectedOutcome template is substituted with the run's final vars (dataset initial variables + extract) before the vision verdict.
+ *  missing keeps the literal — the vision verdict likely won't match → the row fails with a visible reason in the report; an honest failure beats a silent skip. */
 export function materializeExpectedOutcome(text: string, vars: Record<string, string>): string {
   return substituteVars(text, vars).value;
 }
 
-/** 深链落地判定用 URL 归一：origin+path 小写、去尾斜杠、去 search、保留 hash（qiankun 路由可能在 hash）。
- *  只归一 http(s)；about:blank 等非 http 形态原样返回（new URL('about:blank') 不抛错、origin 为字符串 "null"）。 */
+/** URL normalization for deep-link landing checks: origin+path lowercased, trailing slash stripped, search stripped, hash kept (qiankun routing may live in the hash).
+ *  Only http(s) is normalized; non-http shapes like about:blank return as-is (new URL('about:blank') doesn't throw and its origin is the string "null"). */
 export function normalizeUrlForLandedCheck(raw: string): string {
   if (!/^https?:\/\//i.test(raw)) return raw;
   try {
@@ -1172,11 +1172,11 @@ export function normalizeUrlForLandedCheck(raw: string): string {
   }
 }
 
-/** 页面「有实质内容」探针：body 存在且（有可见文本或已出现交互/媒体元素）。慢 SPA 冷启动时
- *  domcontentloaded + networkidle 后 body 可能仍是空壳（networkidle 在「HTML 已到、XHR 未发起」
- *  的安静窗口会假性提前放行）——prod228 报告 02c812ea：init-goto 后整页空白，第 1 步 locator
- *  3s 预算内 count=0。有界轮询（deadline + maxIters 双保险，模式同 waitForPageSettled：单测
- *  mock 墙钟不推进需迭代上限）；探测不可用（evaluate 缺失/抛错）立即放弃等待，绝不更差。 */
+/** Page「has substantive content」probe: body exists and (has visible text or interactive/media elements have appeared). On slow SPA cold starts
+ *  the body can still be an empty shell after domcontentloaded + networkidle (networkidle falsely releases early in the quiet window of「HTML arrived, XHR not yet fired」)
+ *  — prod228 report 02c812ea: after init-goto the whole page was blank and step 1's locator hit count=0 within its 3s budget. Bounded polling
+ *  (deadline + maxIters double insurance, same pattern as waitForPageSettled: mocked wall clocks in unit tests don't advance, so an iteration cap is needed);
+ *  when the probe is unusable (evaluate missing/throwing), give up waiting immediately — never worse than not waiting. */
 async function waitForPageSubstance(page: Page, timeoutMs = 8000, pollMs = 250): Promise<boolean> {
   const hasSubstance = async (): Promise<boolean | null> => {
     try {
@@ -1194,17 +1194,17 @@ async function waitForPageSubstance(page: Page, timeoutMs = 8000, pollMs = 250):
   const maxIters = Math.max(2, Math.ceil(timeoutMs / Math.max(1, pollMs)) + 5);
   for (let iter = 0; iter < maxIters && Date.now() < deadline; iter++) {
     const r = await hasSubstance();
-    if (r === null) return false; // 探不了（evaluate 缺失/抛错）→ 不等
+    if (r === null) return false; // unprobeable (evaluate missing/throwing) → don't wait
     if (r) return true;
     await page.waitForTimeout(pollMs).catch(() => undefined);
   }
   return false;
 }
 
-/** init goto + 落地校验重试：SPA 冷启动深链可能被前端静态兜底路由弹回首页（prod228 SOC
- *  permission.js 路由守卫竞态，2026-10-27 实录 6 轮中 1 轮被弹回）。goto 成功但最终 URL
- *  与目标不一致时重试一次——资源已缓存、shell 启动更快，通常能赢路由守卫竞态。仍不落地
- *  不阻断（返回 landed=false 交上层按现有语义继续），goto 自身抛错语义与裸 goto 完全一致。 */
+/** init goto + landed-check retry: an SPA cold-start deep link may be bounced back to the home page by the frontend's static fallback route (prod228 SOC
+ *  permission.js route-guard race; 2026-10-27 record: 1 of 6 runs was bounced). When goto succeeds but the final URL
+ *  differs from the target, retry once — resources are cached and the shell starts faster, usually winning the route-guard race. Still unlanded
+ *  doesn't block (returns landed=false for the upper layer to continue under existing semantics); goto's own throw semantics are identical to a bare goto. */
 export async function gotoWithLandedRetry(
   page: Page,
   targetUrl: string,
@@ -1212,12 +1212,12 @@ export async function gotoWithLandedRetry(
   const target = normalizeUrlForLandedCheck(targetUrl);
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    // SPA 就绪等待（与既有 init-goto 语义一致）：domcontentloaded 后 Vue/React 还在异步挂载。
+    // SPA readiness wait (same semantics as the existing init-goto): Vue/React still mounts asynchronously after domcontentloaded.
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
     const finalUrl = page.url();
     if (normalizeUrlForLandedCheck(finalUrl) === target) {
-      // URL 已落地但 SPA 可能仍在启动（body 空壳）——有界等内容出现再放行后续步骤；超时只
-      // 告警不阻断、也不触发第二轮 goto（重载 SPA 只会把启动推得更远）。
+      // The URL has landed but the SPA may still be starting (empty-shell body) — boundedly wait for content before releasing later steps; a timeout only
+      // warns without blocking and doesn't trigger a second goto (reloading an SPA only pushes its startup further out).
       if (!(await waitForPageSubstance(page))) {
         logger.warn({ targetUrl }, 'init goto 已落地但页面内容探针超时(可能仍在启动),继续执行');
       }
@@ -1227,8 +1227,8 @@ export async function gotoWithLandedRetry(
   return { landed: false, finalUrl: page.url() };
 }
 
-/** 在已持有的 browser context 中跑用例步骤：init-goto → preflight → 步骤循环 → vision 兜底。
- *  与 `executeCaseReal` 共享核心逻辑；区别是不负责 launch/newContext/close，调用方持有生命周期。 */
+/** Runs case steps inside an already-held browser context: init-goto → preflight → step loop → vision fallback.
+ *  Shares core logic with `executeCaseReal`; the difference is it doesn't own launch/newContext/close — the caller holds the lifecycle. */
 async function runStepsInContext(
   caseId: string,
   steps: Array<{
@@ -1239,9 +1239,9 @@ async function runStepsInContext(
     tabRef?: string | null;
     componentKind?: string | null;
     sensitive?: boolean | null;
-    /** 可执行 DSL 数组；回放唯一依据。空数组/null = 未编译,抛 compile-missing。 */
+    /** Executable DSL array; the sole replay source. Empty array/null = not compiled, throws compile-missing. */
     compiled?: unknown[] | null;
-    /** 行级自然语言指令；回放仅 AI 降级兜底用，机械回放不读。 */
+    /** Row-level natural-language instruction; replay reads it only for AI fallback, mechanical replay never does. */
     instruction?: string | null;
   }>,
   ctx: ExecContext,
@@ -1249,23 +1249,23 @@ async function runStepsInContext(
   targetUrl?: string,
   onPreflight?: (report: PreflightReport) => void,
   caseWindow?: CaseWindow,
-  /** 每步结束（passed/failed）后回调——供调用方增量落库，报告页轮询即可逐步看到结果。 */
+  /** Per-step callback (after passed/failed) — the caller persists incrementally; the report page polls and sees results step by step. */
   onStep?: (r: ExecStepResult) => void,
-  /** 失败即停钩子（verify_case 用）：失败 break 前携带失败步骤下标与当前页触发；钩子抛错忽略。 */
+  /** Stop-on-failure hook (verify_case): fired before the failure break with the failed step index and the current page; hook throws are ignored. */
   onFailurePage?: (page: Page, failedIndex: number) => Promise<void>,
 ): Promise<ExecStepResult[]> {
   const results: ExecStepResult[] = [];
   const vars: Record<string, string> = { ...(ctx.initialVars ?? {}) };
   const page = await context.newPage();
-  // playground 实时画面跟随：切换到本页（切换页 switchTab / 逐用例新 page 都会经过这里）。
+  // Playground live view follows: switch to this page (both switchTab switches and per-case new pages pass through here).
   ctx.liveView?.setPage(page);
-  // 页面就绪通知（verify_case 恢复续跑场景用它拿回机械回放创建的这个 page）。
+  // Page-ready notification (the verify_case resume path uses it to get back the page created by mechanical replay).
   ctx.onPageReady?.(page);
-  // 浏览器 console error / pageerror 采集：挂一次订阅，各步结果构造点 drain 切片归属
-  // （前端 JS 报错是"点击无反应/白屏"类失败的一手归因证据）。
+  // Browser console error / pageerror capture: one subscription; each step-result construction point drains its slice for attribution
+  // (frontend JS errors are first-hand attribution evidence for "click had no effect / white screen" class failures).
   const consoleCapture = createConsoleCapture(page);
-  // 初始导航：用例级 init URL（targetUrl）始终先 goto 一次。
-  // 若首条 step 也是 navigate 且 URL 与 init 相同，让 step 来做这一步，避免重复加载。
+  // Initial navigation: the case-level init URL (targetUrl) always gets one goto first.
+  // If the first step is also a navigate with the same URL as init, let the step do it to avoid a duplicate load.
   const firstCompiled = steps[0]?.compiled;
   const firstStepKind = (Array.isArray(firstCompiled) && firstCompiled.length > 0
     ? (firstCompiled[0] as { kind?: string } | undefined)?.kind
@@ -1281,17 +1281,17 @@ async function runStepsInContext(
       })();
   let initLanded = false;
   if (targetUrl && !firstStepIsSameNav) {
-    // goto + 落地校验重试（SPA 深链冷启动可能被前端兜底路由弹回首页，重试一次通常能赢竞态；
-    // 等待语义与注释见 gotoWithLandedRetry）。仍不落地不阻断——失败页证据会暴露真实位置。
+    // goto + landed-check retry (an SPA deep-link cold start may be bounced back to the home page by the frontend's fallback route; one retry usually wins the race;
+    // wait semantics and comments in gotoWithLandedRetry). Still unlanded doesn't block — the failure-page evidence exposes the real location.
     const landed = await gotoWithLandedRetry(page, targetUrl);
     initLanded = landed.landed;
     if (!landed.landed) {
       logger.warn({ caseId, targetUrl, finalUrl: landed.finalUrl }, 'init goto 未落到目标页(深链被重定向),继续执行');
     }
   }
-  // preflight：执行前置检查（URL 可达 / 登录态 / 标签页 / origin）。失败不阻塞执行。
-  // skipNavigate=init 已落地：preflight 的二次 goto 等于整页重载、无落定等待，会把慢 SPA 打回
-  // 启动初期（prod228 02c812ea 首步空白页根因）——已在该页就只做检查，不再导航。
+  // preflight: pre-execution checks (URL reachable / login state / tabs / origin). Failures don't block execution.
+  // skipNavigate=init already landed: preflight's second goto equals a full-page reload with no settle wait, throwing a slow SPA back
+  // into its startup phase (prod228 02c812ea blank-first-step root cause) — already on the page, so only check, never navigate again.
   try {
     const report = await preflight(page, { url: targetUrl ?? null, title: '' }, { skipNavigate: initLanded });
     onPreflight?.(report);
@@ -1299,18 +1299,18 @@ async function runStepsInContext(
     logger.warn({ err: e, caseId }, 'preflight failed; continuing');
   }
   const opts: DispatchOpts = { page, vars, ctx, caseId };
-  // 过程证据收集：每步通过后采一份页面文本快照（与步骤截图同刻），供用例级 vision 判定
-  // 识别终态截图里已消失的瞬时提示（toast）。失败路径不采——失败后 vision 判定不运行。
+  // Process evidence collection: after each passed step, capture a page-text snapshot (same moment as the step screenshot) so the case-level vision verdict
+  // can identify transient notices (toasts) already gone from the final screenshot. Not captured on the failure path — the vision verdict doesn't run after a failure.
   const pageTextSnaps: string[] = [];
-  // 机械失败 AI 重做开关（全局设置，runCase 层注入 ctx.aiFallback；缺省关 = 失败即失败）。
-  // compile-missing 分支已不在此列：NL 视觉步骤（空 compiled + 有指令）是正式执行语义，无条件 AI 临场执行。
+  // Mechanical-failure AI redo switch (global setting; runCase injects ctx.aiFallback; default off = a failure is a failure).
+  // compile-missing is no longer governed by it: NL vision steps (empty compiled + an instruction) are official execution semantics, unconditionally AI-executed on the spot.
   const fallback = ctx.aiFallback ?? { locatorFailed: false };
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     const started = Date.now();
-    // 计划运行终止检查点：每步开始前探测取消标志（内存快路径 + DB 兜底），
-    // 命中即本步记 Cancelled 失败、后续步骤不再执行——报告立即收尾为 failed，
-    // plan_run 层据此把剩余用例标 skipped、整个运行收敛为 cancelled。
+    // Plan-run abort checkpoint: probes the cancel flag before each step (in-memory fast path + DB fallback).
+    // On hit, this step is recorded as a Cancelled failure and later steps stop — the report finalizes as failed immediately,
+    // and plan_run marks the remaining cases skipped, converging the whole run to cancelled.
     if (ctx.shouldAbort && await ctx.shouldAbort()) {
       const cancelledConsole = consoleCapture.drain();
       const cancelled: ExecStepResult = {
@@ -1337,27 +1337,27 @@ async function runStepsInContext(
     const aiUsage = newAiUsage();
     opts.aiUsage = aiUsage;
     opts.healedSink = { current: false };
-    // 修复记忆：本步若有缓存的修复 locator（AI 降级成功时写入），按 kind 匹配注入候选链末位。
+    // Repair memory: when this step has a cached repair locator (written on AI-fallback success), inject it at the candidate-chain tail if the kind matches.
     opts.repairLocator = { current: step.id ? await readLocatorCache(step.id) : null };
-    // AI 降级失败原因（compileMissing / locatorFailed 两处共写，失败结果 warning 用）；
-    // compileMissing 已试过 AI 的标记——失败后 locatorFailed 不再重跑同一指令
-    // （2026-10-21 prod228 实测同一指令双重 AI 空转 12+ 次调用）。
+    // AI-fallback failure reason (written jointly at the compileMissing / locatorFailed sites; shown in the failed result's warning);
+    // the "compileMissing already tried AI" marker — locatorFailed doesn't re-run the same instruction after that failure
+    // (2026-10-21 prod228 measured one instruction double-AI spinning 12+ calls).
     let aiDegradedErr: string | undefined;
     let aiTriedInCompileFallback = false;
     const tabIndex =
       ctx.tabMap && step.tabRef ? Array.from(ctx.tabMap.keys()).indexOf(step.tabRef) : 0;
     const assertionAction = normalizeStepAssertion(step.assertion);
-    // 被跳过的步骤级断言显式留痕：normalizeStepAssertion 只放行元素级 assertText，整页模糊
-    // 文本断言（AI 写的描述性断言正是这个形态）此前被静默跳过——报告里看不出「这步其实
-    // 没断言」。advisory warning 不影响通过判定；终态仍由用例级 expectedOutcome 的 vision 判定裁决。
+    // Explicit trail for skipped step-level assertions: normalizeStepAssertion only admits element-level assertText; whole-page fuzzy
+    // text assertions (exactly the shape the AI's descriptive assertions take) used to be silently skipped — the report couldn't show
+    // "this step actually never asserted". An advisory warning doesn't affect pass judgment; the final state is still ruled by the case-level expectedOutcome vision verdict.
     const skippedAssertionWarn = step.assertion != null && !assertionAction
       ? '步骤级断言未执行：整页模糊文本断言不参与逐步判定，终态由用例级预期结果（expectedOutcome）判定裁决'
       : undefined;
     try {
       if (step.delayMs) await opts.page.waitForTimeout(step.delayMs);
-      // dispatcher 唯一回放路径:按 compiled 数组派原子步骤。
-      // 1) compiled 为数组且非空 → 逐条派,收集 warning
-      // 2) compiled 为空数组 / null / undefined → 未编译,抛 compile-missing
+      // The dispatcher's sole replay path: dispatch atomic actions per the compiled array.
+      // 1) compiled is a non-empty array → dispatch one by one, collecting warnings
+      // 2) compiled is an empty array / null / undefined → not compiled, throws compile-missing
       let warning: string | undefined;
       let degraded = false;
       const compiled = (step as { compiled?: unknown }).compiled;
@@ -1367,28 +1367,28 @@ async function runStepsInContext(
           if (w && !warning) warning = w;
         }
       } else {
-        // 视觉模式执行：compiled 为空 + 有行级指令 → AI 指令临场执行（视觉步骤的正式执行语义，
-        // 固化可选——创建流程默认产出 NL 步骤）；成功留 warning 照常过，失败维持原 compile-missing
-        // 语义（无 LLM / 指令含未定义变量 / AI 放弃都走这里）。
+        // Vision-mode execution: empty compiled + a row-level instruction → the AI executes the instruction on the spot (the official execution
+        // semantics of vision steps; solidify optional — the creation flow produces NL steps by default). Success keeps a warning and passes as usual; failure keeps the original
+        // compile-missing semantics (no LLM / undefined variables in the instruction / the AI giving up all land here).
         const inst = step.instruction?.trim();
         if (inst) {
           const { value: instResolved, missing } = substituteVars(inst, vars);
-          // 凭据占位符不来自数据集 vars（substituteVars 恒报 missing）：只缺凭据不算缺变量。
+          // Credential placeholders don't come from dataset vars (substituteVars always reports missing): missing credentials alone isn't a missing variable.
           if (missing.every((m) => referencesCredential(m))) {
             aiTriedInCompileFallback = true;
             const preErr = credentialPreflightError(instResolved, ctx);
             if (preErr) throw preErr;
             try {
               const client = ctx.llmClient ?? (await resolveLlmClient()).client;
-              // 凭据能力按需授予（与 compiled aiTask 步同一门控）：指令显式引用凭据占位符
-              // 才挂 valueSub / 资源清单，否则提示词里不出现凭据形态，AI 不会拿环境凭据
-              // 重填账号/密码框（负向用例会被"修正"成真实凭据从而真登录成功）。
+              // Credential capability granted on demand (same gate as the compiled aiTask step): valueSub / the resource manifest mount only when the instruction
+              // explicitly references a credential placeholder; otherwise the prompt never shows the credential form, and the AI won't grab environment credentials
+              // to refill the account/password boxes (negative cases would be "corrected" to real credentials and genuinely log in).
               const credRef = referencesCredential(instResolved);
               const summary = await runAiTask(opts.page, instResolved, client, undefined, {
                 onUsage: (r) => aiUsage.add(r),
                 ...(ctx.shouldAbort ? { shouldAbort: ctx.shouldAbort } : {}),
-                // 纯自然语言步没有机械语义可参考，但「观察不制造」的守则同样适用：
-                // 指令要的是「观察某现象」时，AI 不得为诱发它而填值/重复提交。
+                // A pure natural-language step has no mechanical semantics to reference, but the "observe, don't manufacture" rule still applies:
+                // when the instruction asks to "observe a phenomenon", the AI must not fill values/resubmit to induce it.
                 degradeContext: buildDegradeContext({ compiled: null }),
                 ...(credRef
                   ? {
@@ -1400,8 +1400,8 @@ async function runStepsInContext(
               degraded = true;
               warning = `未编译，AI 按指令临场执行${summary ? `：${summary}` : ''}`;
             } catch (e) {
-              // 凭据缺失是环境级硬错误：向上抛（分类器归 EnvMissing/SecretMissing），不吞成 compile-missing；
-              // 其余 AI 失败维持原 compile-missing 语义，但记下原因供失败 warning 展示。
+              // Missing credentials is an environment-level hard error: rethrow (the classifier files it under EnvMissing/SecretMissing) instead of swallowing it as compile-missing;
+              // other AI failures keep the original compile-missing semantics, but the reason is recorded for the failed warning display.
               if (e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing')) throw e;
               aiDegradedErr = e instanceof Error ? e.message : String(e);
             }
@@ -1411,11 +1411,11 @@ async function runStepsInContext(
           throw new Error(`compile-missing: 第 ${step.order} 步未编译,请点击「AI 编译」生成 DSL`);
         }
       }
-      // action 通过后才执行步骤级断言；断言失败同样记 failed 并终止后续。
+      // The step-level assertion runs only after the actions pass; an assertion failure is likewise recorded failed and stops the rest.
       if (assertionAction) {
         await dispatch(assertionAction, opts);
       }
-      // 验证码多轮验证：本步含 click（提交）且此前有验证码 aiTask 步骤时,按页面失败信号重试。
+      // Multi-round captcha verification: when this step contains a click (submit) and a captcha aiTask step registered earlier, retry on page failure signals.
       if (ctx.captchaRetry) {
         const clickActions = (compiled as StepAction[]).filter((a) => a.kind === 'click');
         if (clickActions.length > 0) {
@@ -1423,8 +1423,8 @@ async function runStepsInContext(
           if (retryWarning) warning = warning ? `${warning}; ${retryWarning}` : retryWarning;
         }
       }
-      // 修复记忆命中留痕：hitLocator 已显示 repair-cache 候选；warning 标注 + 命中计数。
-      // 不置 degraded/healed——纯机械命中，不进双通过率口径。
+      // Repair-memory hit trail: hitLocator already shows the repair-cache candidate; add a warning note + a hit counter.
+      // degraded/healed stay unset — a purely mechanical hit doesn't enter the dual pass-rate accounting.
       if (opts.hitSink.current?.kind === 'repair-cache') {
         warning = `${warning ? `${warning}；` : ''}locator 修复缓存命中：${opts.hitSink.current.value}`;
         if (opts.stepId && UUID_RE.test(opts.stepId)) void bumpLocatorCacheHit(opts.stepId).catch(() => undefined);
@@ -1459,72 +1459,72 @@ async function runStepsInContext(
     } catch (e) {
       const durationMs = Date.now() - started;
       const screenshot = await writeStepScreenshot(ctx.reportId, i + 1, opts.page);
-      // 断言失败时 classify 应拿到 assertion 的形态（若归类器关心 action.kind）；
-      // 把实际跑的那条作为归类输入更准确——失败于 action 还是 assertion 一目了然。
-      // 归类输入取 compiled[0]（未编译时为空,classify 对空 kind 走默认分支）。
+      // On assertion failure, classify should receive the assertion's shape (should the classifier care about action.kind);
+      // feeding the actually-run action as the classification input is more accurate — whether it failed on an action or the assertion is obvious at a glance.
+      // The classification input takes compiled[0] (empty when not compiled; classify walks the default branch on an empty kind).
       const compiledForClassify = (step as { compiled?: unknown }).compiled;
       const firstCompiledAction = (Array.isArray(compiledForClassify) && compiledForClassify.length > 0
         ? (compiledForClassify[0] as StepAction)
         : undefined);
       const failedAction = (assertionAction ?? firstCompiledAction);
-      // 数据集敏感列脱敏：assertText 等错误信息带物化后的期望值（{{password}} 明文），
-      // classify/humanMessage 可能复用 e.message —— 落报告前统一打码（非 Error 抛出物也走 String 后打码），闭环列级加密。
+      // Dataset sensitive-column masking: error messages like assertText carry materialized expected values ({{password}} plaintext);
+      // classify/humanMessage may reuse e.message — mask uniformly before landing in the report (non-Error throws are String-ified then masked too), closing the loop on column-level encryption.
       let rawMsg = e instanceof Error ? e.message : String(e);
       if (ctx.sensitiveVarKeys && ctx.sensitiveVarKeys.length > 0) {
         rawMsg = maskSensitiveValues(rawMsg, vars, ctx.sensitiveVarKeys);
         if (e instanceof Error) e.message = rawMsg;
       }
       const classified = classify(e, { action: failedAction, durationMs });
-      // AI 降级（可选）：机械执行失败（任意失败原因）+ 全局开关开 + 有行级指令 → 用指令让 AI 整步重做。
-      // 成功 → 步骤 passed + warning 标注（不置 healed，避免污染双通过率口径）；失败维持原 failedResult。
-      // aiTask 步骤本就在跑 AI，失败时再“按指令临场执行”毫无增益 → 一律不降级，维持原失败。
-      // compileMissing 已试过同一指令的 AI（aiTriedInCompileFallback）或原失败本就是凭据缺失
-      // （EnvMissing/SecretMissing——再跑 AI 只会撞同一堵墙）→ 同样不降级。
+      // AI fallback (optional): mechanical execution failed (any failure reason) + global switch on + a row-level instruction → the AI redoes the whole step per the instruction.
+      // Success → step passed + warning note (healed stays unset, keeping the dual pass-rate accounting unpolluted); failure keeps the original failedResult.
+      // An aiTask step is already running the AI — on failure, “execute per the instruction on the spot” adds nothing → never fall back, keep the original failure.
+      // compileMissing already tried the AI on the same instruction (aiTriedInCompileFallback), or the original failure is itself a credential miss
+      // (EnvMissing/SecretMissing — running the AI again only hits the same wall) → likewise no fallback.
       const inst = step.instruction?.trim();
       if (
         fallback.locatorFailed
         && inst
         && failedAction?.kind !== 'aiTask'
-        // 非浏览器步骤（HTTP / DB / syslog）不降级：AI 只能驱动浏览器，结构上无法完成。
-        // 例：Host 头注入探针的 httpRequest，浏览器禁止脚本设置受保护头，AI 必然放弃
-        // （prod228 报告 15dd42d9 白烧 44.5s / 1 次调用零收益）。
+        // Non-browser steps (HTTP / DB / syslog) never fall back: the AI can only drive the browser and structurally cannot complete them.
+        // Example: the httpRequest Host-header injection probe — browsers forbid scripts from setting protected headers, so the AI inevitably gives up
+        // (prod228 report 15dd42d9 burned 44.5s / 1 call for zero gain).
         && !NON_BROWSER_KINDS.has(failedAction?.kind as string)
         && !aiTriedInCompileFallback
         && !(e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing'))
       ) {
         const { value: instResolved, missing } = substituteVars(inst, vars);
-        // 修复记忆可缓存判定（与 aiTask 运行时缓存门控同语义）：
-        // 指令插值为 no-op = 无数据集变量（不同行页面状态不同，物化 selector 跨行必错）；
-        // 验证码豁免与 aiTask 缓存对齐；目标动作须带 locator（navigate 等无定位可修）。
+        // Repair-memory cacheability check (same semantics as the aiTask runtime-cache gate):
+        // instruction interpolation being a no-op = no dataset variables (different rows mean different page states; a materialized selector is always wrong cross-row);
+        // the captcha exemption aligns with the aiTask cache; the target action must carry a locator (navigate and friends have none to repair).
         const repairCacheable = !!opts.caseId && !!opts.stepId && UUID_RE.test(opts.stepId)
           && instResolved === inst
           && !CAPTCHA_TASK_RE.test(inst)
           && !!firstCompiledAction
           && Array.isArray((firstCompiledAction as { locator?: unknown }).locator)
           && ((firstCompiledAction as { locator?: unknown[] }).locator?.length ?? 0) > 0;
-        // 凭据占位符不来自数据集 vars：只缺凭据不算缺变量（值由 valueSub 执行时刻替换）。
+        // Credential placeholders don't come from dataset vars: missing credentials alone isn't a missing variable (values are substituted by valueSub at execution time).
         if (missing.every((m) => referencesCredential(m))) {
           const preErr = credentialPreflightError(instResolved, ctx);
           if (preErr) {
             aiDegradedErr = preErr.message;
           } else {
             let aiSummary: string | undefined;
-            // 收集 AI 重做的成功动作：降级成功后从中解析目标元素 selector 写修复缓存（自愈协议）。
+            // Collect the AI redo's successful actions: after fallback success, parse the target element selector from them to write the repair cache (self-heal protocol).
             const collected: AiAction[] = [];
             try {
               const client = ctx.llmClient ?? (await resolveLlmClient()).client;
-              // 凭据能力按需授予（与 compiled aiTask 步同一门控）：指令显式引用凭据占位符
-              // 才挂 valueSub / 资源清单，否则提示词里不出现凭据形态，AI 不会拿环境凭据
-              // 重填账号/密码框（负向用例会被"修正"成真实凭据从而真登录成功）。
+              // Credential capability granted on demand (same gate as the compiled aiTask step): valueSub / the resource manifest mount only when the instruction
+              // explicitly references a credential placeholder; otherwise the prompt never shows the credential form, and the AI won't grab environment credentials
+              // to refill the account/password boxes (negative cases would be "corrected" to real credentials and genuinely log in).
               const credRef = referencesCredential(instResolved);
               aiSummary = (await runAiTask(opts.page, instResolved, client, undefined, {
                 onAction: (a, ok) => { if (ok) collected.push(a); },
                 onUsage: (r) => aiUsage.add(r),
                 ...(ctx.shouldAbort ? { shouldAbort: ctx.shouldAbort } : {}),
-                // 把机械语义 + 机械失败原因一并告诉 AI：降级路径原本只传自然语言指令，
-                // AI 不知道「本步本意是等某文本出现 10s」也不知道「机械已确认它没出现」，
-                // 于是会造数据把预期现象造出来（2026-10-26 prod228 实测：填编造的错验证码
-                // + 重复提交，负向用例假通过）。
+                // Tell the AI both the mechanical semantics and the mechanical failure reason: the fallback path used to pass only the natural-language instruction,
+                // so the AI neither knew "this step meant waiting 10s for some text" nor "the mechanical run had already confirmed it never appears",
+                // and would fabricate data to produce the expected phenomenon (2026-10-26 prod228 measured: filling a fabricated wrong captcha
+                // + resubmitting, the negative case false-passed).
                 degradeContext: buildDegradeContext({
                   compiled: compiledForClassify,
                   failedAction,
@@ -1538,13 +1538,13 @@ async function runStepsInContext(
                   : {}),
               })) || undefined;
             } catch (err) {
-              // AI 不可用/放弃/超轮 → 维持原失败（走下方 failedResult），但记下原因供 warning 展示
+              // AI unavailable/gave up/turn-exhausted → keep the original failure (flows to failedResult below), but record the reason for the warning display
               aiDegradedErr = err instanceof Error ? err.message : String(err);
             }
             if (aiSummary !== undefined) {
-              // 修复记忆写入：从 AI 成功动作里挑目标元素 selector（同 kind 优先，否则第一个
-              // 带 selector 的 click/fill），mapSelectorStrict 净化（拒专有语法/激活态 class/裸标签）
-              // 后按 stepId 落 step_locator_cache；fire-and-forget，失败不影响本步结果。
+              // Repair-memory write: pick the target element selector from the AI's successful actions (same kind first, otherwise the first
+              // click/fill carrying a selector), sanitize it with mapSelectorStrict (rejecting proprietary syntax/active-state classes/bare tags),
+              // then persist it to step_locator_cache by stepId; fire-and-forget — a failure doesn't affect this step's result.
               if (repairCacheable) {
                 const kind = firstCompiledAction!.kind;
                 const withSelector = (a: AiAction): a is AiAction & { selector: string } =>
@@ -1565,7 +1565,7 @@ async function runStepsInContext(
                 startedAt: new Date(started).toISOString(),
                 instruction: step.instruction ?? undefined,
                 compiled: Array.isArray(step.compiled) ? step.compiled : undefined,
-                // 原机械失败原因（如 count=0 (css #gone)）一并带进 warning，报告页可看到“识别到什么程度失败”。
+                // The original mechanical failure reason (e.g. count=0 (css #gone)) goes into the warning too; the report page can see “how far recognition got before failing”.
                 warning: `机械执行失败（${rawMsg}），AI 按指令重做本步${aiSummary ? `：${aiSummary}` : ''}`,
                 screenshot: aiScreenshot,
                 hitLocator: opts.hitSink.current ?? undefined,
@@ -1580,7 +1580,7 @@ async function runStepsInContext(
               };
               results.push(aiPassed);
               onStep?.(aiPassed);
-              continue; // 本步降级通过，跳到下一 step（不走 break / onFailurePage）
+              continue; // this step passed via fallback, jump to the next step (no break / onFailurePage)
             }
           }
         }
@@ -1603,8 +1603,8 @@ async function runStepsInContext(
         log: opts.logSink.current ?? undefined,
         http: opts.httpSink.current ?? undefined,
         syslog: opts.syslogSink.current ?? undefined,
-        // AI 降级跑了但失败（放弃/超轮/异常）：补一条 warning 说明 AI 这一下的结局，
-        // 否则报告只留机械报错 + 孤立 aiUsage，看不出 AI 已介入却没救回来。
+        // AI fallback ran but failed (gave up/turn-exhausted/exception): append a warning noting the AI attempt's outcome,
+        // otherwise the report keeps only the mechanical error + an orphan aiUsage, hiding that the AI intervened but couldn't save it.
         ...(aiDegradedErr ? { warning: `AI 降级尝试未成功：${aiDegradedErr}` } : {}),
         ...(aiUsage.stat.calls > 0 ? { aiUsage: aiUsage.stat } : {}),
         ...(failedConsole.length ? { console: failedConsole } : {}),
@@ -1612,17 +1612,17 @@ async function runStepsInContext(
       results.push(failedResult);
       onStep?.(failedResult);
       if (onFailurePage) await onFailurePage(opts.page, i).catch(() => undefined);
-      // 失败立即终止，避免后续步骤被前一步污染的页面状态搞乱。
+      // Terminate immediately on failure so later steps aren't scrambled by the failed step's polluted page state.
       break;
     }
   }
-  // Track 1：用例级 vision 判定。所有 step.action 都通过后再做；走最终截图。
-  // 若中途已 failed，vision 不再覆盖（避免 vision 误判把真失败洗白）。
+  // Track 1: case-level vision verdict. Runs only after all step.actions pass; uses the final screenshot.
+  // If a step already failed, vision doesn't override (avoiding a vision misjudgment whitewashing a real failure).
   const failedSoFar = results.some((r) => r.status === 'failed');
   if (!failedSoFar && ctx.expectedOutcome && ctx.expectedOutcome.trim()) {
-    // 过程证据：瞬时提示（toast）到 settle 后的终态截图时必已消失，补两路证据——
-    // 末步截图（截自动作刚完成时，短时提示尚在存活窗口内）+ 末几步文本快照（DOM 文字）。
-    // 相邻重复快照（http/db 等不触动页面的步骤）去重后取末 3 份，控制判定 token 成本。
+    // Process evidence: transient notices (toasts) are necessarily gone by the settled final screenshot, so two more evidence channels —
+    // the last step's screenshot (taken right after the action finished, while short-lived notices are still alive) + the last few steps' text snapshots (DOM text).
+    // Adjacent duplicate snapshots (http/db and other page-untouched steps) are deduped, keeping the last 3 to bound the verdict's token cost.
     let lastShot: string | null = null;
     for (let k = results.length - 1; k >= 0; k--) {
       const s = results[k]!.screenshot;
@@ -1632,9 +1632,9 @@ async function runStepsInContext(
     for (const t of pageTextSnaps) {
       if (t !== dedupedTexts[dedupedTexts.length - 1]) dedupedTexts.push(t);
     }
-    // 步骤执行记录：每步 warning/error（含临场 AI 对页面现象的描述）。瞬时提示可能在某步执行
-    // 过程中出现、又在该步结束前消失（AI 降级重做耗时数十秒时尤甚），步末快照与终态截图都接
-    // 不到——只有当时看到它的执行者记进了备注。
+    // Step execution record: each step's warning/error (incl. the on-the-spot AI's description of page phenomena). A transient notice may appear
+    // mid-step and vanish before the step ends (worst when an AI-fallback redo takes tens of seconds), so neither the end-of-step snapshot
+    // nor the final screenshot can catch it — only the executor that saw it at the time wrote it into a note.
     const stepNotes: string[] = [];
     for (const r of results) {
       const note = [r.warning, r.error].filter(Boolean).join('；');
@@ -1664,24 +1664,24 @@ async function runStepsInContext(
   return results;
 }
 
-/** 真实浏览器执行用例（playwright-core 驱动 chromium）。返回 step 粒度的执行结果。
- * onPreflight：执行前 preflight 检查报告的旁路回调（由 runCase 层决定是否落库），
- * 保持既有返回签名（ExecStepResult[]）不变以兼容既有调用方。
- * caseWindow/incognito：窗口策略与隐身模式；incognito 时不注入 storageState。 */
+/** Executes a case in a real browser (playwright-core driving chromium). Returns step-granularity results.
+ * onPreflight: side-channel callback for the pre-execution preflight report (runCase decides whether to persist it),
+ * keeping the existing return signature (ExecStepResult[]) unchanged for existing callers.
+ * caseWindow/incognito: window strategy and incognito mode; storageState isn't injected when incognito. */
 export async function executeCaseReal(
   caseId: string,
   steps: Array<{
     order: number;
-    /** 可选步骤级断言（任意 StepAction 子集）；为 null/undefined 时跳过。 */
+    /** Optional step-level assertion (any StepAction subset); skipped when null/undefined. */
     assertion?: unknown;
     delayMs?: number | null;
     id?: string;
     tabRef?: string | null;
     componentKind?: string | null;
     sensitive?: boolean | null;
-    /** 可执行 DSL 数组；回放唯一依据。空数组/null = 未编译,抛 compile-missing。 */
+    /** Executable DSL array; the sole replay source. Empty array/null = not compiled, throws compile-missing. */
     compiled?: unknown[] | null;
-    /** 行级自然语言指令；回放仅 AI 降级兜底用，机械回放不读。 */
+    /** Row-level natural-language instruction; replay reads it only for AI fallback, mechanical replay never does. */
     instruction?: string | null;
   }>,
   ctx: ExecContext,
@@ -1703,15 +1703,15 @@ export async function executeCaseReal(
         ? { width: caseWindow.width, height: caseWindow.height }
         : caseWindow?.strategy === 'current'
           ? undefined
-          : { width: 1280, height: 800 }; // maximize 近似值（headless）
+          : { width: 1280, height: 800 }; // maximize approximation (headless)
     const context = await browser.newContext({
       ...(storageState && !incognito ? { storageState: storageState as never } : {}),
       ...(viewport ? { viewport } : {}),
-      // 自签证书 / 内网 https 站点：执行期允许 ERR_CERT_AUTHORITY_INVALID 继续执行
-      // （用户仍可在浏览器手动信任证书；这条只影响回放链路）。
+      // Self-signed certs / intranet https sites: allow ERR_CERT_AUTHORITY_INVALID during execution and keep going
+      // (users can still manually trust the cert in a browser; this only affects the replay path).
       ignoreHTTPSErrors: true,
-      // navigator.language 设成 zh-CN:被测系统多数为中文产品,i18next 会按浏览器语种渲染;
-      // 暂硬编码,未来如需随 env/project 切换可挪到 envContext。
+      // navigator.language set to zh-CN: most SUTs are Chinese products and i18next renders by browser locale;
+      // hardcoded for now; move to envContext later if per-env/project switching is needed.
       locale: 'zh-CN',
     });
     return await runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow, onStep);
@@ -1720,9 +1720,9 @@ export async function executeCaseReal(
   }
 }
 
-/** 在调用方持有的 chromium + context 中跑用例步骤（用于 loginPrepare 链路共享登录态）。
- *  与 `executeCaseReal` 行为一致但跳过 launch / newContext / close —— context 已含登录 cookie，
- *  不再注入 storageState（覆盖会破坏登录态）；忽略 incognito（caller 持有的 ctx 已是登录态）。 */
+/** Runs case steps in a caller-held chromium + context (for the loginPrepare path's shared login state).
+ *  Behaves like `executeCaseReal` but skips launch / newContext / close — the context already carries the login cookies,
+ *  so storageState is not injected (overwriting it would break the login state); incognito is ignored (the caller-held ctx is already logged in). */
 export async function executeCaseInBrowser(
   caseId: string,
   steps: Array<{
@@ -1734,7 +1734,7 @@ export async function executeCaseInBrowser(
     componentKind?: string | null;
     sensitive?: boolean | null;
     compiled?: unknown[] | null;
-    /** 行级自然语言指令；回放仅 AI 降级兜底用，机械回放不读。 */
+    /** Row-level natural-language instruction; replay reads it only for AI fallback, mechanical replay never does. */
     instruction?: string | null;
   }>,
   ctx: ExecContext,
@@ -1746,7 +1746,7 @@ export async function executeCaseInBrowser(
   onStep?: (r: ExecStepResult) => void,
   onFailurePage?: (page: Page, failedIndex: number) => Promise<void>,
 ): Promise<ExecStepResult[]> {
-  // 显式持有 browser 参数以便调用方阅读意图；执行路径不直接用 browser（context 已就绪）。
+  // The browser parameter is held explicitly for the caller's reading intent; the execution path doesn't use browser directly (the context is ready).
   void browser;
   return runStepsInContext(caseId, steps, ctx, context, targetUrl, onPreflight, caseWindow, onStep, onFailurePage);
 }

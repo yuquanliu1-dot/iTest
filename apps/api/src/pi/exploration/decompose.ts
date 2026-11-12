@@ -1,27 +1,31 @@
 /**
- * 章程分解（C2）：探索开跑前 1 次 LLM 调用，把章程拆成 2~12 条可逐条验证的子目标。
+ * Charter decomposition (C2): one LLM call before the exploration starts, splitting the charter into 2~12
+ * individually verifiable sub-goals.
  *
- * 为什么拆：legacy 的章程是一整段自然语言，模型每轮自行拆解 → 子目标散在推理里没有形式，
- * 覆盖度全靠模型自觉（同一场探索常常一头扎进第一条路径，后面的检查点根本没看）。
- * 分解之后：
- * - 子目标进 system prompt（appendSystemPromptOverride，压缩安全——pi 压缩只摘要旧消息、
- *   不动 system prompt）→ 探索有明确的推进方向，observe 回灌时也能提醒还剩哪些；
- * - 子目标落 coverage_ledger.goals → 终态快照供人工评估这场探索盖住了多少。
+ * Why decompose: the legacy charter was one blob of natural language; the model decomposed it itself each round →
+ * sub-goals scattered through reasoning with no form, and coverage relied entirely on model self-discipline (the same
+ * exploration would often dive straight into the first path while later checkpoints never got looked at).
+ * After decomposition:
+ * - Sub-goals go into the system prompt (appendSystemPromptOverride, compression-safe — pi compression only
+ *   summarizes old messages and never touches the system prompt) → the exploration has a clear direction, and the
+ *   observe feedback can also remind it which remain;
+ * - Sub-goals land in coverage_ledger.goals → the final-state snapshot lets humans assess how much the exploration covered.
  *
- * 软失败：分解是增强不是前置条件——LLM 挂了/超时/输出垃圾 → 无子目标，探索照常跑
- * （与代码范围解析同款语义：解析失败不掀翻会话）。
+ * Soft failure: decomposition is an enhancement, not a precondition — LLM down/timeout/garbage output → no sub-goals,
+ * the exploration runs as usual (same semantics as code-scope parsing: a failed parse never capsizes the session).
  */
 import { completeJson, type LLMClient } from '../../agent/llm-client.js';
 import { resolveLlmClient } from '../../agent/llmSettings.js';
 import { withTimeout } from '../../execute/explorationShared.js';
 import { logger } from '../../logger.js';
 
-/** 子目标条数上限：再多就不是「分解」，是把章程切碎了。
- *  覆盖类型（功能/安全/边界/UI-UX）的广度不靠分解臆造（分解只依据章程）——靠人格矩阵多路并行，每路一个视角。 */
+/** Sub-goal count cap: beyond this it is no longer "decomposition", just shredding the charter.
+ *  Breadth of coverage types (functional/security/boundary/UI-UX) is not fabricated by decomposition (decomposition
+ *  only follows the charter) — it comes from the persona matrix running multiple paths in parallel, one perspective each. */
 export const DECOMPOSE_MAX_GOALS = 12;
-/** 分解调用超时（软失败口径：超时 = 无子目标）。 */
+/** Decomposition call timeout (soft-failure semantics: timeout = no sub-goals). */
 const DECOMPOSE_TIMEOUT_MS = 60_000;
-/** 单条子目标文本上限（进提示词与账本，都不无限膨胀）。 */
+/** Per-sub-goal text cap (goes into the prompt and the ledger; neither should bloat unboundedly). */
 const GOAL_TEXT_MAX = 120;
 
 const DECOMPOSE_SYSTEM_PROMPT = `你是测试章程分解器。给你一段探索式测试章程（charter），把它拆成可在页面上逐条验证的子目标：每条一个动作或检查点，动词开头，能看出「做到了还是没做到」。
@@ -31,12 +35,12 @@ const DECOMPOSE_SYSTEM_PROMPT = `你是测试章程分解器。给你一段探�
 - 只依据章程本身分解，不臆造章程里没有的页面或功能`;
 
 export interface ExplorationGoal {
-  /** 稳定序号（g1、g2…）：提示词、账本、finish 回告共用同一套 id。 */
+  /** Stable ordinal (g1, g2...): the prompt, the ledger, and the finish report all share this id set. */
   id: string;
   text: string;
 }
 
-/** 模型输出 → 子目标列表（形状容错 + 去重 + 封顶）。空/脏输出 = 无子目标。 */
+/** Model output → sub-goal list (shape tolerance + dedup + cap). Empty/dirty output = no sub-goals. */
 export function parseGoals(value: unknown): ExplorationGoal[] {
   const raw = (() => {
     if (Array.isArray(value)) return value;
@@ -70,8 +74,9 @@ export function parseGoals(value: unknown): ExplorationGoal[] {
 }
 
 /**
- * 分解章程 → 子目标。永不抛错：任何失败路径都返回空数组（探索照常跑，无子目标）。
- * deps.llm 供测试注入桩（不打真网络）。
+ * Decomposes the charter → sub-goals. Never throws: every failure path returns an empty array (the exploration runs
+ * as usual, without sub-goals).
+ * deps.llm lets tests inject a stub (no real network).
  */
 export async function decomposeCharter(
   input: { charter: string; persona?: string },

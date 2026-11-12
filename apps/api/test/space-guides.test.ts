@@ -38,7 +38,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // 只清 guides/mcp 两表（不动 org/project 行），org 缓存仍有效，无需 resetSeedOrgCache
+  // Only clear the guides/mcp tables (org/project rows untouched), so the org cache stays valid — no resetSeedOrgCache needed
   await pool.query(`TRUNCATE assistant_guides, assistant_mcp_servers`);
 });
 
@@ -47,10 +47,10 @@ describe('S1 guides：seed 幂等 + loadActiveGuides 语义 + CRUD/鉴权', () =
     const { seedAssistantGuides } = await import('../src/db/seed.js');
     await seedAssistantGuides(pool);
     const first = (await pool.query(`SELECT count(*)::int n FROM assistant_guides`)).rows[0]!.n as number;
-    await seedAssistantGuides(pool); // 模拟容器二次启动
+    await seedAssistantGuides(pool); // simulate a second container start
     const second = (await pool.query(`SELECT count(*)::int n FROM assistant_guides`)).rows[0]!.n as number;
     expect(first).toBe(4);
-    expect(second).toBe(4); // ON CONFLICT (id) DO NOTHING 幂等
+    expect(second).toBe(4); // ON CONFLICT (id) DO NOTHING idempotency
     const rows = (await pool.query(`SELECT lang::text lang, kind::text kind FROM assistant_guides ORDER BY id`)).rows;
     expect(rows.map((r) => `${r.kind}:${r.lang}`).sort()).toEqual(['flow:any', 'flow:any', 'flow:en', 'flow:zh']);
   });
@@ -68,8 +68,8 @@ describe('S1 guides：seed 幂等 + loadActiveGuides 语义 + CRUD/鉴权', () =
     const { loadActiveGuides } = await import('../src/pi/space/guides.js');
     const rows = await loadActiveGuides({ projectId, versionId, lang: 'zh-CN' });
     expect(rows.map((r) => r.body)).toEqual(['V-BODY', 'P-BODY', 'REF-BODY', 'G-BODY']);
-    expect(rows.every((r) => r.enabled)).toBe(true); // G-OFF 不注入
-    expect(rows.every((r) => r.lang === 'zh' || r.lang === 'any')).toBe(true); // G-EN 不注入
+    expect(rows.every((r) => r.enabled)).toBe(true); // G-OFF not injected
+    expect(rows.every((r) => r.lang === 'zh' || r.lang === 'any')).toBe(true); // G-EN not injected
   });
 
   it('CRUD：manager 建/查/改/删全通；member 一律 403', async () => {
@@ -85,7 +85,7 @@ describe('S1 guides：seed 幂等 + loadActiveGuides 语义 + CRUD/鉴权', () =
     expect(patched.body.enabled).toBe(false);
     expect((await request(managerApp).delete(`/api/assistant/guides/${id}`)).status).toBe(204);
     expect((await request(managerApp).get('/api/assistant/guides')).body.length).toBe(0);
-    // member：requireManager → 403（managerOrgPaths 为空，isEffectiveManager=false）
+    // member: requireManager → 403 (managerOrgPaths empty, isEffectiveManager=false)
     expect((await request(memberApp).post('/api/assistant/guides')
       .send({ scope: 'global', kind: 'flow', body: 'X', lang: 'zh' })).status).toBe(403);
     expect((await request(memberApp).get('/api/assistant/guides')).status).toBe(403);
@@ -103,7 +103,7 @@ describe('S1 guides：seed 幂等 + loadActiveGuides 语义 + CRUD/鉴权', () =
   });
 
   it('跨组织隔离：project/version 归属组织，manager A 看不到/改不了 B 组织的 scoped guides，global 仍共享', async () => {
-    // 造第二个组织（不走 seedOrg 缓存）：组织 B + 项目 B + 版本 B
+    // Seed a second org (bypassing the seedOrg cache): org B + project B + version B
     const orgB = randomUUID();
     await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1, '组织B', $2)`, [orgB, `/${orgB}/`]);
     const projB = await seedProjectInOrg(pool, orgB, 'P-B');
@@ -116,14 +116,14 @@ describe('S1 guides：seed 幂等 + loadActiveGuides 语义 + CRUD/鉴权', () =
       [gProjId, projB, gVerId, verB]);
     await pool.query(`INSERT INTO assistant_guides (id, scope, kind, body, lang) VALUES
       ($1,'global','flow','SHARED','zh')`, [randomUUID()]);
-    // GET：B 组织 scoped 行不可见，global 仍返回
+    // GET: B org scoped rows invisible, global still returned
     const listed = await request(managerApp).get('/api/assistant/guides');
     expect(listed.status).toBe(200);
     const bodies = listed.body.map((g: { body: string }) => g.body);
     expect(bodies).toContain('SHARED');
     expect(bodies).not.toContain('B-PROJ');
     expect(bodies).not.toContain('B-VER');
-    // PATCH/DELETE：跨组织 scoped 行一律 404；POST 引用 B 组织项目/版本同样 404
+    // PATCH/DELETE: cross-org scoped rows all 404; POST referencing B org project/version also 404
     expect((await request(managerApp).patch(`/api/assistant/guides/${gProjId}`).send({ body: 'X' })).status).toBe(404);
     expect((await request(managerApp).delete(`/api/assistant/guides/${gVerId}`)).status).toBe(404);
     expect((await request(managerApp).post('/api/assistant/guides')

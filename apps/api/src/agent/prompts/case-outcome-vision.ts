@@ -1,5 +1,5 @@
-/** Vision 判定 prompt：把最终截图 + 用例 expectedOutcome 喂给多模态 LLM，让其判断页面是否体现预期。
- *  返回 JSON {"passed": bool, "reason": string}，reason 短说明（≤80 字）。 */
+/** Vision judgment prompt: feeds the final screenshot + case expectedOutcome to a multimodal LLM to judge whether the page reflects the expectation.
+ *  Returns JSON {"passed": bool, "reason": string}, with a short reason (≤80 chars). */
 export const CASE_OUTCOME_VISION_PROMPT = `你是测试结果判定助手。给你一张测试执行结束后的浏览器截图（被测系统的最终页面）和一段用例预期描述。
 
 判定原则：

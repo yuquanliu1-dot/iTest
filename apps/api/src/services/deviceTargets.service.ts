@@ -72,7 +72,7 @@ export async function deleteDeviceTarget(id: string) {
   if (deleted.length === 0) throw new HttpError(404, 'not_found', 'device target not found');
 }
 
-/** 删除前引用计数(绑定该设备目标的移动用例数;删除后 FK set null 自动解绑,计数仅进确认卡提示)。 */
+/** Reference count before delete (mobile cases bound to this device target; after delete FK set null unbinds automatically, the count only feeds the confirm dialog). */
 export async function deviceTargetUsage(id: string): Promise<{ caseCount: number }> {
   const rows = await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.mobileDeviceTargetId, id));
   return { caseCount: rows.length };

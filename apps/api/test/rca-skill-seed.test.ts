@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-/** defect-rca skill 内容守卫:frontmatter name 与目录名一致、seed 脚本指向正确内容目录。
- *  防手滑改名导致 seed 落盘目录与 DB name 不一致（pi loader 按 name=目录名发现技能）。 */
+/** defect-rca skill content guard: frontmatter name matches the directory name, and the seed script points at the right content directory.
+ *  Prevents an accidental rename from desyncing the seeded on-disk directory from the DB name (the pi loader discovers skills by name=directory name). */
 describe('defect-rca skill 内容', () => {
   it('SKILL.md frontmatter name=defect-rca 且 description 非空', async () => {
     const md = await readFile(join(__dirname, '../scripts/defect-rca-content/SKILL.md'), 'utf8');

@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { deriveConsoleOrigin, originToMatchPattern } from '../src/routes/recorder.js';
 
 function mockReq(headers: Record<string, string | string[] | undefined>): Request {
-  // express 的 Request.header 期望 Record<string, string|string[]>；这里手工构造一个最小 req
+  // express's Request.header expects Record<string, string|string[]>; here a minimal req is constructed by hand
   return { headers } as unknown as Request;
 }
 

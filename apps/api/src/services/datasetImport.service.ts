@@ -1,7 +1,7 @@
 /**
- * 数据集 Excel 导入：模板生成 + 上传文件解析。
- * 只产出 {columns, rows} 草稿载荷，落库仍走 datasets.service 的 create/update（保存时统一校验/加密）。
- * 模板两个 sheet：「数据」= 首行表头 + 数据行（解析只认它）；「说明」= 填写规则。
+ * Dataset Excel import: template generation + uploaded-file parsing.
+ * Only produces the {columns, rows} draft payload; persistence still goes through datasets.service create/update (validation/encryption unified at save time).
+ * The template has two sheets: "数据" (data) = first-row header + data rows (the only one parsing accepts); "说明" (guide) = filling rules.
  */
 import ExcelJS from 'exceljs';
 import { HttpError } from '../middleware/errorHandler.js';
@@ -9,7 +9,7 @@ import { validateVariableName } from '@itest/shared';
 
 const DATA_SHEET = '数据';
 const GUIDE_SHEET = '说明';
-// 与 datasets.service 的保存上限同口径；解析层先拦，错误消息在导入现场给出。
+// Same criteria as datasets.service's save limits; the parsing layer intercepts first, error messages surfaced at the import site.
 const MAX_COLUMNS = 30;
 const MAX_ROWS = 500;
 
@@ -20,7 +20,7 @@ export interface DatasetImportPayload {
   rows: Array<{ disabled: false; cells: Record<string, string> }>;
 }
 
-/** 生成导入模板：表头（调用方可带当前草稿列名，缺省 username/password）+ 1 行示例值 +「说明」页。 */
+/** Generates the import template: header (the caller may pass current draft column names; defaults username/password) + 1 example row + the "说明" (guide) sheet. */
 export async function buildTemplateWorkbook(columns?: string[]): Promise<Buffer> {
   const headers = columns && columns.length > 0 ? columns : DEFAULT_COLUMNS;
   const wb = new ExcelJS.Workbook();
@@ -29,25 +29,25 @@ export async function buildTemplateWorkbook(columns?: string[]): Promise<Buffer>
   ws.addRow(headers.map((_, i) => `示例值${i + 1}`));
   const guide = wb.addWorksheet(GUIDE_SHEET);
   guide.getColumn(1).width = 90;
-  // 注意 addRows 传裸字符串会静默丢行（exceljs 只认行数组），每行须包一层 []
+  // Note: addRows with bare strings silently drops rows (exceljs only accepts arrays of rows); every row must be wrapped in []
   guide.addRows([
     ['1. 「数据」工作表首行为列名（即回放变量名 {{列名}}）：字母或下划线开头，仅含字母/数字/下划线。'],
     ['2. 第二行起每行一条数据；示例行请替换或删除后再上传。'],
     [`3. 上限：最多 ${MAX_COLUMNS} 列、${MAX_ROWS} 行。`],
     ['4. 敏感列（如密码）导入后在页面勾选「敏感」，将以加密存储。'],
   ]);
-  // exceljs 的 ExcelJS.Buffer 类型与 @types/node 22 的 Buffer 互相看不顺眼，这里显式收窄成 ArrayBuffer
+  // exceljs's ExcelJS.Buffer and @types/node 22's Buffer don't see eye to eye; explicitly narrowed to ArrayBuffer here
   const ab = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
   return Buffer.from(ab);
 }
 
-/** 解析上传的 xlsx：首行表头（列名，须过变量名校验），其余每行一条数据。
- *  值一律取 cell.text（数字/公式字符串化）；单元格不做 trim（口令前后空格是有效字符）；
- *  全空行跳过。列重复不在解析层拦（同 TSV 粘贴），保存时 normalizeDataset 兜底。 */
+/** Parses an uploaded xlsx: first-row header (column names, must pass variable-name validation), then one data row per row.
+ *  Values always come from cell.text (numbers/formulas stringified); cells are not trimmed (leading/trailing spaces in passwords are valid characters);
+ *  all-empty rows are skipped. Duplicate columns aren't caught at the parsing layer (same as TSV paste); normalizeDataset is the fallback at save time. */
 export async function parseImportWorkbook(buf: Buffer): Promise<DatasetImportPayload> {
   const wb = new ExcelJS.Workbook();
   try {
-    // 运行时直通 JSZip（Node Buffer 没问题），exceljs 的 Buffer 类型与 @types/node 互不兼容，这里仅类型收窄
+    // At runtime this flows straight into JSZip (Node Buffer is fine); exceljs's Buffer type and @types/node are mutually incompatible, this is only a type narrowing
     await wb.xlsx.load(buf as unknown as ArrayBuffer);
   } catch {
     throw new HttpError(400, 'bad_request', '无法解析文件，请上传 .xlsx 格式的 Excel 文件');

@@ -14,8 +14,8 @@ import type { PreflightReport } from '@itest/shared';
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
-/** 把 mobile 路径下需要的 bundleId 缓存到 engine 实例上,供 appRestart/appOpen 在未指定 bundleId 时回退。
- *  acquireDevice 时写入,mobile engine 持有期间不变。 */
+/** Caches the bundleId needed on the mobile path onto the engine instance, for appRestart/appOpen to fall back on when no bundleId is specified.
+ *  Written at acquireDevice time; unchanged for as long as the mobile engine is held. */
 function getOrCacheBundleId(engine: MobileEngine, opts: { explicit?: string }): string {
   if (opts.explicit) return opts.explicit;
   if (engine.cachedBundleId) return engine.cachedBundleId;
@@ -26,7 +26,7 @@ export class MobileEngine implements Engine {
   readonly platform = 'mobile' as const;
   private session: AgentDeviceSession | null = null;
   private reportId: string | null = null;
-  /** caseRow.appRef.bundleId 的缓存;MobileEngine 生命周期内不变。 */
+  /** Cache of caseRow.appRef.bundleId; unchanged for the MobileEngine's lifetime. */
   cachedBundleId: string | null = null;
 
   async prepare(input: EngineInput): Promise<void> {
@@ -35,14 +35,14 @@ export class MobileEngine implements Engine {
     }
     const appRef = input.appRef;
     if (!appRef?.bundleId) throw new EngineUnavailable('mobile case missing appRef.bundleId');
-    // resolveDeviceTarget service 尚未在本任务实现 (Task 5),先放过 deviceTargetId 解析,直接传 deviceRef = input.deviceTargetId 作为临时约定。
-    // Task 5 完成后,会改为 await resolveDeviceTarget(input.deviceTargetId) 取 deviceRef。
-    // 这里仍走 acquireDevice(deviceRef = input.deviceTargetId);若用户传错,agent-device 会自己报 unsupported。
+    // The resolveDeviceTarget service isn't implemented in this task yet (Task 5); for now, skip deviceTargetId resolution and pass deviceRef = input.deviceTargetId as a temporary convention.
+    // After Task 5 lands, this becomes await resolveDeviceTarget(input.deviceTargetId) to obtain the deviceRef.
+    // For now it still goes through acquireDevice(deviceRef = input.deviceTargetId); on wrong user input, agent-device reports unsupported by itself.
     this.cachedBundleId = appRef.bundleId;
     try {
       this.session = await acquireDevice({
         mobileOs: input.mobileOs,
-        deviceRef: input.deviceTargetId, // 临时:Task 5 改成 device_target.deviceRef
+        deviceRef: input.deviceTargetId, // temporary: Task 5 will change this to device_target.deviceRef
         bundleId: appRef.bundleId,
         ...(appRef.appPath ? { appPath: appRef.appPath } : {}),
         launchArgs: appRef.launchArgs ?? [],
@@ -111,7 +111,7 @@ export class MobileEngine implements Engine {
         break;
       }
     }
-    // 用例级 vision 兜底：mobile 路径下 page=undefined → runCaseVisionAssert 内部短路,返回 null。
+    // Case-level vision fallback: on the mobile path page=undefined → runCaseVisionAssert short-circuits internally and returns null.
     if (input.expectedOutcome && results.every((r) => r.status === 'passed')) {
       const va = await runCaseVisionAssert({
         page: undefined,
@@ -164,7 +164,7 @@ export class MobileEngine implements Engine {
       case 'fill': {
         let value: string;
         if (action.sensitive) {
-          // mobile 路径下不持有 secretResolver(暂未实现);若 sensitive 在 mobile 必抛 unsupported
+          // The mobile path holds no secretResolver (not implemented yet); sensitive=true on mobile must throw unsupported
           throw unsupported('fill with sensitive=true not supported on mobile engine yet');
         }
         value = materializeValue(action.value ?? '', vars);

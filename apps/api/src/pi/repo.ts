@@ -37,14 +37,14 @@ export class LockTimeoutError extends Error {
   constructor(message: string) { super(message); this.name = 'LockTimeoutError'; }
 }
 
-/** 把任意结果安全序列化为 data 字符串（截断到 MAX_OUTPUT_CHARS）。 */
+/** Safely serialize any result into a data string (truncated to MAX_OUTPUT_CHARS). */
 function asData(payload: unknown): string {
   const s = JSON.stringify(payload);
   return s.length > MAX_OUTPUT_CHARS ? s.slice(0, MAX_OUTPUT_CHARS) + '…(truncated)' : s;
 }
 
-/** 解析 user-supplied 路径为绝对路径，realpath 后必须 startsWith cwdRoot。
- *  越界一律抛 SandboxViolationError；调用方负责 try/catch 并返回 { ok: false, error }。 */
+/** Resolves a user-supplied path to an absolute path; after realpath it must startsWith cwdRoot.
+ *  Escapes always throw SandboxViolationError; the caller owns the try/catch and returns { ok: false, error }. */
 export async function assertInCwd(cwdRoot: string, target: string): Promise<string> {
   if (!target || typeof target !== 'string') {
     throw new SandboxViolationError('path is empty');
@@ -52,7 +52,7 @@ export async function assertInCwd(cwdRoot: string, target: string): Promise<stri
   const abs = path.isAbsolute(target) ? target : path.join(cwdRoot, target);
   const real = await fs.realpath(abs).catch(() => abs);
   const rootReal = await fs.realpath(cwdRoot);
-  // 在尾部加 separator 防止 /foo/barbaz 误判为 /foo/bar 的子串
+  // Append the trailing separator so /foo/barbaz is not misjudged as a substring of /foo/bar
   const rootWithSep = rootReal.endsWith(path.sep) ? rootReal : rootReal + path.sep;
   if (real !== rootReal && !real.startsWith(rootWithSep)) {
     throw new SandboxViolationError(`path escapes cwd: ${target}`);
@@ -71,20 +71,22 @@ function runRg(cwdRoot: string, args: string[]): Promise<{ stdout: string; code:
     child.on('error', (e) => { clearTimeout(timer); reject(e); });
     child.on('close', (code) => {
       clearTimeout(timer);
-      // code=1 表示无匹配（rg 约定），仍算成功
+      // code=1 means no matches (rg convention) — still a success
       if (code === 0 || code === 1) resolve({ stdout: out, code });
       reject(new Error(`rg exited ${code}: ${err}`));
     });
   });
 }
 
-/** cwdRoot 传静态目录(requirement 级)或 () => string(动态解析,空间级后台异步检出:
- *  未就绪/不可用时 throw,由各工具既有 try/catch 转为错误结果)。 */
+/** cwdRoot takes a static directory (requirement level) or () => string (dynamically resolved,
+ *  space-level background async checkout: throws when not ready/unavailable, and each tool's
+ *  existing try/catch turns that into an error result). */
 
-/** 单 pattern 计数：L1 静态定位的逐条查询路径（批量版见 countRepoGrepBatch）。
- *  -c 按文件输出 path:count，输出量受「命中文件数」而非「命中行数」约束；
- *  --max-count=100 封顶单文件内计数（终极泛化锚点也不会炸输出）。rg 默认尊重 .gitignore。
- *  保留给需要单独 glob 或单条精确计数的调用方。 */
+/** Per-pattern count: the one-by-one query path of L1 static locating (batch version: countRepoGrepBatch).
+ *  -c outputs path:count per file, so output size is bounded by "matched file count" rather than
+ *  "matched line count"; --max-count=100 caps the per-file count (even a hyper-generic anchor cannot
+ *  blow up the output). rg honors .gitignore by default.
+ *  Kept for callers needing a separate glob or a single exact count. */
 export async function countRepoGrep(cwdRoot: string, pattern: string, glob?: string): Promise<SourceCount> {
   const args = ['--no-heading', '-c', '-S', '--max-count=100'];
   if (glob) args.push('--glob', glob);
@@ -110,18 +112,19 @@ export async function countRepoGrep(cwdRoot: string, pattern: string, glob?: str
   return { count, truncated, samplePaths };
 }
 
-/** 批量模式的单文件行数上限。注意 rg 的 --max-count 是「每文件」而非「每 pattern」，
- *  N 个 pattern 共享这个配额（实测：300 文件 × 2 pattern，cap=2 → 恰好 600 行）。 */
+/** Per-file line cap for batch mode. Note rg's --max-count is "per file" not "per pattern";
+ *  N patterns share this quota (measured: 300 files × 2 patterns, cap=2 → exactly 600 lines). */
 const BATCH_MAX_COUNT_PER_FILE = 200;
-/** 批量模式总输出行数上限，防止 common-word pattern（service/test/data）灌爆内存。
- *  超限即截断并置全体 truncated——计数只用于「唯一 / 多重 / 零命中」三分，
- *  截断只会让 count 偏大（multiple 方向），不会把 multiple 误判成 unique。 */
+/** Total output line cap for batch mode, preventing common-word patterns (service/test/data) from flooding memory.
+ *  Exceeding it truncates and sets truncated on everything — the count only feeds the unique/multiple/none
+ *  three-way split, and truncation only inflates the count (toward multiple); it never misjudges multiple as unique. */
 const BATCH_MAX_TOTAL_LINES = 20_000;
-/** 批量模式每 pattern 记录的最大样例路径数（与 countRepoGrep 对齐）。 */
+/** Max sample paths recorded per pattern in batch mode (aligned with countRepoGrep). */
 const BATCH_MAX_SAMPLE_PATHS = 10;
 
-/** 把 rg -n 的合并输出按 pattern 归因，写入 perPattern（就地累加）。
- *  rg 不标注命中来自哪个 -e，故取回整行原文后在内存里逐 pattern 跑已编译正则认领。 */
+/** Attributes rg -n's merged output per pattern into perPattern (accumulated in place).
+ *  rg does not label which -e a hit came from, so whole original lines are fetched and each
+ *  pattern's compiled regex claims them in memory. */
 function attributeLines(
   stdout: string,
   regexes: Array<{ pattern: string; re: RegExp }>,
@@ -134,7 +137,7 @@ function attributeLines(
       for (const sc of perPattern.values()) sc.truncated = true;
       break;
     }
-    // rg -n 输出 path:lineno:text。路径含冒号时用「首个 : 后跟数字」的形态定位分隔点。
+    // rg -n outputs path:lineno:text. When the path contains colons, locate the split point by the "first colon followed by a digit" shape.
     const m = /^([^:]+):(\d+):([\s\S]*)$/.exec(line);
     if (!m) continue;
     const text = m[3]!;
@@ -149,21 +152,26 @@ function attributeLines(
   }
 }
 
-/** 批量查 N 个 pattern：树只走一遍，JS 侧按 pattern 归因。
+/** Batch-query N patterns: walk the tree once, attribute per pattern on the JS side.
  *
- *  rg 合并输出不标注命中来自哪个 -e，而 analyzeLocatorCandidates 的判决（unique / multiple /
- *  not-found）依赖 per-pattern 计数，故用 -n 行模式取回整行原文后由 attributeLines 归因。
- *  N 个 pattern × 数千行 ≈ 数万次 regex.test，毫秒级，不是瓶颈。
- *  注意不要改成并发 spawn：rg 内部已按核数并行，外层再套并发只是在抢同一批 CPU（实测更慢）。
+ *  rg's merged output does not label which -e a hit came from, and analyzeLocatorCandidates'
+ *  verdict (unique / multiple / not-found) depends on per-pattern counts, so -n line mode fetches
+ *  whole original lines and attributeLines attributes them.
+ *  N patterns × thousands of lines ≈ tens of thousands of regex.test calls — milliseconds, not a bottleneck.
+ *  Do not make the spawns concurrent: rg already parallelizes by core count; adding outer concurrency
+ *  only fights over the same CPUs (measured slower).
  *
- *  pattern 按「含不含大写字母」分组，各跑一次 rg——起因是 rg -S(smart-case) 的作用域是
- *  **整条命令行而非单个 -e**：只要命令行里有任一 pattern 含大写，rg 就对所有 pattern 关闭
- *  忽略大小写。实测（真实仓库 / SOC base-all）：
- *    -S -e placeholder              → 2288（含 placeHolderStyle 等 180 处变体）
- *    -S -e placeholder -e searchForm → 2108（searchForm 含大写，把 placeholder 也拖成区分大小写）
- *  混合跑必然有一组口径与逐条版不一致；拆组后每次的 smart-case 作用域内 pattern 同质，
- *  归因正则统一用各自组的大小写语义（不含大写组加 i flag），与逐条版严格对齐。
- *  分组后 spawn 数至多 2，相对 N 次串行仍是数量级优势。 */
+ *  Patterns are grouped by "contains uppercase or not", one rg run each — the reason is that
+ *  rg -S (smart-case) applies to **the whole command line, not a single -e**: as soon as any
+ *  pattern on the command line contains uppercase, rg disables case-insensitivity for all patterns.
+ *  Measured (real repo / SOC base-all):
+ *    -S -e placeholder              → 2288 (including 180 variants like placeHolderStyle)
+ *    -S -e placeholder -e searchForm → 2108 (searchForm has uppercase, dragging placeholder into case-sensitive)
+ *  A mixed run necessarily makes one group disagree with the per-pattern version; after splitting,
+ *  patterns within each run's smart-case scope are homogeneous and the attribution regexes use
+ *  their group's case semantics (the no-uppercase group adds the i flag), strictly aligned with
+ *  the per-pattern version.
+ *  After grouping there are at most 2 spawns — still an order of magnitude better than N serial runs. */
 export async function countRepoGrepBatch(cwdRoot: string, patterns: string[]): Promise<Map<string, SourceCount>> {
   const out = new Map<string, SourceCount>();
   const uniq = [...new Set(patterns)].filter(Boolean);
@@ -176,8 +184,8 @@ export async function countRepoGrepBatch(cwdRoot: string, patterns: string[]): P
 
   for (const group of groups) {
     const insensitive = !/[A-Z]/.test(group[0]!);
-    // 归因正则全部来自 extractGrepKeys 的 esc()（已转义 . * + ? ^ $ { } ( ) | [ ] \），
-    // 必然可编译，不做逐 pattern 的 try/catch。
+    // The attribution regexes all come from extractGrepKeys' esc() (escaping . * + ? ^ $ { } ( ) | [ ] \),
+    // so they always compile — no per-pattern try/catch.
     const regexes = group.map((p) => ({ pattern: p, re: new RegExp(p, insensitive ? 'i' : '') }));
     const perPattern = new Map<string, SourceCount>(
       group.map((p) => [p, { count: 0, truncated: false, samplePaths: [] }]),
@@ -185,8 +193,9 @@ export async function countRepoGrepBatch(cwdRoot: string, patterns: string[]): P
     const argList = ['--no-heading', '-n', '-S', `--max-count=${BATCH_MAX_COUNT_PER_FILE}`];
     for (const p of group) argList.push('-e', p);
     argList.push('--', '.');
-    // rg 不可用/超时 → 本批全体记 0 命中（静态分析是 advisory，绝不因工具故障打断 verify_case；
-    // 与逐条版对 rg 异常的宽松度一致）。perPattern 已预置 0 计数，故成败都要并进 out。
+    // rg unavailable/timeout → record 0 hits for the whole batch (static analysis is advisory; never
+    // interrupt verify_case over a tool failure; same leniency toward rg errors as the per-pattern
+    // version). perPattern is pre-seeded with 0 counts, so both success and failure merge into out.
     await runRg(cwdRoot, argList)
       .then(({ stdout }) => attributeLines(stdout, regexes, perPattern))
       .catch(() => undefined);
@@ -411,7 +420,7 @@ function runGit(args: string[], cwdArg: string = process.cwd(), timeoutMs?: numb
     const child = spawn('git', args, { cwd: cwdArg, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
-    // 超时只用于读侧调用（gitRead）：检出/加深是长操作，刻意不限时；读命令挂死必须能断。
+    // Timeout applies to read-side calls only (gitRead): checkout/deepen are long operations, deliberately untimed; a hung read command must be breakable.
     let timer: NodeJS.Timeout | undefined;
     if (timeoutMs) {
       timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`git timeout after ${timeoutMs}ms`)); }, timeoutMs);
@@ -420,8 +429,9 @@ function runGit(args: string[], cwdArg: string = process.cwd(), timeoutMs?: numb
     child.stderr.on('data', (d) => { err += d.toString(); });
     child.on('error', (e) => {
       const errNo = e as NodeJS.ErrnoException;
-      // 容器镜像没装 git 时 spawn 即 ENOENT;原文「spawn git ENOENT」对运维没指导意义,
-      // 转成可执行的修复建议,checkoutInBackground 会再透到 repo.issue。
+      // When the container image lacks git, spawn fails with ENOENT; the raw "spawn git ENOENT"
+      // gives ops no guidance, so convert it into an actionable fix hint; checkoutInBackground
+      // propagates it further into repo.issue.
       if (timer) clearTimeout(timer);
       if (errNo.code === 'ENOENT' && errNo.message.includes('git')) {
         reject(new Error('git binary missing in runtime image; rebuild infra/docker/api.Dockerfile with git installed'));
@@ -440,29 +450,32 @@ function runGitIn(cwdArg: string, args: string[]): Promise<string> {
   return runGit(args, cwdArg);
 }
 
-/** 只读用途的 git 调用入口（探索的「代码提交范围」解析 + 读码通道共用）。
- *  调用方负责保证子命令只读（log/diff/show/rev-list…），这里不做白名单。
- *  带 30s 超时（读命令挂死必须能断；检出/加深走内部 runGit，不限时）。 */
+/** Entry point for read-only git calls (shared by exploration's "code commit scope" resolution and
+ *  the code-reading channel).
+ *  The caller guarantees the subcommand is read-only (log/diff/show/rev-list…); no whitelist here.
+ *  30s timeout (a hung read command must be breakable; checkout/deepen use the internal runGit, untimed). */
 export async function gitRead(cwdArg: string, args: string[]): Promise<string> {
   return runGit(args, cwdArg, REPO_RUN_TIMEOUT_MS);
 }
 
-/** 浅克隆边界：depth 按提交条数，since 按日期（两者互斥——git 拒绝同时给出）。
- *  默认 depth=1 → 助手路径行为零变化。
- *  since 必须是显式时间戳（YYYY-MM-DDTHH:MM:SS）：实测裸日期「2026-01-01」与
- *  「2026-01-01T00:00:00」的边界判定不同（后者才严格含当日提交），调用方统一给显式时间戳。
- *  注意 fetch --shallow-since 在「对象已在本地（上一次加深过又被助手截回 depth 1）」时
- *  可能不重写浅边界——调用方要自行核验覆盖度，不足时改用 depth 重试（depth 恒生效）。 */
+/** Shallow-clone bounds: depth by commit count, since by date (mutually exclusive — git refuses both at once).
+ *  Default depth=1 → zero behavior change on the assistant path.
+ *  since must be an explicit timestamp (YYYY-MM-DDTHH:MM:SS): a bare date "2026-01-01" and
+ *  "2026-01-01T00:00:00" judge the boundary differently (measured; only the latter strictly includes
+ *  same-day commits), so callers always pass explicit timestamps.
+ *  Note fetch --shallow-since may not rewrite the shallow boundary when objects are already local
+ *  (deepened once, then truncated back to depth 1 by the assistant) — the caller must verify
+ *  coverage itself and retry with depth when insufficient (depth always takes effect). */
 export interface ShallowBounds {
-  /** 深度（提交条数）。 */
+  /** Depth (commit count). */
   depth?: number;
-  /** 浅克隆边界时间戳（显式 YYYY-MM-DDTHH:MM:SS）：拉取该时刻之后的历史。 */
+  /** Shallow-bound timestamp (explicit YYYY-MM-DDTHH:MM:SS): fetches history after that moment. */
   since?: string;
 }
 
 const DEFAULT_SHALLOW_DEPTH = 1;
 
-/** git clone/fetch 的浅克隆参数组：since 优先于 depth（git 不允许两者同时出现）。 */
+/** Shallow-clone arg group for git clone/fetch: since takes priority over depth (git forbids both at once). */
 function shallowArgs(bounds: ShallowBounds): string[] {
   return bounds.since
     ? ['--shallow-since', bounds.since]
@@ -481,14 +494,14 @@ async function cloneFirst(target: string, info: ProjectRepo, bounds: ShallowBoun
 }
 
 async function fetchAndReset(target: string, info: ProjectRepo, ref: string, bounds: ShallowBounds = {}): Promise<string> {
-  // 1. dirty 检查：tracked 修改 / untracked 文件 → stash
+  // 1. dirty check: tracked modifications / untracked files → stash
   const status = await runGitIn(target, ['status', '--porcelain']).catch(() => '');
   let stashRef: string | null = null;
   if (status.trim().length > 0) {
     const stashOut = await runGitIn(target, ['stash', 'push', '--include-untracked', '-m', `itest-auto-${Date.now()}`]);
     stashRef = stashOut.match(/refs\/stash\{\d+\}/)?.[0] ?? stashOut.trim();
   }
-  // 2. fetch + reset（FETCH_HEAD 对 branch / tag 通用）
+  // 2. fetch + reset (FETCH_HEAD works for both branch and tag)
   try {
     await runGitIn(target, ['fetch', ...shallowArgs(bounds), 'origin', ref]);
     await runGitIn(target, ['reset', '--hard', 'FETCH_HEAD']);
@@ -496,7 +509,7 @@ async function fetchAndReset(target: string, info: ProjectRepo, ref: string, bou
     const msg = (e as Error).message;
     throw new RepoUnavailableError(/401|403/i.test(msg) ? 'auth_failed' : 'fetch_failed', msg);
   }
-  // 3. 写 meta（branch 记录实际 ref）
+  // 3. Write meta (branch records the actual ref)
   const commit = (await runGitIn(target, ['rev-parse', 'HEAD'])).trim();
   await fs.writeFile(path.join(target, '.itest-sandbox.json'), JSON.stringify({
     provider: info.provider,
@@ -508,10 +521,11 @@ async function fetchAndReset(target: string, info: ProjectRepo, ref: string, bou
   return target;
 }
 
-/** 目录锁：同一 target 目录 → 同一把锁（proper-lockfile 锁文件是 `<target>.lock` 兄弟路径，
- *  锁内 rm -rf target 不破坏锁本身）。检出与「加深浅克隆」共用它 → 两把动作不会互踩。 */
+/** Directory lock: same target directory → same lock (proper-lockfile's lock file is the sibling path
+ *  `<target>.lock`, so rm -rf target inside the lock does not destroy the lock itself). Checkout and
+ *  "deepen shallow clone" share it → the two actions never stomp each other. */
 async function withRepoLock<T>(target: string, fn: () => Promise<T>): Promise<T> {
-  // proper-lockfile 加锁前会 lstat 目标路径，冷路径目标还不存在 → 先保证目录在（幂等）
+  // proper-lockfile lstats the target before locking; on the cold path it does not exist yet → ensure the directory first (idempotent)
   await fs.mkdir(target, { recursive: true });
   let release: () => Promise<void>;
   try {
@@ -527,12 +541,15 @@ async function withRepoLock<T>(target: string, fn: () => Promise<T>): Promise<T>
   }
 }
 
-/** 检出/更新临界区：先锁后检。锁在目录存在性判断之前拿，冷热两路同锁——3 副本共享
- *  .data 卷时，旧实现冷路径 `.catch(() => null)` 吞掉 ELOCKED 后裸克隆、且 rm 发生在拿
- *  锁之前（会删掉他副本正在 fetch 的目录），两个副本同时冷克隆同一版本即互相践踏。
- *  锁内二次检查 .git：等锁期间赢家可能已建好仓库，直接走热路径 fetchAndReset。
- *  重试 5×200ms（指数退避）：短暂等待通常比立刻 LockTimeoutError（调用方有上层重试）
- *  体验好。 */
+/** Checkout/update critical section: lock first, then check. The lock is taken before the directory
+ *  existence check and both cold/hot paths share it — with 3 replicas sharing the .data volume,
+ *  the old cold path `.catch(() => null)` swallowed ELOCKED and cloned bare, with rm happening
+ *  before the lock (deleting the directory another replica was fetching): two replicas cold-cloning
+ *  the same version simultaneously trampled each other.
+ *  Re-check .git inside the lock: while waiting, the winner may have built the repo already — go
+ *  straight down the hot fetchAndReset path.
+ *  Retry 5×200ms (exponential backoff): a brief wait usually beats an immediate LockTimeoutError
+ *  (the caller has its own upper-level retry). */
 async function withCheckoutLock(target: string, info: ProjectRepo, branch: string, bounds: ShallowBounds = {}): Promise<string> {
   return withRepoLock(target, async () => {
     if (await dirExists(target) && await dirExists(path.join(target, '.git'))) {
@@ -545,7 +562,7 @@ async function withCheckoutLock(target: string, info: ProjectRepo, branch: strin
   });
 }
 
-/** 第一阶段：先实现 no_repo / 锁 / 目录骨架。clone / fetch / stash 后补。 */
+/** Phase 1: no_repo / lock / directory skeleton first. clone / fetch / stash filled in later. */
 export async function checkoutRepo(requirementId: string): Promise<string> {
   const info = await loadProjectRepo(requirementId);
   if (!info) throw new RepoUnavailableError('no_repo', 'project has no repoUrl configured');
@@ -573,8 +590,9 @@ async function loadVersionRepo(versionId: string): Promise<ProjectRepo | null> {
   return { repoUrl: row.repoUrl, branch: row.versionRef ?? row.branch, provider: row.provider, pat: row.pat, gitlabOverride: row.gitlabOverride };
 }
 
-/** 版本级 checkout：沙箱目录 v-<versionId> 与需求级隔离；ref 取 version.ref，缺省回落项目默认分支。tag 亦可用（fetch FETCH_HEAD）。
- *  可通过 targetDir 指定检出目录，未指定时沿用 .data/repos/v-<versionId>。 */
+/** Version-level checkout: sandbox directory v-<versionId>, isolated from requirement level; ref comes
+ *  from version.ref, falling back to the project default branch. Tags work too (fetch FETCH_HEAD).
+ *  targetDir can specify the checkout directory; when omitted .data/repos/v-<versionId> is used. */
 export async function checkoutRepoForVersion(versionId: string, targetDir?: string, bounds: ShallowBounds = {}): Promise<string> {
   const info = await loadVersionRepo(versionId);
   if (!info) throw new RepoUnavailableError('no_repo', 'project has no repoUrl configured');
@@ -584,17 +602,19 @@ export async function checkoutRepoForVersion(versionId: string, targetDir?: stri
   return withCheckoutLock(target, info, info.branch, bounds);
 }
 
-/** 版本工作树目录：.data/workspaces/v-<versionId>/repo。
- *  助手会话与探索范围解析共用此目录 → 共享同一把检出锁（`<dir>.lock`），互不践踏。 */
+/** Version worktree directory: .data/workspaces/v-<versionId>/repo.
+ *  Assistant sessions and exploration scope resolution share this directory → they share the same
+ *  checkout lock (`<dir>.lock`) and never stomp each other. */
 export function versionWorkspaceDir(versionId: string): string {
   return path.join(WORKSPACES_ROOT, `v-${versionId}`, 'repo');
 }
 
-/** 把版本工作树的浅克隆「加深」到足以覆盖目标范围（探索式测试的代码提交范围用）。
- *  助手侧固定 fetch --depth 1 → 浅克隆里没有历史，加深必须在同一把锁内做，
- *  否则两个动作会互相把对方加深出来的历史抹掉。
- *  冷路径（工作树还没有 .git）直接按目标边界检出。
- *  返回 HEAD sha。 */
+/** "Deepens" the version worktree's shallow clone enough to cover the target range (used by
+ *  exploratory testing's code commit scope).
+ *  The assistant side always fetches --depth 1 → the shallow clone has no history, so deepening
+ *  must happen under the same lock, otherwise the two actions erase each other's deepened history.
+ *  Cold path (worktree has no .git yet): check out directly to the target bounds.
+ *  Returns the HEAD sha. */
 export async function deepenVersionRepo(versionId: string, bounds: ShallowBounds): Promise<string> {
   const info = await loadVersionRepo(versionId);
   if (!info) throw new RepoUnavailableError('no_repo', 'project has no repoUrl configured');

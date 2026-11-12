@@ -1,22 +1,22 @@
 /**
- * 会话过程留痕的「结果摘要」（pi 链路）。
+ * "Result summary" of the session action trail (pi path).
  *
- * 背景：留痕原本只记动作（type/target/ok），详情页「会话过程」里全是
- * 「观察页面 -」「页内脚本 -」「截图 -」——动作在、结论无，用户从过程看不到价值。
- * 修法：工具层产出 details.summary（结果摘要），runner 落进留痕的 outcome 字段。
+ * Background: the trail used to record only actions (type/target/ok), so the detail page's "Session Activity" was full of
+ * "Observe page -", "In-page script -", "Screenshot -" — the action was there, the conclusion absent; users saw no value in the process.
+ * Fix: the tool layer produces details.summary (result summary); the runner lands it in the trail's outcome field.
  *
- * 验收项：
- *  - 每个工具的成功/失败结果都带 summary（摘要 = 这步看到了什么/为什么失败）；
- *  - summary 不进模型上下文（details 字段不进 content）；
- *  - 留痕初稿覆盖 inject_fault（模式名要看得见）；
- *  - 工具没给摘要但判失败 → 从错误文本兜底摘原因。
+ * Acceptance items:
+ *  - Every tool's success/failure result carries a summary (summary = what this step saw / why it failed);
+ *  - summary does not enter the model context (the details field does not go into content);
+ *  - The trail draft covers inject_fault (the mode name must be visible);
+ *  - Tool gave no summary but is judged failed → reason extracted from the error text as fallback.
  */
 import { describe, it, expect } from 'vitest';
 import { fallbackFailureReason, readToolSummary } from '../src/pi/exploration/trail.js';
 import { trailStepOf } from '../src/pi/exploration/tools/index.js';
 import { trailToSteps } from '../src/execute/explorationPrompt.js';
 
-/** 工具结果的 summary（details 字段）。 */
+/** The summary of a tool result (details field). */
 function summaryOf(result: unknown): string | undefined {
   return readToolSummary(result);
 }
@@ -84,7 +84,7 @@ describe('留痕结果摘要（outcome）', () => {
       },
     });
     const r = await tool.execute('f1', { mode: 'offline' });
-    // content 只有给模型看的文本；摘要走 details。
+    // content holds only the text shown to the model; the summary goes via details.
     const text = (r.content as Array<{ type: string; text?: string }>).map((b) => b.text).join('');
     expect(text).toContain('已注入故障');
     expect(text).not.toContain('details');
@@ -94,7 +94,7 @@ describe('留痕结果摘要（outcome）', () => {
   it('留痕初稿：inject_fault 记模式名（原来落进默认分支变成 "-"）', async () => {
     const step = trailStepOf('inject_fault', { mode: 'offline' });
     expect(step).toEqual({ type: 'inject_fault', target: 'offline', ok: true });
-    // 升格用例的复现步骤也要看得见这一步。
+    // Promoted-case reproduction steps must also show this step.
     expect(trailToSteps([{ type: 'inject_fault', target: 'offline' }])).toEqual([{ action: '注入故障 offline' }]);
   }, 20000);
 

@@ -4,11 +4,11 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
-// 类型导入编译期擦除（不触发模块加载）；helpers/auth 链到 auth.service → db/client，
-// 模块加载即快照 DATABASE_URL，故必须在设好环境变量后动态 import。
+// Type imports are erased at compile time (no module load triggered); helpers/auth chains to auth.service → db/client,
+// and module load snapshots DATABASE_URL, so dynamic import must happen after env vars are set.
 import type { AuthUser } from '../src/services/auth.service.js';
 
-// runner 打桩：真实实现会起 chromium + 调 LLM，路由测试只验契约与状态机。
+// Runner stub: the real implementation launches chromium + calls the LLM; route tests only verify the contract and state machine.
 const { runMock, removeShotsMock } = vi.hoisted(() => ({
   runMock: vi.fn(async (_input: { sessionId: string }) => undefined),
   removeShotsMock: vi.fn(async (_sessionId: string) => undefined),
@@ -22,17 +22,17 @@ let pool: Pool;
 let app: import('express').Express;
 let projectId: string;
 let versionId: string;
-/** 种子项目的分组（升格用例的目标分组）。 */
+/** Seed project's group (target group for case promotion). */
 let groupId: string;
-/** 另一个项目的分组（跨项目升格应被拒）。 */
+/** Another project's group (cross-project promotion should be rejected). */
 let otherGroupId: string;
 let userId: string;
 let username: string;
 let orgId: string;
 let orgPath: string;
-/** 当前注入的登录身份（跨组织用例临时切换）。 */
+/** Currently injected login identity (temporarily switched for cross-org tests). */
 let currentUser: AuthUser;
-/** helpers/auth 的工厂（动态 import 取得，见 beforeAll 注释）。 */
+/** helpers/auth factory (obtained via dynamic import; see the beforeAll comment). */
 let managerUserOf: typeof import('./helpers/auth.js').managerUserOf;
 
 beforeAll(async () => {
@@ -71,7 +71,7 @@ afterAll(async () => {
 
 const CHARTER = '探索用户管理页面的增删改查，报告所有异常行为与校验缺失。';
 
-/** 建一条会话（落库直写，绕开 runner）。 */
+/** Insert a session (direct DB write, bypassing the runner). */
 async function insertSession(overrides: Record<string, unknown> = {}): Promise<string> {
   const r = await pool.query(
     `INSERT INTO exploration_sessions(project_id, version_id, title, charter, persona, status, created_by_user_id)
@@ -270,7 +270,7 @@ describe('GET /api/explorations - 列表与详情', () => {
   });
 });
 
-/** 建一条 finding（落库直写）。 */
+/** Creates one finding row (direct DB write). */
 async function insertFinding(sessionId: string, overrides: Record<string, unknown> = {}): Promise<string> {
   const r = await pool.query(
     `INSERT INTO exploration_findings(session_id, "order", title, description, severity, repro_steps, actions_trail, status)
@@ -410,7 +410,7 @@ describe('升格为用例', () => {
     expect(c.title).toBe('删除无二次确认');
     expect(c.priority).toBe('P1');
     const steps = (await pool.query(`SELECT instruction, compiled FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [caseId])).rows;
-    // 留痕优先（模型自述可能脑补）→ 步骤取平台记录的 click .del，并带机械 DSL。
+    // Trail takes precedence (the model's own description may be hallucinated) → steps come from the platform-recorded click .del, with mechanical DSL.
     expect(steps.map((s: { instruction: string }) => s.instruction)).toEqual(['点击 .del']);
     expect(steps[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '.del' }] }]);
     const f = (await pool.query(`SELECT status, promoted_case_id FROM exploration_findings WHERE id=$1`, [fid])).rows[0]!;

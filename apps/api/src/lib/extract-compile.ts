@@ -14,7 +14,7 @@ export interface CompileExtractResult {
   group: number;
 }
 
-/** 调 LLM 生成正则。生成后做 safeRegex 校验；不合法抛错由调用方处理。 */
+/** Calls the LLM to generate a regex. The result is then validated with safeRegex; the caller handles the throw on invalid output. */
 export async function compileExtractRegex(
   description: string,
   sampleText: string,

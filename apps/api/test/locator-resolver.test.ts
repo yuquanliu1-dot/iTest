@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Page } from 'playwright-core';
 
-// 构造 Page mock：每个 strategy 返回一个独立 locator，便于断言顺序
+// Builds a Page mock: each strategy returns an independent locator, so order is easy to assert
 function makePage(): Page & {
   __calls: string[];
   __locators: Map<string, { __id: string }>;
@@ -46,7 +46,7 @@ describe('buildCandidates — priority order', () => {
     expect(page.__calls.slice(0, 3)).toEqual([
       'locator([data-testid="loginBtn"])',
       'getByText(登录)',
-      'locator(.btn)', // 普通 CSS 在第一组 css 里（isStableCssPath('.btn') === false）
+      'locator(.btn)', // plain CSS sits in the first css group (isStableCssPath('.btn') === false)
     ]);
   });
 
@@ -55,11 +55,11 @@ describe('buildCandidates — priority order', () => {
     buildCandidates(page as never, {
       locator: [
         { strategy: 'css', value: 'div' },
-        { strategy: 'css', value: '#submit' }, // 稳定 #id
+        { strategy: 'css', value: '#submit' }, // stable #id
         { strategy: 'xpath', value: '//*[@id="submit"]' },
       ],
     });
-    // #submit 必须出现在 xpath 之前
+    // #submit must appear before xpath
     const submitIdx = page.__calls.findIndex((c) => c === 'locator(#submit)');
     const xpathIdx = page.__calls.findIndex((c) => c.startsWith('locator(xpath='));
     expect(submitIdx).toBeLessThan(xpathIdx);

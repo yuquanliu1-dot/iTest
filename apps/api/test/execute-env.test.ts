@@ -61,7 +61,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** 执行已异步化（POST 立即返回，后台继续跑）；本 app 未挂 reports 路由，直接轮询 DB 到 report 收敛。 */
+/** Execution is async (POST returns immediately, work continues in the background); this app mounts no reports route, so poll the DB directly until the report converges. */
 async function waitReportDone(caseId: string, timeoutMs = 8000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -78,20 +78,20 @@ async function waitReportDone(caseId: string, timeoutMs = 8000): Promise<void> {
 
 describe('execute with env', () => {
   it('case with no env → reports EnvMissing failureReason', async () => {
-    // 触发 runCase → resolveEnv → EnvMissing
+    // triggers runCase -> resolveEnv -> EnvMissing
     const r = await request(app).post(`/api/cases/${caseId}/execute`);
     expect(r.status).toBe(200);
-    // 后台执行：轮询 DB 到 report 收敛后再取最新行断言
+    // background execution: poll the DB until the report converges, then fetch the latest row for assertions
     await waitReportDone(caseId);
     const { eq } = await import('drizzle-orm');
     const { db } = await import('../src/db/client.js');
     const { reports } = await import('../src/db/schema.js');
     const list = await db.select().from(reports).where(eq(reports.caseId, caseId));
     const rep = list[list.length - 1]!;
-    // 没有步骤、无 init URL 时 runCase 走完整 CDP 链路（空步骤列表），浏览器不可用 → failed
-    // 测试更直接的逻辑：cases 表无 defaultEnvId，且 planEnvId 无 → 应写 EnvMissing
-    // 由于无步骤不会触发 dispatch，直接验证 runCase 路径不带 env 不会失败；
-    // 若需要严格校验 EnvMissing，可加一个 sql 步骤（steps 路由接受 action jsonb 字段）。
+    // With no steps and no init URL, runCase still walks the full CDP chain (empty step list); with no browser it -> failed.
+    // More direct test logic: the cases row has no defaultEnvId and no planEnvId -> EnvMissing should be written.
+    // Since no steps means dispatch never fires, this just verifies the runCase path without env doesn't crash;
+    // for strict EnvMissing validation, add a sql step (the steps route accepts an action jsonb field).
     expect(['passed', 'failed']).toContain(rep.status);
   });
 

@@ -1,4 +1,4 @@
-/** prompt 模块路由：列表/版本链/直改/回滚/skill 只读组守卫/权限门。 */
+/** Prompt module routes: list / version chain / direct edit / rollback / skill read-only group guard / permission gate. */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,8 +8,8 @@ import { createTestDatabase } from './helpers/pg.js';
 import type { Express } from 'express';
 import request from 'supertest';
 import { SCHEMA_SQL, seedOrg } from './helpers/db.js';
-// auth helpers 不能静态 import：auth.service → db/client 在模块加载期即固化
-// DATABASE_URL，会把应用 db 指到 beforeAll 设 env 之前的库（space-skills 同款坑）。
+// auth helpers cannot be statically imported: auth.service → db/client bakes in
+// DATABASE_URL at module load, which would point the app's db at the pre-beforeAll env database (same gotcha as space-skills).
 let managerUserOf: typeof import('./helpers/auth.js').managerUserOf;
 let memberUserOf: typeof import('./helpers/auth.js').memberUserOf;
 
@@ -38,8 +38,8 @@ beforeAll(async () => {
   const express = (await import('express')).default;
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
   mount = async (role) => {
-    // manager 用 seedOrg 落库的真实 userId：路由写 created_by_user_id 有 FK 约束；
-    // member 只走 403（requireManager 拒在 handler 前），随机 id 无插入、不触 FK。
+    // manager uses the real userId persisted by seedOrg: the route writes created_by_user_id which has an FK constraint;
+    // member only hits 403 (requireManager rejects before the handler), so a random id inserts nothing and never touches the FK.
     const user = role === 'manager'
       ? managerUserOf(orgUserId, orgUsername, orgId, orgPath)
       : memberUserOf(crypto.randomUUID(), 'mem', orgId, orgPath);
@@ -95,7 +95,7 @@ describe('prompt-modules 路由', () => {
     const list = await request(app).get('/api/assistant/prompt-modules').expect(200);
     const row = list.body.find((m: { key: string }) => m.key === 'space.style.zh');
     expect(row.isDefault).toBe(true);
-    expect(row.hasRow).toBe(true); // 行在，值 NULL=跟随代码默认
+    expect(row.hasRow).toBe(true); // row present, value NULL = follow the code default
   });
 
   it('POST fromSeq 回滚：复制历史行 value，source=rollback', async () => {
@@ -125,7 +125,7 @@ describe('prompt-modules 路由', () => {
     const app = await mount('manager');
     await request(app).post('/api/assistant/prompt-modules/skill.demo-skill/value').send({ value: 'hack' }).expect(400);
 
-    // 造历史行：先经 baseline 语义手工插两行（模拟已有版本链）
+    // Build history rows: manually insert two rows under baseline semantics (simulating an existing version chain)
     await pool.query(`INSERT INTO assistant_prompt_module_versions (module_key, value, source) VALUES ('skill.demo-skill', '旧正文', 'baseline')`);
     await pool.query(`INSERT INTO assistant_prompt_module_versions (module_key, value, source) VALUES ('skill.demo-skill', '新正文', 'solidify_apply')`);
     const vers = await request(app).get('/api/assistant/prompt-modules/skill.demo-skill/versions').expect(200);
@@ -134,7 +134,7 @@ describe('prompt-modules 路由', () => {
     await request(app).post('/api/assistant/prompt-modules/skill.demo-skill/value').send({ fromSeq: baselineSeq }).expect(200);
     const md = readFileSync(join(tmpDataDir, 'skills', 'demo-skill', 'SKILL.md'), 'utf8');
     expect(md).toContain('旧正文');
-    expect(md.startsWith('---\nname: "demo-skill"\ndescription: "演示技能"\n---\n')).toBe(true); // frontmatter 从 DB 重拼
+    expect(md.startsWith('---\nname: "demo-skill"\ndescription: "演示技能"\n---\n')).toBe(true); // frontmatter reassembled from DB
   });
 
   it('非管理员 → 403', async () => {

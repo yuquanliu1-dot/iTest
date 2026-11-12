@@ -75,7 +75,7 @@ describe('产品线 CRUD', () => {
       [baseline.projectId, site.projectId].sort(),
     );
 
-    // 再挂一次不报错（幂等覆盖）
+    // Attaching again does not error (idempotent upsert)
     const again = await request(app).post(`/api/product-lines/${line.body.id}/projects`).send({ projectIds: [baseline.projectId] });
     expect(again.status).toBe(200);
   });
@@ -87,7 +87,7 @@ describe('产品线 CRUD', () => {
     const otherLine = await request(app).post('/api/product-lines').send({ name: `改挂-${Date.now()}` });
     await request(app).post(`/api/product-lines/${line.body.id}/projects`).send({ projectIds: [a.projectId, b.projectId] });
 
-    // R2：不存在「移出线」，换一个方向——把 a 挂到另一条线。
+    // R2: there is no "remove from line"; flip the direction — attach a to another line.
     const moved = await request(app).post(`/api/product-lines/${otherLine.body.id}/projects`).send({ projectIds: [a.projectId] });
     expect(moved.status).toBe(200);
     expect(await lineProductLineId(a.projectId)).toBe(otherLine.body.id);
@@ -102,11 +102,11 @@ describe('产品线 CRUD', () => {
     const del = await request(app).delete(`/api/product-lines/${line.body.id}`);
     expect(del.status).toBe(409);
     expect(del.body.error).toBe('line_not_empty');
-    // 项目与线都还在
+    // Project and line both still there
     expect(await lineProductLineId(p.projectId)).toBe(line.body.id);
     expect((await pool.query(`SELECT id FROM product_lines WHERE id = $1`, [line.body.id])).rowCount).toBe(1);
 
-    // 把项目挪到别的线后原线变空，即可删除
+    // Move the project to another line so the original line becomes empty, then it can be deleted
     const otherLine = await request(app).post('/api/product-lines').send({ name: `接管-${Date.now()}` });
     await request(app).post(`/api/product-lines/${otherLine.body.id}/projects`).send({ projectIds: [p.projectId] });
     expect((await request(app).delete(`/api/product-lines/${line.body.id}`)).status).toBe(200);
@@ -129,7 +129,7 @@ describe('产品线 CRUD', () => {
 
 describe('产品线可见性与跨组织边界', () => {
   it('他组织的产品线访问 404（不泄露存在性）', async () => {
-    // 造一个与当前身份不同的组织 + 产品线
+    // Create an org + product line different from the current identity
     const other = await pool.query(
       `INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`,
       [`他组织-${Date.now()}`, `/other-${Date.now()}/`],
@@ -155,7 +155,7 @@ describe('产品线可见性与跨组织边界', () => {
       [`挂载他组织-${Date.now()}`, `/mount-${Date.now()}/`],
     );
     const otherOrgId = other.rows[0]!.id as string;
-    // 他组织的项目：当前身份看不见 → 404（可见性先于搬家生效）
+    // Another org's project: invisible to the current identity → 404 (visibility applies before the move)
     const foreignProjectId = await seedProjectInOrg(pool, otherOrgId, '他组织项目');
     const line = await request(app).post('/api/product-lines').send({ name: `跨组织挂-${Date.now()}` });
     const r = await request(app)
@@ -166,7 +166,7 @@ describe('产品线可见性与跨组织边界', () => {
   });
 
   it('跨组织可见时挂载 = 搬家：项目组织改写成产品线所属组织', async () => {
-    // 造一条当前身份 manager 且可见的「他组织」：组织名不同但 path 前缀挂在种子组织下
+    // Build an "other org" that the current identity can see and manages: different name but its path prefix hangs under the seeded org
     const { orgId: seedOrgId, orgPath: seedOrgPath } = await seedOrg(pool);
     const sub = await pool.query(
       `INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`,
@@ -174,7 +174,7 @@ describe('产品线可见性与跨组织边界', () => {
     );
     const subOrgId = sub.rows[0]!.id as string;
     const projectId = await seedProjectInOrg(pool, subOrgId, '兄弟组织项目');
-    // 用例 + 标签：挂载后标签必须迁到目标组织（否则用例更新会被 tag_org_mismatch 拒）
+    // Case + tag: after attaching, the tag must migrate to the target org (otherwise case updates get rejected with tag_org_mismatch)
     const g = await pool.query(`INSERT INTO "groups"(project_id, name) VALUES ($1, 'g') RETURNING id`, [projectId]);
     const c = await pool.query(
       `INSERT INTO test_cases(group_id, title) VALUES ($1, 'c') RETURNING id`,
@@ -191,7 +191,7 @@ describe('产品线可见性与跨组织边界', () => {
     const r = await request(app).post(`/api/product-lines/${line.body.id}/projects`).send({ projectIds: [projectId] });
     expect(r.status).toBe(200);
 
-    // R2：项目无 organization_id，「组织已改写」体现在它现在挂的线属于种子组织。
+    // R2: projects have no organization_id; "org rewritten" shows up as the line it now hangs on belonging to the seeded org.
     const after = await pool.query(
       `SELECT p.product_line_id, l.organization_id FROM projects p
          JOIN product_lines l ON l.id = p.product_line_id WHERE p.id = $1`,
@@ -200,7 +200,7 @@ describe('产品线可见性与跨组织边界', () => {
     expect(after.rows[0]!.product_line_id).toBe(line.body.id);
     expect(after.rows[0]!.organization_id).toBe(seedOrgId);
 
-    // 标签迁到目标组织下的同名 tag，case_tags 指向新行；源组织的旧 tag 留在原处
+    // Tag migrates to the same-named tag under the target org, case_tags points at the new row; the source org's old tag stays in place
     const newTag = await pool.query(`SELECT id FROM tags WHERE organization_id = $1 AND name = '冒烟'`, [seedOrgId]);
     expect(newTag.rowCount).toBe(1);
     const linked = await pool.query(`SELECT tag_id FROM case_tags WHERE case_id = $1`, [c.rows[0]!.id]);
@@ -251,8 +251,8 @@ describe('产品线写操作按所属组织鉴权', () => {
   });
 
   it('可见但非管理的组织下的线 → 改/删/挂载均 403', async () => {
-    // 造一个「看得见但管不了」的组织：调用者是它的**普通成员**（可见），但不是管理员
-    // （managerOrgPaths 只含种子组织，isManagerOfOrg 判 false）。
+    // Build an org that is "visible but unmanageable": the caller is its **regular member** (visible) but not a manager
+    // (managerOrgPaths contains only the seeded org, so isManagerOfOrg is false).
     const { userId, orgPath: seedOrgPath } = await seedOrg(pool);
     const other = await pool.query(
       `INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`,
@@ -269,9 +269,9 @@ describe('产品线写操作按所属组织鉴权', () => {
     );
     const lineId = line.rows[0]!.id as string;
 
-    // 读是允许的（可见）
+    // Reads are allowed (visible)
     expect((await request(app).get(`/api/product-lines/${lineId}`)).status).toBe(200);
-    // 写一律 403
+    // Writes are all 403
     expect((await request(app).patch(`/api/product-lines/${lineId}`).send({ name: '改名' })).status).toBe(403);
     expect((await request(app).delete(`/api/product-lines/${lineId}`)).status).toBe(403);
     const p = await seedProject(pool);
@@ -281,7 +281,7 @@ describe('产品线写操作按所属组织鉴权', () => {
 });
 
 describe('产品线移动组织', () => {
-  /** 造一个挂在种子组织子树下的兄弟组织：调用者是它的管理员（path 前缀命中）。 */
+  /** Build a sibling org hanging under the seeded org's subtree: the caller is its manager (path prefix matches). */
   async function siblingOrg(tag: string): Promise<string> {
     const { orgPath } = await seedOrg(pool);
     const r = await pool.query(`INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`, [
@@ -291,7 +291,7 @@ describe('产品线移动组织', () => {
     return r.rows[0]!.id as string;
   }
 
-  /** 造一个调用者看得见但管不了的组织（path 在子树外，仅普通 membership → 可见非管理员）。 */
+  /** Build an org the caller can see but not manage (path outside the subtree, regular membership only → visible non-manager). */
   async function readonlyOrg(userId: string, tag: string): Promise<string> {
     const r = await pool.query(`INSERT INTO organizations(name, path) VALUES ($1, $2) RETURNING id`, [
       `${tag}只读-${Date.now()}`,
@@ -310,7 +310,7 @@ describe('产品线移动组织', () => {
     const targetOrgId = await siblingOrg('搬入');
     const line = await request(app).post('/api/product-lines').send({ name: `整线搬家-${Date.now()}` });
 
-    // 线内两个项目各带标签——验证标签迁移真的 fan-out 到整条线，而不是只搬第一个
+    // The two projects in the line each carry a tag — verifying tag migration really fans out across the whole line, not just the first project
     const caseIds: string[] = [];
     const tagNames: string[] = [];
     for (const [i, name] of ['搬家A', '搬家B'].entries()) {
@@ -336,7 +336,7 @@ describe('产品线移动组织', () => {
 
     expect((await pool.query(`SELECT organization_id FROM product_lines WHERE id = $1`, [line.body.id])).rows[0]!.organization_id)
       .toBe(targetOrgId);
-// R2：项目的组织就是线的组织——改一列，线内项目自动跟着走（无需逐项目改写）。
+// R2: a project's org is the line's org — change one column and in-line projects follow automatically (no per-project rewrite).
     const projOrgs = await pool.query(
       `SELECT DISTINCT l.organization_id FROM projects p
          JOIN product_lines l ON l.id = p.product_line_id WHERE p.product_line_id = $1`,
@@ -350,14 +350,14 @@ describe('产品线移动组织', () => {
     );
     expect(assignOrgs.rows.map((x) => x.organization_id)).toEqual([targetOrgId]);
 
-    // 两条用例的标签都各自迁到目标组织下的同名 tag（不再共用一条）
+    // Both cases' tags each migrate to their same-named tag under the target org (no longer sharing one row)
     for (const [i, caseId] of caseIds.entries()) {
       const newTag = await pool.query(`SELECT id FROM tags WHERE organization_id = $1 AND name = $2`, [targetOrgId, tagNames[i]!]);
       expect(newTag.rowCount).toBe(1);
       const linked = await pool.query(`SELECT tag_id FROM case_tags WHERE case_id = $1`, [caseId]);
       expect(linked.rows.map((x) => x.tag_id)).toEqual([newTag.rows[0]!.id]);
     }
-    // 源组织的 tag 行不删
+    // The source org's tag rows are not deleted
     for (const tagName of tagNames) {
       expect((await pool.query(`SELECT id FROM tags WHERE organization_id = $1 AND name = $2`, [seedOrgId, tagName])).rowCount).toBe(1);
     }
@@ -398,7 +398,7 @@ describe('产品线移动组织', () => {
       [sourceOrgId, `只读线-${Date.now()}`],
     );
     const targetOrgId = await siblingOrg('接得住');
-    // 线看得见（直接 membership）但改不了
+    // The line is visible (direct membership) but not modifiable
     const r = await request(app)
       .post(`/api/product-lines/${line.rows[0]!.id}/move`)
       .send({ organizationId: targetOrgId });

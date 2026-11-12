@@ -1,10 +1,10 @@
 /**
- * 调度器入口：startScheduler() 在 API 进程启动时调用。
+ * Scheduler entry: startScheduler() is called when the API process starts.
  *
- * 行为：
- * - 若 REDIS_URL 未设置 / ioredis 连接失败 → 优雅降级（warn + return），手动 run 不受影响。
- * - reconcileAllSchedules() 在 worker start 之前跑一遍，避免启动期间重复 fire。
- * - 注册 SIGTERM / SIGINT 优雅关闭 worker（其它关闭路径由进程退出兜底）。
+ * Behavior:
+ * - If REDIS_URL is unset / ioredis connect fails → graceful degradation (warn + return); manual runs unaffected.
+ * - reconcileAllSchedules() runs once before worker start, avoiding duplicate fires during startup.
+ * - Registers SIGTERM / SIGINT graceful worker shutdown (other shutdown paths fall back to process exit).
  */
 import type { Worker } from 'bullmq';
 import { logger } from '../logger.js';
@@ -29,8 +29,8 @@ export async function startScheduler(): Promise<void> {
     _worker.on('ready', () => logger.info('plan-schedule worker ready'));
     _worker.on('error', (err) => logger.warn({ err: err.message }, 'plan-schedule worker error'));
     _worker.on('failed', (job, err) => logger.warn({ jobId: job?.id, err: err.message }, 'plan-schedule job failed'));
-    // 上电前先把表里的 truth 同步到 BullMQ。3 副本同启都跑到这里：reconcile 靠分布式锁
-    // 单飞（输家直接跳过，worker 照常启动——BullMQ 每 job 单消费，多 worker 无重复执行）。
+    // Sync the table's truth into BullMQ before power-on. All 3 replicas reach this on a simultaneous start: reconcile
+    // single-flights via a distributed lock (the loser skips; workers still start — BullMQ consumes each job once, so multiple workers never duplicate execution).
     const reconcileLock = await tryAcquireLock('itest:sched-reconcile', 30_000);
     if (!reconcileLock) {
       logger.info('schedule reconcile skipped: another replica holds the lock');
@@ -66,7 +66,7 @@ function registerShutdown(): void {
   process.on('SIGINT', () => void stop('SIGINT'));
 }
 
-/** 仅供测试：手动停掉 worker + 断开 redis。 */
+/** For tests only: manually stop the worker + disconnect redis. */
 export async function __stopSchedulerForTests(): Promise<void> {
   if (_worker) {
     await _worker.close();

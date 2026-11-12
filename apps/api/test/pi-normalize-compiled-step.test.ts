@@ -1,10 +1,10 @@
 /**
- * compiled 步骤归一化器：吸收模型的自然输出形状，别让形状异常变成一次工具参数校验失败。
+ * Compiled-step normalizer: absorbs the model's natural output shapes so shape anomalies don't become a tool parameter-validation failure.
  *
- * 回归背景（prod228 会话 2026-10-21T07-36-23）：模型连续 5 次 stage_case 被参数校验拒绝，
- * 每次重编一版步骤白烧 LLM 轮次。两种形状：
- *   - locator: {"item":[{...},{...}]}（item 外壳里是候选数组）→ zod 报 "Expected object, received array"
- *   - timeoutMs: "20000"（字符串）→ zod 报 "Expected number, received string"
+ * Regression background (prod228 session 2026-10-21T07-36-23): the model's stage_case was rejected by parameter validation 5 times in a row,
+ * each retry recompiling a version of the steps and burning LLM turns for nothing. Two shapes:
+ *   - locator: {"item":[{...},{...}]} (candidates array inside an item shell) → zod reports "Expected object, received array"
+ *   - timeoutMs: "20000" (string) → zod reports "Expected number, received string"
  */
 import { describe, it, expect } from 'vitest';
 import { normalizeCompiledStep } from '../src/pi/tools.js';

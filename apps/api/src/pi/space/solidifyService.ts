@@ -1,9 +1,9 @@
 /**
- * R3/R3.5 固化管线：盘点三阶段（0 信号采集零 LLM → 1 教训蒸馏 → 2 资产蒸馏 → 3 服务端校验入库）。
- * LLM 只产提案不直接改任何资产；应用一律走 solidifyApply 的人工审批。
- * 失败语义：LLM 未配置/超时/输出整体不合法 → 批次 failed；单条提案不合法 → 丢弃该条不炸批次；
- * 阶段 1 教训蒸馏整体失败 → 降级不炸批次（note 记录，信号保留待重试）。
- * inline fire-and-forget，不引 BullMQ。
+ * R3/R3.5 solidification pipeline: inventory in three stages (0 signal collection, zero LLM → 1 lesson distillation → 2 asset distillation → 3 server-side validation and persistence).
+ * The LLM only produces proposals, never directly modifies any asset; application always goes through solidifyApply's human approval.
+ * Failure semantics: LLM unconfigured/timeout/output wholly invalid → batch failed; a single invalid proposal → drop that one without breaking the batch;
+ * stage 1 lesson distillation failing wholesale → degrade without breaking the batch (recorded in notes, signals kept for retry).
+ * inline fire-and-forget, no BullMQ.
  */
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -54,13 +54,13 @@ const ProposalSchema = z.object({
   sources: z.array(z.string().uuid()).min(1),
 });
 
-/** 外层宽松（proposals 逐条校验，单条坏丢弃不炸批次）；notes 上限防炸 summary。 */
+/** Outer layer is lenient (proposals validated one by one, a single bad one dropped without breaking the batch); the notes cap prevents blowing up the summary. */
 const SolidifyOutput = z.object({
   proposals: z.array(z.unknown()).max(20),
   notes: z.array(z.string().max(500)).max(20).default([]),
 });
 
-/** 发起盘点：running 防重入（409）。返回批次 id；蒸馏由调用方 fire-and-forget。 */
+/** Kick off an inventory: running guards re-entry (409). Returns the batch id; distillation is fire-and-forget by the caller. */
 export async function startSolidifyScan(userId: string | null): Promise<string> {
   const running = await db.select({ id: assistantSolidifyBatches.id }).from(assistantSolidifyBatches)
     .where(eq(assistantSolidifyBatches.status, 'running')).limit(1);
@@ -72,11 +72,11 @@ export async function startSolidifyScan(userId: string | null): Promise<string> 
 async function llmClientFromConfig(): Promise<LLMClient | null> {
   const cfg = await readLlmConfig();
   if (!cfg) return null;
-  // 整体展开而非手搓字段：新增 LlmConfig 字段（如 maxTokens）自动透传，防再漏
+  // Spread the whole object rather than hand-picking fields: new LlmConfig fields (e.g. maxTokens) pass through automatically, preventing another omission
   return getLlmClient({ ...cfg, baseUrl: cfg.baseUrl ?? undefined });
 }
 
-/** LLM 超时护栏（与 scheduler/trajectoryWorker 同款；不共享是为免 space↔scheduler import 环）。 */
+/** LLM timeout guardrail (same as scheduler/trajectoryWorker; not shared, to avoid a space↔scheduler import cycle). */
 function withLlmTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -86,14 +86,14 @@ function withLlmTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 export interface SolidifyRunDeps {
-  /** 注入 LLM client（测试）；缺省读 settings 自建，未配置 → 批次 failed。 */
+  /** Inject the LLM client (tests); by default builds one from settings; unconfigured → batch failed. */
   client?: LLMClient;
   llmTimeoutMs?: number;
-  /** 注入会话根目录（测试 DI）；透传给 S4 会话采集器，缺省 DATA_DIR/pi-sessions。 */
+  /** Inject the sessions root (test DI); passed through to the S4 session collector, default DATA_DIR/pi-sessions. */
   sessionsRoot?: string;
 }
 
-/** 执行盘点：输入聚合 → LLM 蒸馏 → 服务端校验 → 提案入库 → 批次 done。 */
+/** Run an inventory: input aggregation → LLM distillation → server-side validation → proposals persisted → batch done. */
 export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {}): Promise<void> {
   const fail = async (error: string) => {
     await db.update(assistantSolidifyBatches)
@@ -106,11 +106,11 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
       await fail('LLM 未配置：请先到设置页配置模型');
       return;
     }
-    // 阶段 1 的降级 note 也要进 summary——notes 提到最前声明。
+    // The stage 1 degradation note must also reach the summary — notes declared at the very front.
     const notes: string[] = [];
 
-    // ── 阶段 0：输入聚合（零 LLM）──
-    // 资产池：全库 active 记忆 + active 轨迹，合并按 hit_count 降序取 top 200（高频优先，防 prompt 爆炸）
+    // ── Stage 0: input aggregation (zero LLM) ──
+    // Asset pool: all active memories + active trajectories repo-wide, merged and taking top 200 by hit_count descending (high frequency first, prevents prompt explosion)
     const memRows = await db.select({
       id: assistantMemories.id, scope: assistantMemories.scope, productLineId: assistantMemories.productLineId,
       title: assistantMemories.title, hook: assistantMemories.hook, body: assistantMemories.body,
@@ -136,10 +136,10 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
         title: t.taskTitle, text: t.digest, hitCount: t.hitCount,
       })),
     ].sort((a, b) => b.hitCount - a.hitCount).slice(0, 200);
-    // 失败信号采集（零 LLM）：S1 回滚/恢复默认 + S2 负反馈 + S3 nl_ai_fail + S4 会话质量，已消费的剔除
+    // Failure signal collection (zero LLM): S1 rollback/restore-default + S2 negative feedback + S3 nl_ai_fail + S4 session quality, already-consumed ones excluded
     const signalBundle = await collectUnconsumedSignals({ sessionsRoot: deps.sessionsRoot });
 
-    // 空资产池但有未消费信号 → 不早退（教训可独立产提案）；两者全空才直接 done。
+    // Empty asset pool but with unconsumed signals → don't exit early (lessons can independently produce proposals); only exit done when both are empty.
     if (merged.length === 0 && signalBundle.signals.length === 0) {
       await db.update(assistantSolidifyBatches).set({
         status: 'done',
@@ -149,13 +149,13 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
       return;
     }
 
-    // 采集层护栏 note（如 >8MB 会话跳过）并入 summary；早退路径 summary 硬编码零改动
+    // Collector guardrail notes (e.g. >8MB sessions skipped) merged into the summary; the early-exit path's hardcoded summary is untouched
     notes.push(...signalBundle.notes);
 
-    // ── 阶段 1：失败教训蒸馏（有信号才执行；整体失败降级不炸批次，信号保留待重试）──
+    // ── Stage 1: failure lesson distillation (runs only with signals; wholesale failure degrades without breaking the batch, signals kept for retry) ──
     if (signalBundle.signals.length > 0) {
       try {
-        // 网关思考模型（Auto 别名）完整蒸馏 ~250s（2026-11-01 prod 实测）——180s 装不下
+        // Gateway reasoning model (Auto alias) full distillation ~250s (2026-11-01 prod measured) — 180s doesn't fit
         const distilled = await distillLessons(client, signalBundle.signals, deps.llmTimeoutMs ?? 300_000);
         if (distilled === 0) notes.push(`教训蒸馏未产出新教训（${signalBundle.total} 条信号保留待下次盘点）`);
       } catch (e) {
@@ -164,7 +164,7 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
       }
     }
 
-    // ── 阶段 2：资产蒸馏（LLM call#2）——教训清单拼进输入 ──
+    // ── Stage 2: asset distillation (LLM call#2) — the lesson list is spliced into the input ──
     const skillRows = await db.select({ name: assistantSkills.name, description: assistantSkills.description })
       .from(assistantSkills).where(eq(assistantSkills.enabled, true));
     const promptKeys = (await listPromptModuleDefs()).filter((d) => d.group !== 'skill');
@@ -197,7 +197,7 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
     }
     notes.push(...parsed.data.notes);
 
-    // ── 阶段 3：服务端校验——target 落点 + sources 修剪双轨（lesson / 资产条目）；retireRecommended 服务端定值 ──
+    // ── Stage 3: server-side validation — target landing + sources pruning on both tracks (lesson / asset entries); retireRecommended is set server-side ──
     const skillNames = new Set(skillRows.map((s) => s.name));
     const promptKeySet = new Set(promptKeys.map((d) => d.key));
     const sourceById = new Map(merged.map((s) => [s.id, s]));
@@ -210,7 +210,7 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
         notes.push(`已丢弃一条形状不合法的提案：${p.error.issues[0]?.message ?? 'unknown'}`);
         continue;
       }
-      // promptKeySet 本就只含 group!=='skill' 的模块——prompt_correction 的 skill.* target 在此天然被拒
+      // promptKeySet only ever contains group!=='skill' modules — prompt_correction's skill.* targets are naturally rejected here
       const targetOk = p.data.kind === 'skill_revision' ? skillNames.has(p.data.target) : promptKeySet.has(p.data.target);
       if (!targetOk) {
         notes.push(`已丢弃「${p.data.title}」：target 无落点（${p.data.target}）`);
@@ -231,7 +231,7 @@ export async function runSolidifyScan(batchId: string, deps: SolidifyRunDeps = {
           continue;
         }
         sources = ls;
-        baseSeq = overrides.get(p.data.target)?.seq ?? null; // 服务端定值：盘点时定格
+        baseSeq = overrides.get(p.data.target)?.seq ?? null; // server-set value: frozen at inventory time
       } else {
         const ss = p.data.sources
           .filter((id) => sourceById.has(id))

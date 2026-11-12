@@ -24,7 +24,7 @@ afterAll(async () => {
 describe('cases.service', () => {
   it('createCase:同项目分组+版本创建成功并带 tags;version 跨项目 → version_mismatch', async () => {
     const { groupId, versionId } = await seedProject(pool);
-    const other = await seedProject(pool); // 第二个项目
+    const other = await seedProject(pool); // a second project
     const svc = await import('../src/services/cases.service.js');
     const created = await svc.createCase({ groupId, versionId, title: '登录-正常' });
     expect(created.title).toBe('登录-正常');
@@ -45,22 +45,22 @@ describe('cases.service', () => {
         { instruction: '打开首页' },
         { instruction: '点击下单按钮', assertion: '下单成功' },
         { instruction: '看结果', assertion: '登录表单正常展示' },
-        // 视觉模式由调用方显式给 aiTask，原样落库
+        // Visual mode: the caller supplies aiTask explicitly; persisted as-is
         { instruction: '让 AI 临场做', compiled: [{ kind: 'aiTask', instruction: '让 AI 临场做' }] },
       ],
     });
     const rows = (await pool.query(`SELECT "order", compiled, assertion FROM test_steps WHERE case_id=$1 ORDER BY "order"`, [c.id])).rows as Array<{
       order: number; compiled: Array<Record<string, unknown>> | null; assertion: Record<string, unknown> | null;
     }>;
-    // 缺失 compiled 原样落 null = 未编译（dispatcher 阻塞执行），服务端不做 aiTask 兜底
+    // Missing compiled is persisted as null = not compiled (the dispatcher blocks execution); the server does no aiTask fallback
     expect(rows).toHaveLength(4);
     for (const r of rows.slice(0, 3)) expect(r.compiled).toBeNull();
-    // 显式 aiTask 原样保留
+    // Explicit aiTask is preserved as-is
     expect(rows[3]!.compiled).toEqual([{ kind: 'aiTask', instruction: '让 AI 临场做' }]);
     expect((rows[1]!.assertion as { kind: string }).kind).toBe('assertText');
     expect((rows[1]!.assertion as { equals: string }).equals).toBe('下单成功');
-    // 描述性短语也照常入库 —— 措辞判定交给 verify_case 的 LLM（assertionJudge），
-    // 写入路径不再按词表静默丢弃用户的断言
+    // Descriptive phrases are persisted as usual too -- wording judgment is left to verify_case's LLM (assertionJudge);
+    // the write path no longer silently drops a user's assertion based on a word list
     expect((rows[2]!.assertion as { equals: string }).equals).toBe('登录表单正常展示');
   }, 30_000);
 
@@ -70,7 +70,7 @@ describe('cases.service', () => {
     const c = await svc.createCaseWithSteps({
       groupId, versionId, title: '断言清洗验证',
       steps: [
-        // 描述性短语：照常入库，由 verify_case 在真实页面上用 LLM 判
+        // Descriptive phrase: persisted as usual, judged by verify_case with an LLM on the real page
         { instruction: '打开登录页', assertion: '登录表单正常展示' },
         { instruction: '点登录', assertion: '登录成功' },
         { instruction: '看结果', assertion: '成功' },
@@ -89,7 +89,7 @@ describe('cases.service', () => {
     expect(rows[2]!.assertion).toEqual({
       kind: 'assertText', locator: [], target: 'page', match: 'contains', equals: '成功',
     });
-    // 纯空白仍归一为 null（没有内容可断言）
+    // Pure whitespace still normalizes to null (nothing to assert)
     expect(rows[3]!.assertion).toBeNull();
   }, 30_000);
 
@@ -112,26 +112,26 @@ describe('cases.service', () => {
   it('searchCasesInVersion:召回面含步骤指令/标签/预期结果/描述;列表项形状不含这两个匹配字段', async () => {
     const seed = await seedProject(pool);
     const svc = await import('../src/services/cases.service.js');
-    // 标题不带关键词,靠步骤指令命中
+    // Title doesn't carry the keyword; the hit comes from the step instruction
     const byStep = await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '用例A' });
     await svc.insertCaseStep(byStep.id, { instruction: '在号码管理页点击导出按钮并等待列表刷新' });
-    // 靠标签名命中
+    // Hit via tag name
     const byTag = await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '用例B' });
     const tagId = (await pool.query(`INSERT INTO tags(organization_id, name, color) VALUES ($1,'导出回归','34c759') RETURNING id`, [seed.orgId])).rows[0]!.id as string;
     await pool.query(`INSERT INTO case_tags(case_id, tag_id) VALUES ($1,$2)`, [byTag.id, tagId]);
-    // 靠预期结果命中
+    // Hit via expected outcome
     const byOutcome = await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '用例C', expectedOutcome: '页面提示导出成功' });
-    // 靠描述命中
+    // Hit via description
     const byDesc = await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '用例D', description: '验证批量导出功能可用性' });
-    // 控制组:标题/描述/预期/步骤/标签都不含关键词
+    // Control group: title/description/expected outcome/steps/tags all lack the keyword
     await svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: '登录成功跳转首页' });
 
     const hits = await svc.searchCasesInVersion(seed.versionId, { keyword: '导出' });
     expect(hits.map((r) => r.id).sort()).toEqual([byStep.id, byTag.id, byOutcome.id, byDesc.id].sort());
-    // 列表项不携带 description/expectedOutcome(看全文走 get)
+    // List items don't carry description/expectedOutcome (get the full text via get)
     expect(hits[0]).not.toHaveProperty('description');
     expect(hits[0]).not.toHaveProperty('expectedOutcome');
-    // 标题命中路径不回归
+    // Title-hit path doesn't regress
     const byTitle = await svc.searchCasesInVersion(seed.versionId, { keyword: '登录成功' });
     expect(byTitle).toHaveLength(1);
   }, 30_000);
@@ -157,7 +157,7 @@ describe('cases.service', () => {
     await expect(svc.createCase({ groupId: seed.groupId, versionId: seed.versionId, title: 'x', tagIds: ['00000000-0000-0000-0000-000000000000'] }))
       .rejects.toMatchObject({ status: 404 });
 
-    // 第二个组织的 tag → 400 tag_org_mismatch
+    // Another organization's tag -> 400 tag_org_mismatch
     const otherOrg = randomUUID();
     await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,'他组织',$2)`, [otherOrg, `/${otherOrg}/`]);
     const foreignTag = (await pool.query(`INSERT INTO tags(organization_id, name, color) VALUES ($1,'外标签','ff0000') RETURNING id`, [otherOrg])).rows[0]!.id as string;
@@ -182,7 +182,7 @@ describe('cases.service', () => {
   it('webServiceRef 随 create/patch 透传;resolvedUrl 相对拼接展示', async () => {
     const { groupId, versionId, projectId } = await seedProject(pool);
     const svc = await import('../src/services/cases.service.js');
-    // 建默认环境 + web 对象(origin http://10.0.0.1:8080,name=frontend,isDefault),共享进该项目
+    // Build a default environment + web object (origin http://10.0.0.1:8080, name=frontend, isDefault), shared into the project
     const env = await pool.query(
       `INSERT INTO test_environments(project_id, name, is_default) VALUES ($1, '默认环境', true) RETURNING id`,
       [projectId],
@@ -200,7 +200,7 @@ describe('cases.service', () => {
     const list = await svc.searchCasesInVersion(versionId, {});
     expect(list[0]!.webServiceRef).toBe('frontend');
     expect(list[0]!.resolvedUrl).toBe('http://10.0.0.1:8080/login');
-    // patch 路径：换绑第二个命名服务 → resolvedUrl 跟随 origin;再置 null → 回落默认服务
+    // Patch path: rebind to the second named service -> resolvedUrl follows the origin; then set null -> falls back to the default service
     await pool.query(
       `INSERT INTO environment_objects(environment_id, object_type, label, payload, is_default) VALUES ($1, 'web', '后端', $2::jsonb, false)`,
       [envId, JSON.stringify({ name: 'backend', scheme: 'http', host: '10.0.0.2', port: 8081 })],

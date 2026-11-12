@@ -1,23 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * redisLock 单元测试（仿 live-view-bus.test.ts 的 REDIS_URL 开关 + vi.doMock('ioredis') 法）：
- * - 无 REDIS_URL → 恒成功锁（release/refresh 可调、refresh=true）；
- * - 有 REDIS_URL（fake）：SET NX PX 参数、拿不到 → null、set 报错 → null（降级）、
- *   release/refresh 走 Lua 比对 token、refresh 丢失/报错 → false。
- * scheduler/repo/threadBus 的接线是薄封装，行为由本文件的锁原语 + 各自路由测试兜底。
- * 注意：被测模块只走动态导入（顶部静态导入会让 doMock 后的重载拿到真 ioredis 实例，
- * 同 live-view-bus.test.ts 的做法）。 */
+ * redisLock unit tests (mirrors live-view-bus.test.ts's REDIS_URL switch + vi.doMock('ioredis') technique):
+ * - no REDIS_URL → always-succeed lock (release/refresh callable, refresh=true);
+ * - with REDIS_URL (fake): SET NX PX parameters, occupied → null, set error → null (degraded),
+ *   release/refresh go through Lua token comparison, refresh lost/errored → false.
+ * The wiring in scheduler/repo/threadBus is a thin wrapper; behavior is covered by this file's lock primitives plus each own route tests.
+ * Note: the tested module is only ever dynamically imported (a static import at the top would let the post-doMock reload get the real ioredis instance,
+ * same approach as live-view-bus.test.ts). */
 
 class FakeRedis {
   static all: FakeRedis[] = [];
   calls: Record<string, unknown[][]> = {};
-  /** 覆写返回值（Error → reject）；未覆写时用 per-command 默认（set→'OK'、eval→1，同真 Redis 成功语义）。 */
+  /** Overrides return values (Error → reject); when not overridden, per-command defaults apply (set→'OK', eval→1, matching real Redis success semantics). */
   results: Record<string, unknown> = {};
   static DEFAULTS: Record<string, unknown> = { set: 'OK', eval: 1 };
   constructor() {
     FakeRedis.all.push(this);
-    // biome-ignore lint/suspicious/noExplicitAny: 按命令名记账
+    // biome-ignore lint/suspicious/noExplicitAny: bookkeeping by command name
     const rec = (cmd: string) => (...args: any[]) => {
       (this.calls[cmd] ??= []).push(args);
       const v = cmd in this.results ? this.results[cmd] : FakeRedis.DEFAULTS[cmd];
@@ -69,13 +69,13 @@ describe('有 REDIS_URL（fake ioredis）', () => {
     const redis = FakeRedis.all[0]!;
     expect(redis.callsOf('set')[0]).toEqual(['itest:t:2', mod.ORIGIN_ID, 'PX', 5000, 'NX']);
 
-    redis.results.set = null; // NX 失败（他副本持有）
+    redis.results.set = null; // NX failed (held by another replica)
     await expect(mod.tryAcquireLock('itest:t:2', 5000)).resolves.toBeNull();
   });
 
   it('set 报错 → null（连接失败按拿不到降级，不留半把锁）', async () => {
     const mod = await freshLockWithFake();
-    // 先触发一次拿锁完成惰性构造，再覆写返回值
+    // Trigger one acquire first to complete lazy construction, then override the return value
     await expect(mod.tryAcquireLock('itest:t:3', 1000)).resolves.not.toBeNull();
     const redis = FakeRedis.all[0]!;
     redis.results.set = new Error('down');
@@ -95,7 +95,7 @@ describe('有 REDIS_URL（fake ioredis）', () => {
     expect(token).toBe(mod.ORIGIN_ID);
     expect(ttl).toBe(1000);
 
-    redis.results.eval = 0; // 锁已丢
+    redis.results.eval = 0; // lock lost
     await expect(lock!.refresh()).resolves.toBe(false);
     redis.results.eval = new Error('down');
     await expect(lock!.refresh()).resolves.toBe(false);
@@ -106,7 +106,7 @@ describe('有 REDIS_URL（fake ioredis）', () => {
     expect(rel[0]).toContain('del');
     expect(rel[2]).toBe('itest:t:4');
     expect(rel[3]).toBe(mod.ORIGIN_ID);
-    await expect(lock!.release()).resolves.toBeUndefined(); // 报错路径也不抛
+    await expect(lock!.release()).resolves.toBeUndefined(); // error path does not throw either
   });
 
   it('ORIGIN_ID 进程内稳定且为 UUID 形状（同 registry 实例复用，不因重复 import 再生）', async () => {

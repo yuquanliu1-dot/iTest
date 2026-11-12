@@ -19,7 +19,7 @@ afterAll(async () => {
 
 async function makePlan(name: string, strategy = 'run_all'): Promise<string> {
   const s = await seedProject(pool);
-  // SCHEMA_SQL 已删计划级旧列——手动补回模拟存量库（回填对象是带旧列的库）
+  // SCHEMA_SQL already dropped the plan-level legacy columns -- add them back by hand to simulate a legacy DB (the backfill target is a DB carrying the old columns)
   await pool.query(`ALTER TABLE execution_plans ADD COLUMN IF NOT EXISTS environment_id uuid`);
   await pool.query(`ALTER TABLE execution_plans ADD COLUMN IF NOT EXISTS login_prepare_enabled boolean DEFAULT false`);
   await pool.query(`ALTER TABLE execution_plans ADD COLUMN IF NOT EXISTS login_case_id uuid`);

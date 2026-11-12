@@ -1,9 +1,9 @@
 /**
- * dump_cases_payload：把当前版本指定范围的用例数据落成临时 JSON 文件（export-cases skill 的取数步骤）。
- * 与列表页旧导出共用 services/caseExport.service 的查库与树构建——内容不经 LLM 之手，零幻觉。
- * AI 拿到 payloadPath 后调 run_skill_script（export-cases/scripts/export_cases.py）渲染 xmind/docx。
- * 范围：caseIds（显式集合，须 ∈ 当前版本）> groupId > keyword > 全版本。
- * payload 文件不主动清理（换格式重试友好），随容器 /tmp 生命周期回收。
+ * dump_cases_payload: writes the current version's case data for a specified scope into a temp JSON file (the data-fetch step of the export-cases skill).
+ * Shares the DB queries and tree building of services/caseExport.service with the old list-page export — the content never passes through an LLM, zero hallucination.
+ * After the AI gets payloadPath it calls run_skill_script (export-cases/scripts/export_cases.py) to render xmind/docx.
+ * Scope: caseIds (explicit set, must ∈ the current version) > groupId > keyword > whole version.
+ * The payload file is not proactively cleaned (friendly to retry-with-different-format); it is reclaimed with the container's /tmp lifecycle.
  */
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';

@@ -3,9 +3,9 @@ import type { Page } from 'playwright-core';
 import type { LLMClient, LLMMessage, LLMResult } from '../src/agent/llm-client.js';
 import { runAiTask, solveCaptchaOnce, credentialPlaceholderKind, makeCredentialValueSub, referencesCredential, parseCredentialPlaceholder, credentialPlaceholder, isValidCredentialRef, type RepoReadRequest, type RepoReadResult } from '../src/execute/aiTask.js';
 
-/** 记录调用顺序的桩 Page：screenshot/evaluate/url 走默认值，locator 动作全部记录。
- *  evaluate 按 evaluatee 源码分发：elementFromPoint（坐标解析）默认无目标、canvas（指纹）恒稳定、
- *  其余（dumpElements）空清单——坐标解析的具体用例用 makeCoordStubPage。 */
+/** Stub Page that records call order: screenshot/evaluate/url take default values; locator actions are all recorded.
+ *  evaluate dispatches on the evaluatee source: elementFromPoint (coordinate resolution) has no target by default, canvas (fingerprint) is always stable,
+ *  the rest (dumpElements) return an empty list -- coordinate-resolution specific cases use makeCoordStubPage. */
 function makeStubPage() {
   const calls: string[] = [];
   const values: Record<string, string> = {};
@@ -45,10 +45,10 @@ function makeStubPage() {
   return { page: page as unknown as Page, calls, values };
 }
 
-/** 过滤节奏类等待（每轮截图前的指纹采样 200ms / 动作后 settle 150ms），只看真实动作序列。 */
+/** Filter pacing waits (200ms fingerprint sampling before each turn's screenshot / 150ms settle after actions); look only at the real action sequence. */
 const actionCalls = (calls: string[]) => calls.filter((c) => c !== 'wait:200' && c !== 'wait:150');
 
-/** 坐标协议专用桩：1000x800 视口，elementFromPoint 恒命中 #hit（value 回显已键入文本）。 */
+/** Coordinate-protocol stub: 1000x800 viewport; elementFromPoint always hits #hit (value echoes the typed text). */
 function makeCoordStubPage() {
   const calls: string[] = [];
   const state = { typed: '' };
@@ -79,10 +79,10 @@ function makeCoordStubPage() {
   return { page: page as unknown as Page, calls };
 }
 
-/** 命中树桩：resolveAtPoint 的页面函数不在浏览器里跑，而是在 Node 里真跑——
- *  patch globalThis.document/CSS 后直接调用 evaluate 回调，对可配置的假 DOM 树执行。
- *  上浮（click）、下沉（fill）、富化（has-text/nth-of-type）、唯一性门全部走真实代码路径，
- *  罐头返回值的桩测不到这些。docHits 给 document.querySelectorAll 计数（值=命中文本列表）。 */
+/** Hit-tree stub: resolveAtPoint's page function doesn't run in a browser -- it really runs in Node:
+ *  after patching globalThis.document/CSS, the evaluate callback is invoked directly against a configurable fake DOM tree.
+ *  Surfacing (click), sinking (fill), enrichment (has-text/nth-of-type), and the uniqueness gate all take the real code path;
+ *  canned-return-value stubs can't test these. docHits counts document.querySelectorAll (value = list of matched texts). */
 interface FakeEl {
   tag: string;
   id?: string;
@@ -173,8 +173,8 @@ function makeTreeStubPage(
   return { page: page as unknown as Page, calls, shots, state };
 }
 
-/** 元素清单桩：dumpElements 的 evaluate 返回给定清单（其余 evaluate 走默认）。
- *  破坏性闸判定的是「被点击元素的可见文本」，必须能造出带文本的元素才测得到。 */
+/** Element-list stub: dumpElements' evaluate returns the given list (other evaluate calls take the default).
+ *  The destructive gate judges "the visible text of the element being clicked", so elements carrying text must be constructible to test it. */
 interface StubElement {
   selector: string;
   tag?: string;
@@ -220,7 +220,7 @@ function makeElementListStubPage(elements: StubElement[]) {
   return { page: page as unknown as Page, calls };
 }
 
-/** 按轮次脚本化回复的 mock LLM；每轮收到完整 userMessage + 完整 messages 历史。 */
+/** Mock LLM that replies per turn from a script; each turn receives the full userMessage + full messages history. */
 function makeMockLlm(script: Array<Record<string, unknown> | string>) {
   const requests: string[] = [];
   const systems: string[] = [];
@@ -299,7 +299,7 @@ describe('runAiTask', () => {
       'inputValue:#auth-captcha',
       'click:button[type=submit]',
     ]);
-    // 第 2 轮应携带第 1 轮动作结果反馈
+    // Turn 2 should carry turn 1's action-result feedback
     expect(requests[1]).toContain('上轮动作结果');
     expect(requests[1]).toContain('fill #auth-captcha: ok');
   });
@@ -334,7 +334,7 @@ describe('runAiTask', () => {
 
   it('超过最大轮数未完成则抛错', async () => {
     const { page } = makeStubPage();
-    // 始终只输出 wait，永不 done
+    // Always output only wait, never done
     const { llm } = makeMockLlm(Array.from({ length: 9 }, () => ({ actions: [{ type: 'wait', ms: 10 }] })));
     await expect(runAiTask(page, '永远完不成的指令', llm)).rejects.toThrow(/超过 \d+ 轮未完成/);
   });
@@ -348,7 +348,7 @@ describe('runAiTask', () => {
     const summary = await runAiTask(page, '确认登录表单正常展示', llm, false, { maxTurns: 1 });
     expect(summary).toContain('目标已达成，零动作完成（轮数耗尽兜底判定）');
     expect(summary).toContain('登录表单已完整展示');
-    // 兜底判定是独立的完成判定器提示词（非 agent 回路续轮），指令原文随 userMessage 带上
+    // The fallback judgment uses an independent completion-judge prompt (not an agent-loop continuation); the original instruction rides along in userMessage
     expect(systems[1]).toContain('完成判定器');
     expect(requests[1]).toContain('确认登录表单正常展示');
   });
@@ -364,7 +364,7 @@ describe('runAiTask', () => {
 
   it('动作执行出错时把错误反馈给下一轮而不是中断', async () => {
     const { page } = makeStubPage();
-    // click 抛错的桩
+    // Stub whose click throws
     (page as unknown as { locator: (s: string) => unknown }).locator = (selector: string) => ({
       first: () => ({ click: async () => { throw new Error(`no such element: ${selector}`); } }),
     });
@@ -387,7 +387,7 @@ describe('runAiTask', () => {
     await runAiTask(page, '点击新增按钮', llm, false, {
       onAction: (a, ok) => { reported.push({ a, ok }); },
     });
-    // 1000x800 视口：归一化 (500,400) → 像素 (500,320)
+    // 1000x800 viewport: normalized (500,400) -> pixels (500,320)
     expect(calls).toContain('mouse:click:500,320');
     expect(reported).toEqual([{ a: { type: 'click', selector: '#hit' }, ok: true }]);
   });
@@ -424,7 +424,7 @@ describe('runAiTask', () => {
       { done: true, summary: '自检后放弃该目标' },
     ]);
     await runAiTask(page, '点一个持续不存在的目标', llm);
-    // 2 连错只反馈错误本身；3 连错才注入 [system] 强制自检（防换 selector/坐标空转）
+    // 2 consecutive errors only feed back the error itself; only 3 consecutive errors inject a [system] forced self-check (to prevent selector/coordinate spinning)
     expect(requests[2]).toContain('no such element: #missing');
     expect(requests[2]).not.toContain('已连续 3 次失败');
     expect(requests[3]).toContain('已连续 3 次失败');
@@ -454,14 +454,14 @@ describe('runAiTask', () => {
     });
     expect(summary).toBe('ok（凭据占位符已替换 1 处为环境凭据）');
     expect(calls).toContain('type:#pwd:RealSecret!9');
-    // 回读命中真实值 → 反馈 ok，任何一轮请求都不含明文
+    // Readback hits the real value -> feedback ok, and no request of any turn contains the plaintext
     expect(requests[1]).toContain('fill #pwd: ok');
     expect(requests[1]).not.toContain('RealSecret!9');
   });
 
   it('替换后 mismatch：反馈不回显实际值/目标值，只给长度', async () => {
     const calls: string[] = [];
-    // React 截断模拟：回读值与键入值不一致
+    // React truncation simulation: readback value differs from the typed value
     const page = {
       url: () => 'https://sut.example/login',
       viewportSize: () => ({ width: 1280, height: 800 }),
@@ -554,14 +554,14 @@ describe('runAiTask', () => {
       scopeOrigins: ['https://sut.example'],
       onAction: (a, ok) => reported.push({ ok, url: (a as { url?: string }).url }),
     });
-    // 白名单内照常执行
+    // Inside the whitelist: executes as usual
     expect(calls).toContain('goto:https://sut.example/home');
-    // 越界未执行（不产生 goto），反馈行可行动
+    // Out of bounds: not executed (no goto produced), the feedback line is actionable
     expect(calls).not.toContain('goto:https://192.168.30.123:1688/login');
     expect(requests[1]).toContain('探索范围被拒');
     expect(requests[1]).toContain('https://sut.example');
     expect(requests[1]).toContain('输出 fail 如实说明');
-    // 上报链如实记 fail（trail/reports 可见拒绝痕迹）
+    // The reporting chain faithfully records fail (the rejection trace is visible in trail/reports)
     const rejected = reported.find((r) => r.url === 'https://192.168.30.123:1688/login');
     expect(rejected?.ok).toBe(false);
   });
@@ -600,8 +600,8 @@ describe('runAiTask', () => {
   it('resourceManifest 进系统提示词且不含真实凭据', async () => {
     const { page } = makeStubPage();
     const { llm, systems } = makeMockLlm([{ done: true, summary: 'ok' }]);
-    // 清单随凭据能力一起授予：挂了 valueSub 才披露清单与占位符形态
-    // （2026-10-26 修正：无条件披露会让 AI 主动用占位符重填账号/密码框）。
+    // The manifest is granted together with the credential capability: the manifest and placeholder form are only disclosed when valueSub is attached
+    // (2026-10-26 fix: unconditional disclosure made the AI proactively re-fill account/password fields with placeholders).
     await runAiTask(page, '登录', llm, false, {
       valueSub: (v: string) => v,
       resourceManifest: '可用 web 服务：\n- backend（默认） http://10.0.0.1:90 已配置凭据\n- staging http://10.0.0.9 未配置凭据',
@@ -609,7 +609,7 @@ describe('runAiTask', () => {
     expect(systems[0]).toContain('backend（默认） http://10.0.0.1:90');
     expect(systems[0]).toContain('未配置凭据');
     expect(systems[0]).toContain('__ITEST_USERNAME@服务名__');
-    // 缺省不注入（无清单的调用方提示词与既有形态一致）
+    // Not injected by default (callers without a manifest keep the prompt form identical to before)
     const { llm: l2, systems: s2 } = makeMockLlm([{ done: true, summary: 'ok' }]);
     await runAiTask(page, '登录', l2);
     expect(s2[0]).not.toContain('可用 web 服务');
@@ -628,7 +628,7 @@ describe('runAiTask', () => {
 
 describe('runAiTask 坐标解析：上浮/下沉/富化/唯一性门（命中树真实路径）', () => {
   it('click 命中 button 内层 span → 上浮交互祖先 + has-text 富化，上报富化 selector 形态', async () => {
-    // prod228 实测弱点回归：elementFromPoint 命中 <button><span>查询</span></button> 的内层 span
+    // prod228 measured weakness regression: elementFromPoint hits the inner span of <button><span>查询</span></button>
     const { page, calls } = makeTreeStubPage({
       hit: {
         tag: 'span',
@@ -636,7 +636,7 @@ describe('runAiTask 坐标解析：上浮/下沉/富化/唯一性门（命中树
         parent: { tag: 'button', classes: ['el-button', 'el-button--primary'], text: '查询', interactive: true },
       },
       docHits: {
-        // 同款按钮 2 个（查询/重置）→ 基础类名选择器多命中 → 短文本富化收窄
+        // 2 identical buttons (查询/重置) -> the base-class selector multi-matches -> short-text enrichment narrows it
         'button.el-button.el-button--primary': ['查询', '重置'],
       },
     });
@@ -649,7 +649,7 @@ describe('runAiTask 坐标解析：上浮/下沉/富化/唯一性门（命中树
       onAction: (a, ok) => { reported.push({ a, ok }); },
     });
     expect(calls).toContain('mouse:click:500,320');
-    // 不再是裸 span：上浮到 button，且多命中时带 has-text 收窄（页内唯一）
+    // No longer a bare span: surfaced to button, and with multiple matches it carries has-text narrowing (unique on page)
     expect(reported).toEqual([
       { a: { type: 'click', selector: 'button.el-button.el-button--primary:has-text("查询")' }, ok: true },
     ]);
@@ -708,7 +708,7 @@ describe('runAiTask 坐标解析：上浮/下沉/富化/唯一性门（命中树
       { done: true, summary: 'ok' },
     ]);
     await runAiTask(page, '看清局部区域', llm);
-    // 1000x800 视口：(500,400)→像素(500,320)，边长 480 → clip 原点 (260,80)
+    // 1000x800 viewport: (500,400)->pixels(500,320), side length 480 -> clip origin (260,80)
     const crop = shots.find((s) => s && 'clip' in s);
     expect(crop?.clip).toEqual({ x: 260, y: 80, width: 480, height: 480 });
     expect(crop?.type).toBe('jpeg');
@@ -750,15 +750,15 @@ describe('runAiTask 步内子目标清单（plan 协议，对标 midscene sub-go
       },
     ]);
     const summary = await runAiTask(page, '创建一个分类', llm);
-    // 第 1 轮还没清单，不回显
+    // Turn 1 has no list yet, no echo
     expect(requests[0]).not.toContain('子目标进度');
-    // 第 2 轮回显第 1 轮的清单（全进行中）——给模型方向感，防漂移
+    // Turn 2 echoes turn 1's list (all in progress) -- gives the model direction, prevents drift
     expect(requests[1]).toContain('子目标进度');
     expect(requests[1]).toContain('1. [进行中] 打开新增对话框');
-    // 第 3 轮回显第 2 轮更新后的状态（1 完成）
+    // Turn 3 echoes the state updated in turn 2 (1 done)
     expect(requests[2]).toContain('1. [完成] 打开新增对话框');
     expect(requests[2]).toContain('2. [进行中] 填写名称');
-    // done 响应里的最终清单先落地再结算
+    // The final list in the done response is persisted first, then settled
     expect(summary).toBe('创建完成（子目标 3/3 完成）');
   });
 
@@ -851,7 +851,7 @@ describe('runAiTask 数据库取证通道（sql 动作，探索会话专用）',
     expect(requests[1]).toContain('sql ok（2 行）');
     expect(requests[1]).toContain('id=1 | name=资产A');
     expect(reported).toEqual([{ ok: true, type: 'sql' }]);
-    // sql 不进浏览器执行器：无 goto / 无 settle 等待
+    // sql doesn't enter the browser executor: no goto / no settle waits
     expect(actionCalls(calls)).toEqual([]);
   });
 
@@ -884,7 +884,7 @@ describe('runAiTask 数据库取证通道（sql 动作，探索会话专用）',
     expect(requests[2]).not.toContain('已连续 3 次失败');
     expect(requests[3]).toContain('已连续 3 次失败');
     expect(requests[3]).toContain('不要再用同一条查询重试');
-    // 自检文案是查库口径（不是页面自检口径——那会把模型引向“看截图核对页面”）
+    // The self-check wording is the DB-query form (not the page self-check form -- that would steer the model toward "verify the page from screenshots")
     expect(requests[3]).not.toContain('先用截图核对当前页面');
   });
 
@@ -905,7 +905,7 @@ describe('runAiTask 数据库取证通道（sql 动作，探索会话专用）',
           : { ok: false, error: 'syntax error' };
       },
     });
-    // 第 2 次成功清零 → 第 3 次失败只是 1 连错，不触发自检
+    // The 2nd success resets the streak -> the 3rd failure is only a 1-streak, no self-check triggered
     expect(requests[3]).not.toContain('已连续 3 次失败');
   });
 
@@ -1064,16 +1064,16 @@ describe('runAiTask 仓库读码通道（repo 动作，有代码提交范围的�
 
 describe('凭据占位符协议（credentialPlaceholderKind / makeCredentialValueSub）', () => {
   it('识别哨兵与花括号变体，裸名与普通文本不认', () => {
-    // 哨兵精确形态
+    // Exact sentinel form
     expect(credentialPlaceholderKind('__ITEST_USERNAME__')).toBe('user');
     expect(credentialPlaceholderKind('__ITEST_PASSWORD__')).toBe('password');
     expect(credentialPlaceholderKind('__ITEST_STEP_SECRET__')).toBe('secret');
-    // 花括号变体（2026-10-21 prod228 实测模型输出形态）
+    // Curly-brace variants (the model output form measured in prod228 on 2026-10-21)
     expect(credentialPlaceholderKind('{{ITEST_USERNAME}}')).toBe('user');
     expect(credentialPlaceholderKind('{{__ITEST_USERNAME__}}')).toBe('user');
     expect(credentialPlaceholderKind('{{ITEST_PASSWORD}}')).toBe('password');
     expect(credentialPlaceholderKind('{{ITEST_STEP_SECRET}}')).toBe('secret');
-    // 裸名（无哨兵/花括号包裹）不认——避免把普通文本误判成凭据
+    // Bare names (no sentinel/curly-brace wrapping) are not recognized -- avoids misjudging plain text as a credential
     expect(credentialPlaceholderKind('ITEST_USERNAME')).toBeNull();
     expect(credentialPlaceholderKind('普通文本')).toBeNull();
     expect(credentialPlaceholderKind('{{OTHER_VAR}}')).toBeNull();
@@ -1096,16 +1096,17 @@ describe('凭据占位符协议（credentialPlaceholderKind / makeCredentialValu
     expect(sub('{{ITEST_USERNAME}}')).toBe('admin');
     expect(sub('{{__ITEST_PASSWORD__}}')).toBe('pw9');
     expect(sub('plain')).toBe('plain');
-    // 环境未配 login → EnvMissing（绝不静默填空串/字面量）
+    // Environment has no login configured -> EnvMissing (never silently fill an empty string/literal)
     const noLogin = makeCredentialValueSub({ user: null, password: null, secret: null });
     expect(() => noLogin('__ITEST_USERNAME__')).toThrow(/env-missing/);
-    // 步骤无密文 → SecretMissing
+    // Step has no secret -> SecretMissing
     expect(() => noLogin('{{ITEST_STEP_SECRET}}')).toThrow(/secret-missing/);
   });
 
   it('runAiTask：valueSub 抛 EnvMissing 时动作循环直接终止（不反馈给 LLM 空转）', async () => {
-    // prod228 实测根因之一：凭据缺失被当普通动作错误反馈给 LLM，换 selector 重试烧掉整轮调用。
-    // 现在第一轮 fill 抛 EnvMissing 就终止 —— requests 只有 1 条（第 2 轮从未发生）。
+    // One of the root causes measured in prod228: missing credentials were fed back to the LLM as an ordinary action error,
+    // burning a whole turn of calls on selector retries.
+    // Now the first turn's fill throws EnvMissing and the loop terminates -- requests has only 1 entry (turn 2 never happened).
     const { page } = makeStubPage();
     const { llm, requests } = makeMockLlm([
       { actions: [{ type: 'fill', selector: '#user', value: '__ITEST_USERNAME__' }], done: true, summary: '填完' },
@@ -1124,16 +1125,16 @@ describe('凭据占位符 @ref 归属协议', () => {
     expect(parseCredentialPlaceholder('__ITEST_PASSWORD@front_end1__')).toEqual({ kind: 'password', ref: 'front_end1' });
     expect(parseCredentialPlaceholder('{{ITEST_USERNAME@backend}}')).toEqual({ kind: 'user', ref: 'backend' });
     expect(parseCredentialPlaceholder('{{__ITEST_USERNAME@backend__}}')).toEqual({ kind: 'user', ref: 'backend' });
-    // 无 ref 形态仍解析，ref 为 null
+    // The no-ref form still parses, with ref null
     expect(parseCredentialPlaceholder('__ITEST_USERNAME__')).toEqual({ kind: 'user', ref: null });
     expect(parseCredentialPlaceholder('{{ITEST_PASSWORD}}')).toEqual({ kind: 'password', ref: null });
-    // ref 非法（数字开头 / 含 @ / 含空格）→ 整个占位符不认，绝不退化成无 ref
+    // Invalid ref (starts with a digit / contains @ / contains spaces) -> the whole placeholder is unrecognized, never degraded to no-ref
     expect(parseCredentialPlaceholder('__ITEST_USERNAME@1bad__')).toBeNull();
     expect(parseCredentialPlaceholder('__ITEST_USERNAME@a@b__')).toBeNull();
     expect(parseCredentialPlaceholder('__ITEST_USERNAME@ bad __')).toBeNull();
-    // secret 不解析 ref（敏感密文是步骤级，与 web 无关）：@段被忽略
+    // secret doesn't parse a ref (sensitive secrets are step-level, unrelated to web): the @ segment is ignored
     expect(parseCredentialPlaceholder('__ITEST_STEP_SECRET@x__')).toEqual({ kind: 'secret', ref: null });
-    // 裸名 / 普通文本仍不认
+    // Bare names / plain text still unrecognized
     expect(parseCredentialPlaceholder('ITEST_USERNAME')).toBeNull();
     expect(parseCredentialPlaceholder('普通文本')).toBeNull();
     expect(parseCredentialPlaceholder('')).toBeNull();
@@ -1145,7 +1146,7 @@ describe('凭据占位符 @ref 归属协议', () => {
     expect(credentialPlaceholder('secret')).toBe('__ITEST_STEP_SECRET__');
     for (const ref of ['backend', 'front_end1', '_x']) expect(isValidCredentialRef(ref)).toBe(true);
     for (const ref of ['', '1bad', 'a-b', 'a b', 'a'.repeat(65)]) expect(isValidCredentialRef(ref)).toBe(false);
-    // 渲染出来的占位符一定解析得回同一个 ref
+    // A rendered placeholder must always parse back to the same ref
     for (const kind of ['user', 'password'] as const) {
       for (const ref of ['backend', 'admin_web']) {
         expect(parseCredentialPlaceholder(credentialPlaceholder(kind, ref))).toEqual({ kind, ref });
@@ -1169,10 +1170,10 @@ describe('makeCredentialValueSub byRef（@ref 归属解析）', () => {
     });
     expect(sub('__ITEST_USERNAME@backend__')).toBe('be_u');
     expect(sub('__ITEST_PASSWORD@backend__')).toBe('be_p');
-    // @ref 未命中 → 回落默认（同一 web 的不同形态占位符不打架）
+    // @ref miss -> falls back to default (different placeholder forms of the same web don't fight each other)
     expect(sub('__ITEST_USERNAME@nope__')).toBe('def_u');
     expect(sub('__ITEST_USERNAME__')).toBe('def_u');
-    // 双空 → 命名错误，且消息点名缺失的 ref 与可用 ref
+    // Both null -> named error, and the message names the missing ref and the available ref
     const none = makeCredentialValueSub({ user: null, password: null, secret: null, byRef: () => null });
     expect(() => none('__ITEST_USERNAME@backend__')).toThrow(/env-missing/);
     expect(() => none('__ITEST_USERNAME@backend__')).toThrow(/backend/);
@@ -1188,11 +1189,11 @@ describe('makeCredentialValueSub byRef（@ref 归属解析）', () => {
 });
 
 /**
- * 破坏性动作机械闸（默认拒）。真源：11-10 prod 实录——章程要求核查删除是否真落库 →
- * 模型点了删除 → 资产真被删。charter 说辞不算授权，闸只认会话级显式开关。
+ * Mechanical gate for destructive actions (default deny). Source of truth: the 11-10 prod live record -- the charter required verifying whether a deletion really landed in the DB ->
+ * the model clicked delete -> the asset was really deleted. Charter wording doesn't count as authorization; the gate only accepts an explicit session-level switch.
  */
 describe('破坏性动作闸（destructivePolicy）', () => {
-  /** 元素清单里放一个 text=「删除」的按钮；模型按坐标点它。 */
+  /** Put a button with text=「删除」 in the element list; the model clicks it by coordinate. */
   const delButton = [{ selector: 'button.del', tag: 'button', box: [100, 200, 300, 260] as [number, number, number, number], text: '删除' }];
 
   it('默认拒：命中破坏性词 → click 未执行 + 反馈含「破坏性」+ onAction ok=false', async () => {
@@ -1206,10 +1207,10 @@ describe('破坏性动作闸（destructivePolicy）', () => {
       destructivePolicy: { allow: false },
       onAction: (a, ok) => { reported.push({ a, ok }); },
     });
-    // 闸在执行之前：页面上一次点击都没发生
+    // The gate sits before execution: not a single click happened on the page
     expect(calls.filter((c) => c.startsWith('mouse:click') || c.startsWith('click:'))).toEqual([]);
     expect(reported).toEqual([{ a: { type: 'click', x: 200, y: 230 }, ok: false }]);
-    // 反馈告诉模型「这是机械拒收、别改措辞绕」
+    // The feedback tells the model "this is a mechanical rejection; don't reword your way around it"
     expect(requests[1]).toContain('破坏性');
     expect(requests[1]).toContain('已机械拒收');
   });
@@ -1267,7 +1268,7 @@ describe('破坏性动作闸（destructivePolicy）', () => {
   });
 });
 
-/** 负面结果账本（外化记忆最小切片）：模型申报 → 平台跨轮累计 → 回灌进下一轮。 */
+/** Negative-outcome exclusion ledger (minimal slice of externalized memory): the model declares -> the platform accumulates across turns -> fed back into the next turn. */
 describe('负面结果账本（excluded）', () => {
   it('模型申报的排除项在下一轮 userMessage 回灌，且历史轮次字节不变', async () => {
     const { page } = makeStubPage();
@@ -1279,13 +1280,13 @@ describe('负面结果账本（excluded）', () => {
     await runAiTask(page, '探索列表页', llm, false, {
       onExcluded: (items) => { collected.push(...items); },
     });
-    // 平台侧收到申报
+    // Platform side received the declaration
     expect(collected).toEqual([{ claim: '列表页无越权', evidence: '切用户后仍见自己数据' }]);
-    // 第 2 轮 userMessage 含回灌块
+    // Turn 2's userMessage contains the feedback block
     expect(requests[1]).toContain('已排除');
     expect(requests[1]).toContain('列表页无越权');
     expect(requests[1]).toContain('切用户后仍见自己数据');
-    // 缓存前缀安全：历史轮次的 user 文本逐字节不变（回灌只进当轮）
+    // Cache-prefix safety: user texts of historical turns are byte-for-byte unchanged (the feedback only enters the current turn)
     const hist = histories[1]!;
     const firstUserText = hist[0]!.content.map((c) => (c.type === 'text' ? c.text : '')).join('');
     expect(firstUserText).toBe(requests[0]);

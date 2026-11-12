@@ -1,4 +1,4 @@
-/** R3.5 建表：部分唯一去重 / 默认值 / base_seq 可空。 */
+/** R3.5 table creation: partial unique dedupe / default values / nullable base_seq. */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
@@ -23,8 +23,8 @@ describe('assistant_failure_signals', () => {
     const ins = () => pool.query(
       `INSERT INTO assistant_failure_signals (type, thread_id, case_id, step_order, payload) VALUES ('nl_ai_fail', $1, 'c1', 3, '{}')`, [t]);
     await ins();
-    await expect(ins()).rejects.toThrow(); // 部分唯一索引拒绝
-    // 其他类型同键不冲突
+    await expect(ins()).rejects.toThrow(); // partial unique index rejects
+    // other types with the same key do not conflict
     await pool.query(
       `INSERT INTO assistant_failure_signals (type, thread_id, case_id, step_order, payload) VALUES ('other', $1, 'c1', 3, '{}')`, [t]);
   });

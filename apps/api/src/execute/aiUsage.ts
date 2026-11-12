@@ -1,4 +1,4 @@
-/** 单步 AI 用量累加器：runAiTask / 验证码 / 视觉判定每轮 LLM 调用后 add，stepResult 组装时挂到 aiUsage。 */
+/** Per-step AI usage accumulator: add after each LLM call in runAiTask / captcha / vision judgment; attached to aiUsage when the stepResult is assembled. */
 export interface AiUsageStat {
   calls: number;
   promptTokens: number;
@@ -6,20 +6,20 @@ export interface AiUsageStat {
   modelCallMs: number;
   retries: number;
   model?: string;
-  /** 命中缓存的 prompt token 数（不含在 promptTokens 内）。provider 未透出时为 0。 */
+  /** Prompt tokens served from cache (not counted in promptTokens). 0 when the provider doesn't expose it. */
   cacheReadTokens?: number;
-  /** 为建立缓存新写入的 token 数。provider 未透出时为 0。 */
+  /** Tokens newly written to establish the cache. 0 when the provider doesn't expose it. */
   cacheCreationTokens?: number;
 }
 
-/** add 入参对齐 LLMResult/completeJson 透出的字段，均可缺省。 */
+/** Addend input aligned with the fields LLMResult/completeJson expose; all optional. */
 export interface AiUsageAddend {
   usage?: {
     promptTokens: number;
     completionTokens: number;
-    /** 命中缓存的 prompt token 数（不含在 promptTokens 内）。 */
+    /** Prompt tokens served from cache (not counted in promptTokens). */
     cacheReadTokens?: number;
-    /** 为建立缓存新写入的 token 数。 */
+    /** Tokens newly written to establish the cache. */
     cacheCreationTokens?: number;
   };
   durationMs?: number;
@@ -41,7 +41,7 @@ export function newAiUsage(): AiUsageAccumulator {
       if (r.usage) {
         stat.promptTokens += r.usage.promptTokens;
         stat.completionTokens += r.usage.completionTokens;
-        // 缓存 token 单独累加（provider 不透出时保持 0，不影响老报告结构）。
+        // Cache tokens accumulate separately (stays 0 when the provider doesn't expose them; old report structure unaffected).
         stat.cacheReadTokens = (stat.cacheReadTokens ?? 0) + (r.usage.cacheReadTokens ?? 0);
         stat.cacheCreationTokens = (stat.cacheCreationTokens ?? 0) + (r.usage.cacheCreationTokens ?? 0);
       }

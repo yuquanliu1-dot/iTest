@@ -1,11 +1,11 @@
 /**
- * assistant_guides 最小 CRUD（管理端，无 UI；管理 UI 归后续需求）。
- * 挂载于 /api/assistant/guides，router.ts 处 requireManager 保护。
+ * assistant_guides minimal CRUD (admin side, no UI; admin UI belongs to a later requirement).
+ * Mounted at /api/assistant/guides, protected by requireManager at router.ts.
  *
- * 可见性（与空间其余路由一致，经 projectAccess.ts 断言）：
- *  - scope=global 的 guide 实例级共享（seed 行、全局运营指令），任意 manager 可见/可管理；
- *  - scope=project/version 的 guide 归属于具体组织，仅该组织（子树）用户可见/可管理，
- *    跨组织访问一律 404（不区分「不存在」与「不可见」，防存在性探测）。
+ * Visibility (consistent with the rest of the space routes, asserted via projectAccess.ts):
+ *  - scope=global guides are instance-level shared (seed rows, global ops instructions), visible/manageable by any manager;
+ *  - scope=project/version guides belong to a specific org, visible/manageable only by that org's (subtree) users,
+ *    cross-org access always 404 (no distinction between "not found" and "invisible", preventing existence probing).
  */
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
@@ -23,7 +23,7 @@ const SCOPE = ['global', 'project', 'version'] as const;
 const KIND = ['flow', 'reference'] as const;
 const LANG = ['zh', 'en', 'any'] as const;
 
-/** guide 行可见性断言：global 共享；project/version 归属组织，跨组织 404。 */
+/** guide-row visibility assertion: global shared; project/version org-owned, cross-org 404. */
 async function assertGuideVisible(
   row: Pick<typeof assistantGuides.$inferSelect, 'scope' | 'projectId' | 'versionId'>,
   user: AuthUser,
@@ -46,11 +46,11 @@ guidesRoute.get('/', async (req, res) => {
   if (typeof q.versionId === 'string' && q.versionId) conds.push(eq(assistantGuides.versionId, q.versionId));
   if (typeof q.kind === 'string' && q.kind) conds.push(eq(assistantGuides.kind, q.kind));
   if (typeof q.lang === 'string' && q.lang) conds.push(eq(assistantGuides.lang, q.lang));
-  // and(...[]) 返回 undefined = 无过滤（drizzle 语义）
+  // and(...[]) returns undefined = no filter (drizzle semantics)
   const rows = await db.select().from(assistantGuides)
     .where(and(...conds))
     .orderBy(asc(assistantGuides.sort), desc(assistantGuides.createdAt));
-  // 可见性过滤：global 全量返回；project/version 只在可见项目内返回（一次查可见项目 + 一次 version→project 归并，避免逐行断言）
+  // Visibility filter: global returned in full; project/version returned only within visible projects (one visible-projects query + one version→project merge, avoiding per-row assertions)
   const visible = new Set(await visibleProjectIds(user));
   const versionRows = rows.filter((r) => r.scope === 'version' && r.versionId != null);
   const versionProject = new Map<string, string>();
@@ -67,7 +67,7 @@ guidesRoute.get('/', async (req, res) => {
       const pid = r.versionId ? versionProject.get(r.versionId) : undefined;
       return pid != null && visible.has(pid);
     }
-    return true; // global：实例级共享
+    return true; // global: instance-level shared
   });
   res.json(filtered);
 });
@@ -118,7 +118,7 @@ guidesRoute.patch('/:id', async (req, res) => {
   if ('scope' in p) {
     const scope = p.scope as string;
     if (!SCOPE.includes(scope as never)) throw new HttpError(400, 'bad_request', 'scope 必须是 global|project|version');
-    // 改 scope 到 project/version 必须在同一次 PATCH 里给对应 id，否则落入陈旧 id（POST 语义一致）
+    // Switching scope to project/version must supply the corresponding id in the same PATCH, otherwise a stale id remains (same semantics as POST)
     if (scope === 'project' && typeof p.projectId !== 'string') throw new HttpError(400, 'bad_request', '改 scope=project 需要同时给 projectId');
     if (scope === 'version' && typeof p.versionId !== 'string') throw new HttpError(400, 'bad_request', '改 scope=version 需要同时给 versionId');
     patch.scope = scope;
@@ -138,7 +138,7 @@ guidesRoute.patch('/:id', async (req, res) => {
   }
   if ('sort' in p) patch.sort = typeof p.sort === 'number' ? p.sort : undefined;
   if ('enabled' in p) patch.enabled = p.enabled === false ? false : true;
-  // 生效后 scope 的可见性：新给/沿用的 project/version id 都必须指向可见项目
+  // Post-change scope visibility: newly supplied or carried-over project/version ids must both point at visible projects
   const effScope = (patch.scope as string | undefined) ?? existing.scope;
   if (effScope === 'project') {
     const pid = patch.projectId !== undefined ? (patch.projectId as string | null) : existing.projectId;

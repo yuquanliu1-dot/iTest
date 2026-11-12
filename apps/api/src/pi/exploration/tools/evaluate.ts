@@ -1,15 +1,19 @@
 /**
- * evaluate 工具（pi 链路 D1）：在被测页面里跑一段 JS 做状态取证——读 React/Vue 内部状态、
- * 检查 DOM 结构、核对表单值这类「截图看不出来」的证据。
+ * evaluate tool (pi chain D1): runs a JS snippet inside the SUT page for state forensics —
+ * reading React/Vue internal state, checking DOM structure, verifying form values, i.e. evidence
+ * that screenshots cannot reveal.
  *
- * 三层沙箱（页面里能跑 JS ≠ 能为所欲为；两层都不够就别给这工具）：
- * - L1 静态扫描：源码含网络/存储/弹窗/导航/动态执行的痕迹直接拒收，并列出命中的禁用项。
- *   导航类（location.href= / assign / replace）一并禁——evaluate 是绕过 navigate 范围闸的后门，
- *   2026-11-10 prod 越界事故的教训同样适用于这里。
- * - L2 词法遮蔽：脚本包在 IIFE 里，fetch/XHR/WebSocket/open/eval/Function 等标识符被局部
- *   「抛错桩」遮蔽——绕过 L1 的别名/大小写引用到它们时照样在运行期炸掉。刻意不劫持全局，
- *   不干扰被测系统自身的请求。
- * - L3 运行期限制：10s 竞速超时 + 返回值必须可 JSON 序列化且 ≤32KB（DOM 节点/循环引用判废）。
+ * Three sandbox layers (able to run JS in the page ≠ free rein; two layers would not suffice):
+ * - L1 static scan: source containing traces of network/storage/dialog/navigation/dynamic
+ *   execution is rejected outright, listing the matched forbidden items. Navigation forms
+ *   (location.href= / assign / replace) are banned too — evaluate would be a backdoor around
+ *   the navigate scope gate; the 2026-11-10 prod boundary incident applies here equally.
+ * - L2 lexical shadowing: the script is wrapped in an IIFE where identifiers such as
+ *   fetch/XHR/WebSocket/open/eval/Function are shadowed by local throw-stubs — alias/case
+ *   workarounds of L1 still blow up at runtime. Globals are deliberately not hijacked so the
+ *   SUT's own requests stay untouched.
+ * - L3 runtime limits: 10s race timeout + return value must be JSON-serializable and ≤32KB
+ *   (DOM nodes/circular refs are rejected).
  */
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
@@ -19,7 +23,7 @@ import { logger } from '../../../logger.js';
 const EVAL_TIMEOUT_MS = 10_000;
 const EVAL_RESULT_MAX = 32 * 1024;
 
-/** L1 禁用项清单：命中即拒。 */
+/** L1 forbidden-item list: any hit rejects. */
 const EVAL_FORBIDDEN: Array<{ re: RegExp; why: string }> = [
   { re: /\bfetch\s*\(/, why: 'fetch()（网络请求）' },
   { re: /XMLHttpRequest/, why: 'XMLHttpRequest（网络请求）' },
@@ -50,7 +54,7 @@ export function createEvaluateTool(deps: { page: import('playwright-core').Page 
       if (!expr) {
         return toolErr('表达式为空', 'evaluate: error expression 为空。');
       }
-      // L1 静态扫描
+      // L1 static scan
       const hits = EVAL_FORBIDDEN.filter((p) => p.re.test(expr)).map((p) => p.why);
       if (hits.length > 0) {
         return toolErr(
@@ -58,8 +62,8 @@ export function createEvaluateTool(deps: { page: import('playwright-core').Page 
           `evaluate: error 表达式包含禁用操作（${hits.join('、')}）。本工具只做只读取证；需要导航用 navigate，需要点/填用 click/fill。`,
         );
       }
-      // L2 词法遮蔽：局部标识符遮蔽为抛错桩（不劫持全局）。表达式以 return 包裹——语句形态
-      // 解析失败会原样报语法错，模型自然改写成表达式。
+      // L2 lexical shadowing: local identifiers shadowed as throw-stubs (globals untouched). The
+      // expression is wrapped in return — statement-form input surfaces as a syntax error as-is.
       const src = `(async () => {
         const __deny = (n) => { throw new Error('evaluate 沙箱：禁止使用 ' + n); };
         const fetch = (...a) => __deny('fetch');
@@ -71,7 +75,7 @@ export function createEvaluateTool(deps: { page: import('playwright-core').Page 
         const Function = (...a) => __deny('Function');
         return (${expr});
       })()`;
-      // L3 运行期：10s 竞速 + 可序列化 + 封顶
+      // L3 runtime: 10s race + serializable + size cap
       let timer: NodeJS.Timeout | undefined;
       try {
         const result = await Promise.race([
@@ -95,7 +99,7 @@ export function createEvaluateTool(deps: { page: import('playwright-core').Page 
             `evaluate: error 返回值过大（${json.length} 字符 > 32KB）。缩小取值范围（如只取 length 或单个字段）。`,
           );
         }
-        // 结果摘要 = 返回值本身（留痕正文要能看出「这脚本查出了什么」）。
+        // Result summary = the return value itself (the trail body must show what the script found).
         return toolOk(`返回 ${json.slice(0, 160)}`, `evaluate 结果：${json}`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

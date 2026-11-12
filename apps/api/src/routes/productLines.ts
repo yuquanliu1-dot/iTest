@@ -17,7 +17,7 @@ import { attachProjectToProductLine, resolveProjectProductLineId } from '../serv
 
 export const productLinesRoute = Router({ mergeParams: true });
 
-/** Express 5 把路由参数类型放宽成 string | string[]，这里收敛成单个 string。 */
+/** Express 5 loosens route param types to string | string[]; this narrows to a single string. */
 function param(req: { params: unknown }, key: string): string {
   const v = (req.params as Record<string, string | string[] | undefined>)[key];
   return Array.isArray(v) ? (v[0] ?? '') : (v ?? '');
@@ -26,16 +26,16 @@ function param(req: { params: unknown }, key: string): string {
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
-  /** 归属组织；缺省为当前激活组织。成员管理界面按组织建线时显式传。 */
+  /** Owning org; defaults to the current active org. Passed explicitly when the member management UI creates lines per org. */
   organizationId: z.string().uuid().optional(),
 });
 
 const PatchBody = CreateBody.omit({ organizationId: true }).partial();
 
 /**
- * 产品线写操作守卫：调用者须是该产品线**所属组织**（或其祖先）的管理员。
- * 不用全局 requireManager——那是「是不是某处管理员」的口径，会让 A 组织的管理员
- * 改到 B 组织下的线；而产品线随组织走，权限就该随组织走。
+ * Product-line write guard: the caller must be a manager of the product line's **owning org** (or an ancestor).
+ * Not the global requireManager — that answers "is a manager somewhere", which would let an org-A manager
+ * modify lines under org B; product lines follow their org, so permissions must follow the org too.
  */
 async function requireLineManager(productLineId: string, user: AuthUser): Promise<string> {
   const { organizationId } = await assertProductLineVisible(productLineId, user);
@@ -47,7 +47,7 @@ async function requireLineManager(productLineId: string, user: AuthUser): Promis
   return organizationId;
 }
 
-/** 建线守卫：目标组织须存在，且调用者是该组织（或其祖先）的管理员。 */
+/** Line creation guard: the target org must exist and the caller must be a manager of that org (or an ancestor). */
 async function requireTargetOrgManager(organizationId: string, user: AuthUser): Promise<void> {
   const orgPath = await getOrgPath(organizationId);
   if (!orgPath) throw new HttpError(404, 'not_found', 'organization not found');
@@ -57,8 +57,8 @@ async function requireTargetOrgManager(organizationId: string, user: AuthUser): 
 }
 
 /**
- * 挂项目：项目本身须可见。不存在与不可见都报 404。
- * 跨组织不再拦——挂载即搬家（见 rehomeProjectToProductLine），项目会迁到产品线所属组织。
+ * Attach projects: the projects themselves must be visible. Missing and invisible both 404.
+ * Cross-org is no longer blocked — attaching equals moving house (see rehomeProjectToProductLine); the project migrates to the product line's org.
  */
 async function assertProjectsAssignable(projectIds: string[], user: AuthUser): Promise<void> {
   for (const projectId of projectIds) {
@@ -124,7 +124,7 @@ productLinesRoute.patch('/:id', async (req, res) => {
   res.json(rows[0]!);
 });
 
-/** 删产品线：线内仍有项目时拒绝（line_not_empty），不级联删项目/用例/计划/报告。 */
+/** Delete product line: refuses while projects remain in the line (line_not_empty); does not cascade-delete projects/cases/plans/reports. */
 productLinesRoute.delete('/:id', async (req, res) => {
   const id = param(req, 'id');
   await requireLineManager(id, req.user!);
@@ -148,7 +148,7 @@ productLinesRoute.get('/:id/projects', async (req, res) => {
   );
 });
 
-/** 产品线下的全部分组（跨项目）：计划「添加用例」按分组筛选时需要跨项目取一次，不能只查计划所属项目。 */
+/** All groups under the product line (cross-project): the plan "add case" group filter needs a cross-project fetch once, not just the plan's own project. */
 productLinesRoute.get('/:id/groups', async (req, res) => {
   const id = param(req, 'id');
   await assertProductLineVisible(id, req.user!);
@@ -168,7 +168,7 @@ productLinesRoute.get('/:id/groups', async (req, res) => {
   res.json(rows);
 });
 
-/** 产品线下的全部版本（跨项目）：同理，「跨版本」筛选要能看到兄弟项目的版本名。 */
+/** All versions under the product line (cross-project): same idea — the "cross-version" filter must see sibling projects' version names. */
 productLinesRoute.get('/:id/versions', async (req, res) => {
   const id = param(req, 'id');
   await assertProductLineVisible(id, req.user!);
@@ -184,9 +184,10 @@ productLinesRoute.get('/:id/versions', async (req, res) => {
 });
 
 /**
- * 把项目挂进产品线。项目已无自己的组织列——归属只由 product_line_id 决定，
- * 从别的线移入即自动换组织（结构保证，无需同步代码），标签按同名迁到目标组织。
- * 一个项目至多属于一条产品线；已在本线的项目幂等跳过。
+ * Attach a project into the product line. Projects no longer have their own org column — ownership is decided
+ * solely by product_line_id, so moving in from another line automatically switches the org (guaranteed by
+ * structure, no sync code needed), and tags migrate to the target org by same name.
+ * A project belongs to at most one product line; projects already in this line are idempotently skipped.
  */
 productLinesRoute.post('/:id/projects', async (req, res) => {
   const id = param(req, 'id');
@@ -205,9 +206,9 @@ productLinesRoute.post('/:id/projects', async (req, res) => {
 const MoveBody = z.object({ organizationId: z.string().uuid() });
 
 /**
- * 移动产品线到另一个组织。线内全部项目跟着换组织，标签一并迁移。
- * 双闸门：源组织的管理员（线的归属权）+ 目标组织的管理员（把别人的家搬进自己家得有权限）。
- * 同名线冲突必须预检：product_lines 有 UNIQUE(organization_id, name)，漏出去就是裸 23505。
+ * Move a product line to another org. All projects in the line switch orgs along with it, tags migrate too.
+ * Double gate: a manager of the source org (ownership of the line) + a manager of the target org (moving someone else's home into yours requires the right).
+ * Same-name line conflicts must be pre-checked: product_lines has UNIQUE(organization_id, name); missing it leaks a bare 23505.
  */
 productLinesRoute.post('/:id/move', async (req, res) => {
   const id = param(req, 'id');

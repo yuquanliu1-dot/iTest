@@ -12,7 +12,7 @@ export interface PlanRunEvent {
 
 const subscribers = new Map<string, Set<Response>>();
 const PREFIX = 'itest:sse:';
-/** 每进程唯一 origin：跨容器说清「这条事件是不是我自己发的」,防止本地直写 + redis 回环双写。 */
+/** Per-process unique origin: lets cross-container consumers tell whether "this event is my own", preventing local-direct-write + redis-loopback double writes. */
 const ORIGIN_ID = crypto.randomUUID();
 
 let _pub: Redis | null = null;
@@ -48,7 +48,7 @@ function getSub(): Redis | null {
       } catch {
         return;
       }
-      if (parsed.o === ORIGIN_ID) return; // 本容器已本地直写,跳过回环
+      if (parsed.o === ORIGIN_ID) return; // this container already wrote locally, skip the loopback
       const evt = parsed.e;
       if (!evt) return;
       for (const res of set) {
@@ -97,7 +97,7 @@ function unsubscribeChannel(runId: string): void {
 }
 
 export function publishRunEvent(runId: string, event: PlanRunEvent): void {
-  // 本地先直写(同容器订阅者零延迟、不依赖回环);跨容器再 PUBLISH,带 origin 去重。
+  // Write locally first (zero latency for same-container subscribers, no loopback dependency); then PUBLISH cross-container, deduped by origin.
   const set = subscribers.get(runId);
   if (set) {
     for (const res of set) {

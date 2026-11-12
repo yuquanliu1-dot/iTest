@@ -13,15 +13,15 @@ export const reportsRoute = Router();
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots');
 
-/** 清理报告对应的截图目录；目录不存在或权限不足时静默吞掉（不影响删除 API 成功） */
+/** Clean up the screenshot directory of a report; silently swallow missing directories or permission errors (does not affect delete API success) */
 async function unlinkReportScreenshots(reportId: string): Promise<void> {
   await rm(join(SCREENSHOTS_DIR, reportId), { recursive: true, force: true }).catch(() => {});
 }
 
 reportsRoute.get('/', async (req, res) => {
   const { projectId } = req.query as { projectId?: string };
-  // 列表瘦身:stepResults/datasetSnapshot/preflight 重列只在详情接口(GET /:id)消费,
-  // 前端列表页(实走 /executions)零引用——列表带这些 JSONB 列等于每次全量拖step明细。
+  // List slimming: stepResults/datasetSnapshot/preflight heavy columns are consumed only by the detail endpoint (GET /:id);
+  // the frontend list page (actually /executions) references none of them — carrying these JSONB columns in the list means dragging full step details every time.
   if (projectId) {
     await assertProjectVisible(projectId, req.user!);
     const gs = await db.select().from(groups).where(eq(groups.projectId, projectId));
@@ -39,7 +39,7 @@ reportsRoute.get('/', async (req, res) => {
     res.json(await attachCreators(rows));
     return;
   }
-  // 无参：按可见项目过滤
+  // No params: filter by visible projects
   const visiblePids = await visibleProjectIds(req.user!);
   const gs = visiblePids.length
     ? await db.select().from(groups).where(inArray(groups.projectId, visiblePids))
@@ -65,7 +65,7 @@ reportsRoute.get('/:id', async (req, res) => {
     .leftJoin(testCases, eq(testCases.id, reports.caseId))
     .where(eq(reports.id, req.params.id));
   if (rows.length === 0) throw new HttpError(404, 'not_found', 'report not found');
-  // report → case → group → project 链路判定可见性
+  // Visibility judged via the report → case → group → project chain
   const report = rows[0]!;
   const c = (await db.select().from(testCases).where(eq(testCases.id, report.caseId)))[0];
   if (!c) throw new HttpError(404, 'not_found', 'report not found');
@@ -76,28 +76,28 @@ reportsRoute.get('/:id', async (req, res) => {
   } catch {
     throw new HttpError(404, 'not_found', 'report not found');
   }
-  // 计划运行成员报告：在响应里附带 planRunId + planId，前端从计划运行详情进来时显示「返回计划运行」按钮
+  // Plan-run member reports: attach planRunId + planId to the response so the frontend shows the "back to plan run" button when arriving from a plan run detail
   const prcRows = await db
     .select({ planRunId: planRunCases.planRunId, reportId: planRunCases.reportId, reportIds: planRunCases.reportIds, caseId: planRunCases.caseId, rca: planRunCases.rca })
     .from(planRunCases)
     .where(eq(planRunCases.caseId, report.caseId))
     .limit(50);
-  // 限同一个 case：避免 dataset 多行时跨 plan_run 拿到多个候选
+  // Limited to the same case: avoid multiple candidates across plan_runs when a dataset has multiple rows
   const link = prcRows.find((r) => r.reportId === report.id)
     ?? prcRows.find((r) => Array.isArray(r.reportIds) && r.reportIds.includes(report.id));
   if (!link) {
     res.json(await attachCreator(report));
     return;
   }
-  // planId 来自 planRuns.planId，多查一次避免 join 整张表
+  // planId comes from planRuns.planId; one extra query avoids joining the whole table
   const { planRuns } = await import('../db/schema.js');
   const planRun = (await db.select({ planId: planRuns.planId }).from(planRuns).where(eq(planRuns.id, link.planRunId)))[0];
   res.json(await attachCreator({ ...report, planRunId: link.planRunId, planId: planRun?.planId ?? null, rca: link.rca ?? null }));
 });
 
-/** 数据集行切换器：同批兄弟行摘要（datasetBatchId 分组，报告页 running 期间 2s 轮询）。
- *  刻意只回摘要（行号/状态/耗时/行快照），不含 stepResults——步骤明细仍走 GET /:id。
- *  老报告无 batchId → { batchId: null, rows: [] }，前端据此隐藏切换器。 */
+/** Dataset row switcher: sibling-row summaries of the same batch (grouped by datasetBatchId; polled at 2s while the report page is running).
+ *  Deliberately returns only summaries (row index/status/duration/row snapshot), without stepResults — step details still go through GET /:id.
+ *  Old reports without a batchId → { batchId: null, rows: [] }; the frontend hides the switcher on that. */
 reportsRoute.get('/:id/dataset-batch', async (req, res) => {
   await assertReportVisible(req.params.id!, req.user!);
   const report = (await db.select({ datasetBatchId: reports.datasetBatchId }).from(reports).where(eq(reports.id, req.params.id!)))[0];
@@ -126,13 +126,13 @@ reportsRoute.delete('/:id', async (req, res) => {
 
 reportsRoute.post('/batch-delete', async (req, res) => {
   const body = z.object({ reportIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
-  // 与 cases 一致：先按可见性逐个校验，违规直接 404（不区分存在性与可见性）
+  // Same as cases: validate visibility one by one first, violations 404 directly (no distinction between existence and visibility)
   for (const id of body.reportIds) await assertReportVisible(id, req.user!);
   const deleted = await db
     .delete(reports)
     .where(inArray(reports.id, body.reportIds))
     .returning({ id: reports.id });
-  // 截图清理并行执行；个别失败不影响 API 成功（文件可能本来就不存在）
+  // Screenshot cleanup runs in parallel; individual failures don't affect API success (the files may not exist in the first place)
   await Promise.all(deleted.map((d) => unlinkReportScreenshots(d.id).catch(() => {})));
   res.json({ count: deleted.length });
 });

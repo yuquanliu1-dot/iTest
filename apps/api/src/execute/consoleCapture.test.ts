@@ -21,7 +21,7 @@ describe('recordConsoleEvent', () => {
   it('文本超长截断到 500 字符', () => {
     const buf: ConsoleBuffer = [];
     recordConsoleEvent(buf, 'error', 'x'.repeat(600), 1);
-    expect(buf[0]!.text.length).toBe(501); // 500 + 省略号
+    expect(buf[0]!.text.length).toBe(501); // 500 + the ellipsis
     expect(buf[0]!.text.endsWith('…')).toBe(true);
   });
 

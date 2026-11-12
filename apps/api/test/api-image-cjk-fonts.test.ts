@@ -1,13 +1,13 @@
 /**
- * api 镜像的中文字体守卫。
+ * Chinese font guard for the api image.
  *
- * 2026-11-10 prod228 实录：探索式测试会话的证据截图由容器内 chromium 渲染，
- * 而 api.Dockerfile 没装任何 CJK 字体 → 中文全渲染成方框 →
- *  1. AI 把「字体缺失」当成缺陷报出来（一次探索报了 3 条伪缺陷）；
- *  2. 证据截图不可读，复核时看不出现象。
+ * 2026-11-10 prod228 live record: evidence screenshots of exploratory testing sessions are rendered by in-container chromium,
+ * but api.Dockerfile installs no CJK font at all -> all Chinese renders as tofu boxes ->
+ *  1. the AI reports "missing font" as a defect (one exploration produced 3 bogus defects);
+ *  2. evidence screenshots are unreadable, so the phenomenon is invisible during review.
  *
- * 回归发生在「打包进镜像」这一层（源码树里看不见），所以直接断言 Dockerfile 的
- * apt 安装清单含中文字体包，与 recorder-extension-locales.test.ts 断言 COPY 清单同法。
+ * The regression happens at the "packaged into the image" layer (invisible in the source tree), so we directly assert
+ * that the Dockerfile's apt install list contains CJK font packages -- same approach as recorder-extension-locales.test.ts asserting the COPY list.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';

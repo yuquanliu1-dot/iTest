@@ -1,30 +1,33 @@
 /**
- * 探索会话（pi 链路）的 pi AgentSession 工厂与提示词拼装。
+ * pi AgentSession factory and prompt assembly for exploration sessions (pi chain).
  *
- * 提示词分层（压缩安全是硬约束）：
- * - 章程/人格/起点/降级说明 → appendSystemPromptOverride（<addendum> 段）——
- *   pi 压缩只摘要旧消息、不动 system prompt；放首条 user message 会在长会话压缩后丢失。
- * - pi 默认的「编码助手」preamble → before_agent_start 里整份渲染后字符串替换默认句子（forceSystemPrompt）并删 docs 段
- *   （不能走 customPrompt——那会连 tools/rules 段一起丢掉，工具 promptGuidelines 就没了；
- *    也不能写 sections.preamble——pi 校验段名直接抛错）。
- * - 工具使用纪律 → 各工具的 description + promptGuidelines（pi 原生 rules 段机制）。
+ * Prompt layering (compression safety is a hard constraint):
+ * - Charter/persona/start/degradation notice → appendSystemPromptOverride (the <addendum> segment) —
+ *   pi compression only summarizes old messages and never touches the system prompt; putting them in the first
+ *   user message would lose them after compression in a long session.
+ * - pi's default "coding assistant" preamble → inside before_agent_start, replace the default sentence in the fully
+ *   rendered string (forceSystemPrompt) and delete the docs segment (it cannot go through customPrompt — that drops
+ *   the tools/rules segments too, taking the tools' promptGuidelines with it; nor can it be written to
+ *   sections.preamble — pi validates section names and throws outright).
+ * - Tool usage discipline → each tool's description + promptGuidelines (pi's native rules segment mechanism).
  */
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { renderCodeScopeSection } from '../../execute/explorationPrompt.js';
 import type { CodeScope } from '../../execute/codeScope.js';
 import { logger } from '../../logger.js';
 
-/** 替换 pi 默认编码助手 preamble 的探索身份段（保留 tools/rules 段不动）。 */
+/** Exploration identity segment replacing pi's default coding-assistant preamble (keeps the tools/rules segments untouched). */
 const EXPLORATION_PREAMBLE = `你是 iTest 平台的 Web 探索式测试智能体，通过浏览器工具对被测系统做探索式测试：按章程主动找茬，发现行为异常、校验缺失、状态错乱、体验破绽。遵守下方工具使用规则。`;
 
-/** pi 默认 preamble 原文（pi-coding-agent dist/core/system-prompt.js）。整份渲染后做字符串替换。 */
+/** pi's default preamble verbatim (pi-coding-agent dist/core/system-prompt.js). String replacement over the fully rendered prompt. */
 const PI_DEFAULT_PREAMBLE =
   'You are an expert coding assistant operating inside pi, a coding agent harness. '
   + 'You help users by reading files, executing commands, editing code, and writing new files.';
 
-/** 探索系统提示词基底（pi 版）：工具循环的工作纪律。与 legacy JSON 协议版（execute/explorationPrompt.ts）
- *  方向一致（主动找茬），但协议载体不同——pi 用原生工具调用，不再有 {"actions":[...]} 大包。
- *  判定动作（report_finding/note_excluded/finish）是显式工具——探索的产出物经它们落库。 */
+/** Exploration system prompt base (pi version): working discipline for the tool loop. Direction matches the legacy JSON
+ *  protocol version (execute/explorationPrompt.ts) — actively hunt for defects — but the protocol carrier differs: pi uses
+ *  native tool calls, no more {"actions":[...]} mega-payload.
+ *  The verdict actions (report_finding/note_excluded/finish) are explicit tools — exploration outputs are persisted through them. */
 const EXPLORATION_PI_SYSTEM_PROMPT = `工作方式：
 - 先观察再动手：navigate 之后必先 observe 拿到截图与元素清单再判断；页面发生变化的下一步也重新 observe，不要凭过期认知决策。
 - 小步推进：每次只做一件事，做完用 observe 确认结果再决定下一步；连续动作之间页面会变。
@@ -38,20 +41,20 @@ const EXPLORATION_PI_SYSTEM_PROMPT = `工作方式：
 - 不空转：同一目标连续 3 次失败就换路径或如实结束；页面加载中/骨架屏先等待再观察。
 - 结束方式：主要路径都看过、或被卡住无法继续时，调用 finish 工具提交总结（覆盖了什么、发现几条缺陷、无法继续的原因），调用后不要再调其它工具。`;
 
-/** 组装 appendSystemPromptOverride 的探索 addendum（章程/人格/登录准备/代码范围/降级说明/起点）。 */
+/** Assembles the exploration addendum for appendSystemPromptOverride (charter/persona/login prep/code scope/degradation notice/start). */
 export function composeExplorationPrompt(args: {
   charter: string;
   startUrl: string;
   persona: string;
-  /** false = 视觉探针失败（渠道剥图）→ 显式告知模型无图可用。 */
+  /** false = the vision probe failed (channel strips images) → explicitly tell the model no image is available. */
   vision: boolean;
-  /** 无已保存登录态且环境有凭据：起点落在登录页时按此段用占位符登录。 */
+  /** No saved login state and the environment has credentials: if the start lands on a login page, log in with the placeholders per this section. */
   login: { userPlaceholder: string; passwordPlaceholder: string } | null;
-  /** 代码提交范围（resolveCodeScope 产物）；非空则拼「## 代码范围」段（复用 legacy 同一份渲染）。 */
+  /** Code commit scope (resolveCodeScope output); when non-empty, appends the "## Code Scope" section (reuses the same legacy renderer). */
   codeScope?: CodeScope | null;
-  /** 环境里的数据库对象（label + 方言）；非空则拼「## 数据库取证」段（sql_probe 的可用库清单）。 */
+  /** Database objects in the environment (label + dialect); when non-empty, appends the "## DB Forensics" section (the sql_probe usable-database list). */
   dbs?: Array<{ label: string; dialect: string }>;
-  /** 章程分解出的子目标（C2）；非空则拼「## 子目标」段——探索的推进方向清单。 */
+  /** Sub-goals decomposed from the charter (C2); when non-empty, appends the "## Sub-goals" section — the exploration's direction list. */
   goals?: Array<{ id: string; text: string }>;
 }): string {
   const sections: string[] = [`## 章程（charter）\n${args.charter.trim()}`, `## 视角\n${args.persona}`];
@@ -80,20 +83,21 @@ export function composeExplorationPrompt(args: {
   return sections.join('\n\n');
 }
 
-/** pi 探索会话工厂入参。 */
+/** Arguments for the pi exploration session factory. */
 export interface CreateExplorationSessionArgs {
-  /** 工作目录（版本工作树）：pi 的 cwd（仓库读码工具 P3 沙箱以此为根）。 */
+  /** Working directory (version worktree): pi's cwd (the repo-reading tool's P3 sandbox is rooted here). */
   cwd: string;
   tools: ToolDefinition[];
   model: Record<string, unknown>;
-  /** appendSystemPromptOverride 的 addendum（composeExplorationPrompt 产物）。 */
+  /** The appendSystemPromptOverride addendum (composeExplorationPrompt output). */
   explorationPrompt: string;
 }
 
 /**
- * 创建 pi AgentSession：自定义工具集 + 内存会话（不落 pi_thread 文件——平台自己的
- * actions_trail 已是审计真源，无多副本文件一致性问题）+ 探索身份 preamble 替换。
- * bindExtensions 必需：pi 的 session_start 只在 bindExtensions 时触发（同 space 路径的验证结论）。
+ * Creates a pi AgentSession: custom tool set + in-memory session (no pi_thread file — the platform's own
+ * actions_trail is already the audit source of truth, with no multi-replica file consistency issue) + exploration
+ * identity preamble replacement.
+ * bindExtensions is required: pi's session_start only fires when bindExtensions is called (verified conclusion from the space path).
  */
 export async function createExplorationSession(args: CreateExplorationSessionArgs) {
   const { createAgentSession, SessionManager, DefaultResourceLoader, getAgentDir } = await import('@earendil-works/pi-coding-agent');
@@ -107,13 +111,14 @@ export async function createExplorationSession(args: CreateExplorationSessionArg
         hidden: true,
         factory: (pi) => {
           pi.on('before_agent_start', (event) => {
-            // docs 段删掉（cwd 是被测仓库，别把仓库自身的 AGENTS.md 喂进探索身份）。
-            // 必须在渲染 event.systemPrompt 之前——返回 {systemPrompt} 会冻结后续 section 变更。
+            // Delete the docs segment (cwd is the SUT repo; do not feed the repo's own AGENTS.md into the exploration identity).
+            // Must happen before rendering event.systemPrompt — returning {systemPrompt} freezes later section changes.
             delete event.systemPromptOptions.sections.docs;
-            // preamble 不能走 sections.preamble——pi 校验段名直接抛
-            // "Invalid system prompt section name: preamble"（prod228 实证）。
-            // 与 space 路径同款做法：渲染整份 system prompt，把默认编码助手句子替换成
-            // 探索身份，以 forceSystemPrompt 返回（不进 transcript，sections 记录保持完整）。
+            // The preamble cannot go through sections.preamble — pi validates section names and throws
+            // "Invalid system prompt section name: preamble" outright (proven on prod228).
+            // Same approach as the space path: render the whole system prompt, replace the default coding-assistant
+            // sentence with the exploration identity, and return it via forceSystemPrompt (not into the transcript;
+            // the sections record stays intact).
             const rendered = event.systemPrompt;
             if (typeof rendered === 'string' && rendered.includes(PI_DEFAULT_PREAMBLE)) {
               return { systemPrompt: rendered.replace(PI_DEFAULT_PREAMBLE, EXPLORATION_PREAMBLE) };

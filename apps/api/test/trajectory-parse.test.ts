@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-/** 造一条 JSONL 行的辅助（形状见计划「已核实的关键代码事实」）。 */
+/** Helper that builds one JSONL line (shape per the plan's "verified key code facts"). */
 function msgLine(role: string, content: unknown, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({ type: 'message', id: Math.random().toString(36).slice(2), parentId: null, timestamp: new Date().toISOString(), message: { role, content, ...extra } });
 }
@@ -40,15 +40,15 @@ describe('trajectoryParse：JSONL → 会话轮次', () => {
     const turns = parseSessionJsonl(jsonl);
     const users = turns.filter((t) => t.role === 'user');
     expect(users[0]!.timestamp).toBe(Date.parse('2026-11-01T08:00:00.000Z'));
-    expect(users[1]!.timestamp).toBeUndefined(); // 坏 timestamp
+    expect(users[1]!.timestamp).toBeUndefined(); // bad timestamp
     const assts = turns.filter((t) => t.role === 'assistant');
     expect(assts[0]!.timestamp).toBe(Date.parse('2026-11-01T08:01:00.500Z'));
-    expect(assts[1]!.timestamp).toBeUndefined(); // 缺 timestamp
+    expect(assts[1]!.timestamp).toBeUndefined(); // missing timestamp
     const tr = turns.find((t) => t.role === 'toolResult')!;
     expect(tr.timestamp).toBe(Date.parse('2026-11-01T08:02:00.000Z'));
   });
 
-  /** 生产形态 verify rdata 正文（session 包装层 ok:true → isError:false，text 是 JSON 串）。 */
+  /** Production-shaped verify rdata body (session wrapper's ok:true → isError:false; text is a JSON string). */
   const passedBody = (extra: Record<string, unknown> = {}) => JSON.stringify({ result: 'passed', basedOn: 'staged', steps: [], ...extra });
   const failedBody = (extra: Record<string, unknown> = {}) => JSON.stringify({ result: 'failed', basedOn: 'staged', failure: { stepOrder: 1, error: '找不到按钮' }, ...extra });
   const verifyLine = (callId: string, caseId: string, text: string, isError = false) => ([
@@ -120,7 +120,7 @@ describe('trajectoryParse：JSONL → 会话轮次', () => {
     const { parseSessionJsonl, findVerifiedLocalIds } = await import('../src/scheduler/trajectoryParse.js');
     const jsonl = [
       msgLine('assistant', [toolCallBlock('x', 'verify_case', { caseId: 'no-flag-1' })]),
-      msgLine('toolResult', [{ type: 'text', text: '结果未带错误标志' }], { toolCallId: 'x', toolName: 'verify_case' }), // 无 isError
+      msgLine('toolResult', [{ type: 'text', text: '结果未带错误标志' }], { toolCallId: 'x', toolName: 'verify_case' }), // no isError
     ].join('\n');
     const verified = findVerifiedLocalIds(parseSessionJsonl(jsonl), ['no-flag-1']);
     expect(verified.size).toBe(0);
@@ -138,7 +138,7 @@ describe('trajectoryParse：JSONL → 会话轮次', () => {
     expect(out).toContain('[助手] 好的');
     expect(out).toContain('stage_case');
     expect(out).not.toContain('内部思考不该出现');
-    expect(out.length).toBeLessThanOrEqual(3_200); // 截断容差
+    expect(out.length).toBeLessThanOrEqual(3_200); // truncation tolerance
   });
 
   it('compressConversation：尾部截断保首条用户消息在头部（22min 长会话检索锚不丢）；总量仍 ≤ 预算', async () => {
@@ -152,7 +152,7 @@ describe('trajectoryParse：JSONL → 会话轮次', () => {
     }
     const out = compressConversation(parseSessionJsonl(lines.join('\n')), 2_000);
     expect(out.startsWith('[用户] 首条需求')).toBe(true);
-    expect(out).toContain('R11-'); // 最新上下文仍在（尾部截断语义保留）
+    expect(out).toContain('R11-'); // the latest context is still there (tail-truncation semantics preserved)
     expect(out.length).toBeLessThanOrEqual(2_000);
   });
 
@@ -164,7 +164,7 @@ describe('trajectoryParse：JSONL → 会话轮次', () => {
     ];
     const out = compressConversation(parseSessionJsonl(lines.join('\n')), 24_000);
     const firstLine = out.split('\n')[0]!;
-    expect(firstLine.length).toBe(2_000); // 整行（含「[用户] 」标记）截到 2000
+    expect(firstLine.length).toBe(2_000); // the whole line (including the 「[用户] 」 marker) truncated to 2000
     expect(firstLine.startsWith(`[用户] ${'需'.repeat(1_000)}`)).toBe(true);
     expect(out).toContain('[助手] 收到');
   });

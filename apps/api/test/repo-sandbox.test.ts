@@ -188,7 +188,7 @@ describe('repo_grep', () => {
   it('rg 不存在时 (PATH 强制覆盖) 返回明确错误', async () => {
     const tools = buildRepoSandboxTools(cwd);
     const t = tools.find((x) => x.name === 'repo_grep')!;
-    // rg 可执行文件不在 PATH 中 → spawn 触发 ENOENT，经 runRg 抛出，被 execute 捕获为 ok:false。
+    // The rg executable is not in PATH → spawn triggers ENOENT, thrown through runRg, caught by execute as ok:false.
     const prev = process.env.PATH;
     process.env.PATH = '/nonexistent-dir';
     try {
@@ -212,10 +212,10 @@ describe('countRepoGrepBatch', () => {
   it('N 个 pattern 单次遍历后按 pattern 归因（批量版的存在理由）', async () => {
     const { countRepoGrepBatch } = await import('../src/pi/repo.js');
     const table = await countRepoGrepBatch(batchCwd, [
-      'title\\s*[:=]\\s*[\'"]{1,2}查看', // a + b 共 3 处
-      'icon-chakan', // 1 处
-      'placeholder', // 1 处
-      'nonexistent_zzz', // 0 处
+      'title\\s*[:=]\\s*[\'"]{1,2}查看', // 3 occurrences in a + b
+      'icon-chakan', // 1 occurrence
+      'placeholder', // 1 occurrence
+      'nonexistent_zzz', // 0 occurrences
     ]);
     expect(table.get('title\\s*[:=]\\s*[\'"]{1,2}查看')!.count).toBe(3);
     expect(table.get('icon-chakan')!.count).toBe(1);
@@ -245,7 +245,7 @@ describe('countRepoGrepBatch', () => {
       const serial = await countRepoGrep(dir, 'placeholder');
       expect(batch.get('placeholder')!.count).toBe(3);
       expect(batch.get('placeholder')!.count).toBe(serial.count);
-      // 含大写的 pattern 走区分大小写
+      // patterns containing uppercase go case-sensitive
       const upperBatch = await countRepoGrepBatch(dir, ['PLACEHOLDER']);
       expect(upperBatch.get('PLACEHOLDER')!.count).toBe((await countRepoGrep(dir, 'PLACEHOLDER')).count);
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
@@ -265,7 +265,7 @@ describe('countRepoGrepBatch', () => {
         const serial = (await countRepoGrep(dir, p)).count;
         expect(batch.get(p)!.count, p).toBe(serial);
       }
-      // 关键语义：若不拆组，-e searchForm 会把 -e placeholder 拖成区分大小写（3 → 1）
+      // Key semantics: without splitting groups, -e searchForm would drag -e placeholder into case-sensitive (3 → 1)
       expect(batch.get('placeholder')!.count).toBe(3);
       expect(batch.get('searchForm')!.count).toBe(1);
       expect(batch.get('SEARCHFORM')!.count).toBe(2);
@@ -332,7 +332,7 @@ describe('repo_run', () => {
   it('git 子命令二次白名单', async () => {
     const tools = buildRepoSandboxTools(cwd);
     const t = tools.find((x) => x.name === 'repo_run')!;
-    // 'git init' 不在二次白名单
+    // 'git init' is not in the secondary whitelist
     const r = await t.execute({ command: 'git init' });
     expect(r.ok).toBe(false);
   });

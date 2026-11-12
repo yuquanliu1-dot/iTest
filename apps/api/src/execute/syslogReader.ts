@@ -38,12 +38,12 @@ export interface ObserveLogLineResult {
 const TRUNCATE = 50;
 const TIMEOUT_MS = 15_000;
 
-/** 按 authType 连接：password 传 password，key 传 privateKey（ssh2 原生两者皆支持）。 */
+/** Connects per authType: password passes password, key passes privateKey (ssh2 natively supports both). */
 function connectSsh(env: SyslogCtx): Promise<Client> {
   const client = new Client();
   return new Promise((resolve, reject) => {
     client.once('ready', () => resolve(client));
-    // ssh2 的 socket 错误常只有 code（如 ECONNREFUSED）而 message 为空 → 两者拼接保证可读
+    // ssh2 socket errors often carry only a code (e.g. ECONNREFUSED) with an empty message → join both for readability
     client.once('error', (err) => {
       const code = (err as { code?: string }).code;
       const detail = [err.message, code].filter(Boolean).join(' ') || 'connection failed';
@@ -65,7 +65,7 @@ function connectSsh(env: SyslogCtx): Promise<Client> {
   });
 }
 
-/** 连通性探测：connect → tail -n 1 校验文件可读 → end。返回耗时 ms。 */
+/** Connectivity probe: connect → tail -n 1 to verify the file is readable → end. Returns elapsed ms. */
 export async function probeSyslog(env: SyslogCtx): Promise<number> {
   const client = await connectSsh(env);
   const startedAt = Date.now();
@@ -80,10 +80,10 @@ export async function probeSyslog(env: SyslogCtx): Promise<number> {
           return;
         }
         ch.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
-        // 探测不关心 stdout 内容，但必须挂 data 监听把流切到 flowing 模式：
-        // ssh2 的 channel 是可读流，无人消费时 stdout 反压住 → close 永不触发 →
-        // 每次探测都等满 15s 超时（prod228 实测，2026-10-22）。
-        ch.on('data', () => { /* 丢弃：探测只校验文件可读 */ });
+        // The probe does not care about stdout content, but a data listener must be attached to switch the stream to
+        // flowing mode: an ssh2 channel is a readable stream; with nobody consuming it, stdout backpressures → close
+        // never fires → every probe waits out the full 15s timeout (observed on prod228, 2026-10-22).
+        ch.on('data', () => { /* Discard: the probe only verifies the file is readable */ });
         ch.on('close', (code: number | null) => {
           clearTimeout(timer);
           if (code !== 0) reject(new SyslogFileMissing(stderr.trim() || env.filePath));

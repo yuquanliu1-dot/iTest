@@ -20,8 +20,8 @@ import { logger } from '../logger.js';
 
 export const recorderRoute = Router();
 
-// 录制 WS 地址：扩展所在机器必须能直连该地址（不能指向 web 端口——/recorder 不走 vite proxy）。
-// RECORDER_PUBLIC_WS_URL 为完整 endpoint，path 为空时补 /recorder；非法值回落本机默认。
+// Recording WS address: the extension's machine must be able to connect directly (must not point at the web port — /recorder doesn't go through the vite proxy).
+// RECORDER_PUBLIC_WS_URL is the full endpoint; when the path is empty, /recorder is appended; invalid values fall back to the local default.
 export function buildRecorderWsUrl(): string {
   const fallback = `ws://127.0.0.1:${process.env.API_PORT ?? 54321}/recorder`;
   const raw = process.env.RECORDER_PUBLIC_WS_URL;
@@ -52,7 +52,7 @@ recorderRoute.post('/sessions', async (req, res) => {
   await assertCaseVisible(body.caseId, req.user!);
   if (body.mode === 'resume') {
     const steps = await db.select().from(testSteps).where(eq(testSteps.caseId, body.caseId));
-    // resumeFromOrder 是第一条新步骤的 order；之前的步骤只做校验（回放由扩展侧驱动）。
+    // resumeFromOrder is the order of the first new step; earlier steps are validation only (replay is driven on the extension side).
     const upto = body.resumeFromOrder ?? steps.length + 1;
     const slice = steps.filter((s) => s.order < upto);
     for (const s of slice) {
@@ -66,10 +66,10 @@ recorderRoute.post('/sessions', async (req, res) => {
       }
     }
   }
-  // 相对 url 解析失败必须在建会话前拦下：否则 resolvedUrl=null 传到扩展,chrome.tabs.create
-  // 会把空/相对串当扩展内相对路径打开 → "Your file couldn't be accessed"。
-  // WebServiceMissing(环境无 web 服务 / url 形态非法)转 422 用户可见;无默认环境这条 resolveCaseUrl
-  // 只回 null 的路也补 422,给出可操作指引。
+  // A relative-url resolution failure must be intercepted before creating the session: otherwise resolvedUrl=null reaches
+  // the extension and chrome.tabs.create opens the empty/relative string as an extension-relative path → "Your file couldn't be accessed".
+  // WebServiceMissing (environment has no web service / url shape illegal) converts to a user-visible 422; the no-default-environment path,
+  // where resolveCaseUrl only returns null, also gets a 422 with actionable guidance.
   let resolvedUrl: string | null;
   try {
     resolvedUrl = await resolveCaseUrl(exists[0]!, { defaultEnvFallback: true });
@@ -101,7 +101,7 @@ recorderRoute.post('/sessions', async (req, res) => {
     })
     .returning({ id: testSessions.id });
   session.dbSessionId = dbRow[0]!.id;
-  // createSession 已 write-through 一次,但那时 dbSessionId 还没赋值;补一次让跨副本能读到审计 id。
+  // createSession already write-throughs once, but dbSessionId wasn't assigned yet at that point; do it again so cross-replica reads can see the audit id.
   void persistSession(session);
   res.json({
     sessionId: session.sessionId,
@@ -112,13 +112,14 @@ recorderRoute.post('/sessions', async (req, res) => {
   });
 });
 
-// 连续同 locator 的 fill 合并：React controlled input 在输入过程中 remount / 用户中途停顿时，
-// recorder 会产多条 fill（值为累计值，回放时逐条执行结果等价但噪音大）。合并保留最后一条的值，
-// 位置取第一条。其他 kind 或 locator 不同不合并（切走再回来填是合法的两步，中间必有其他步骤隔开）。
-// frameChain 参与合并键：不同帧的同 locator 是不同目标，合并把值写错帧。
+// Merge consecutive fills with the same locator: React controlled inputs remount during typing / the user pauses midway,
+// so the recorder produces multiple fills (values accumulate; executing them one by one on replay is equivalent but noisy).
+// The merge keeps the last fill's value, position from the first. Other kinds or different locators don't merge
+// (switching away and coming back to fill is legitimately two steps, necessarily separated by other steps).
+// frameChain joins the merge key: the same locator in different frames targets different elements; merging would write the value into the wrong frame.
 type RecordedStepItem = { action?: { kind?: string; locator?: unknown; value?: unknown; sensitive?: unknown; frameChain?: unknown } };
 
-/** 导出供单测（跨帧 fill 不合并的回归锚）。 */
+/** Exported for unit tests (regression anchor for cross-frame fill not merging). */
 export function mergeConsecutiveFills(steps: unknown[]): unknown[] {
   const out: unknown[] = [];
   for (const step of steps) {
@@ -139,8 +140,8 @@ export function mergeConsecutiveFills(steps: unknown[]): unknown[] {
 }
 
 recorderRoute.post('/sessions/:id/finish', async (req, res) => {
-  // 终局读取即删除：二次 finish 404（旧实现重复读会二次插步）。steps/tabs 来自追加式存储，
-  // 跨副本（WS 与 REST finish 落不同副本）也能取齐并集。
+  // Read-and-delete at finish: a second finish 404s (the old implementation re-inserted steps on repeat reads). steps/tabs come from append-only storage,
+  // so even cross-replica (WS and REST finish landing on different replicas) the union can be assembled.
   const finished = await finishSession(req.params.id);
   if (!finished) throw new HttpError(404, 'not_found', 'session not found');
   const session = finished.meta;
@@ -149,12 +150,12 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   let inserted = 0;
   const existing = await db.select().from(testSteps).where(eq(testSteps.caseId, session.caseId));
   let nextOrder = existing.length > 0 ? Math.max(...existing.map((s) => s.order)) + 1 : 1;
-  // 初始导航不再落成 navigate 步骤；改写到 test_cases.url（用例级 init step），
-  // 由 runCase / executeCaseReal 在每次回放前 goto 一次。来源优先级：web 中台传入的 targetUrl
-  // > 录制第一步发生的页面 URL > 用例解析链兜底。已有的 case.url 不覆盖（避免 append/resume
-  // 把首录的 URL 写到一条已配置过的用例上）。
-  // 尽力相对化（spec 2026-10-16）：origin 命中项目任一环境 web 服务 → 存相对路径 + 绑定服务；
-  // 未命中（外站）保留绝对。
+  // The initial navigation no longer becomes a navigate step; it is written to test_cases.url (case-level init step),
+  // and runCase / executeCaseReal goto it once before each replay. Source priority: targetUrl passed by the web console
+  // > the page URL where recording's first step happened > the case resolution chain fallback. An existing case.url is not overwritten
+  // (avoiding append/resume writing the first recording's URL onto an already-configured case).
+  // Best-effort relativization (spec 2026-10-16): origin matches any environment web service of the project → store the relative path + bind the service;
+  // no match (external site) keeps the absolute URL.
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, session.caseId)))[0];
   const caseProjectId = caseRow
     ? (await db.select({ projectId: groups.projectId }).from(groups).where(eq(groups.id, caseRow.groupId)))[0]!.projectId
@@ -182,8 +183,8 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
       value?: unknown;
       sensitive?: boolean;
     };
-    // 中途 navigate 尽力相对化：origin 命中项目任一环境 web 服务 → 存相对路径（执行时再拼）；
-    // 未命中（外站）保留绝对。只改内存里的 action 再落库，不动原目标。
+    // Mid-run navigate best-effort relativization: origin matches any environment web service of the project → store the relative path (joined again at execution time);
+    // no match (external site) keeps the absolute URL. Only the in-memory action is changed before persisting; the original target is untouched.
     if (action.kind === 'navigate' && typeof action.url === 'string') {
       const rel = relativizeUrl(action.url, origins);
       if (rel) action.url = rel.path || '/';
@@ -199,8 +200,8 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
       secretTag = enc.tag.toString('base64');
       delete (action as Record<string, unknown>).value;
     }
-    // 录制产物:instruction 留空,compiled 单元素数组 = [录制得到的 StepAction]。
-    // kind === 'navigate' 不再单独落 step(初始化 URL 已写用例级 url),与回放/前端一致。
+    // Recording artifact: instruction left empty, compiled is a single-element array = [the recorded StepAction].
+    // kind === 'navigate' no longer lands as its own step (the init URL is already written to the case-level url), consistent with replay/frontend.
     await db.insert(testSteps).values({
       caseId: session.caseId,
       order: nextOrder++,
@@ -219,7 +220,7 @@ recorderRoute.post('/sessions/:id/finish', async (req, res) => {
   if (finished.tabs.length > 0 && session.dbSessionId) {
     await db.update(testSessions).set({ tabs: finished.tabs }).where(eq(testSessions.id, session.dbSessionId));
   }
-  // 录制产物改了用例 url + 追加步骤,列表缓存(固化进度列)必须失效
+  // The recording artifact changed the case url + appended steps, so the list cache (solidification progress column) must be invalidated
   await invalidateCasesCache(caseProjectId);
   res.json({ inserted });
 });
@@ -239,14 +240,14 @@ recorderRoute.post('/sessions/:id/tab-events', async (req, res) => {
   res.json({ count: (await getSessionTabs(req.params.id)).length });
 });
 
-/** 用 @itest/recorder workspace 包的 package.json 反推扩展根目录。
- *  dev 走 pnpm symlink 到 apps/recorder；prod 走 tsc 编译后也可能保留 symlink；
- *  解析失败时回退到 cwd 相对路径（保留一份鲁棒兜底）。 */
+/** Infer the extension root directory from the @itest/recorder workspace package's package.json.
+ *  dev goes through the pnpm symlink to apps/recorder; prod after tsc compilation may also keep the symlink;
+ *  on resolution failure fall back to a cwd-relative path (one robust fallback kept). */
 function resolveRecorderRoot(): string {
   try {
     const req = createRequire(import.meta.url);
     const pkgPath = req.resolve('@itest/recorder/package.json');
-    // ../package.json → 上一级就是包根目录
+    // ../package.json → the parent level is the package root
     return join(pkgPath, '..');
   } catch (err) {
     logger.warn({ err }, 'resolveRecorderRoot: @itest/recorder not resolvable, falling back to cwd/../recorder');
@@ -254,11 +255,11 @@ function resolveRecorderRoot(): string {
   }
 }
 
-/** 白名单后缀：扩展 manifest 实际加载的运行时文件类型。
- *  不在白名单的（.ts 源码、.map、.git 等）一律不进 zip。 */
+/** Whitelisted extensions: the runtime file types the extension manifest actually loads.
+ *  Anything not whitelisted (.ts sources, .map, .git, etc.) never enters the zip. */
 const ALLOWED_EXTS = new Set(['.js', '.json', '.css', '.html', '.png']);
 const SKIP_DIRS = new Set(['node_modules', 'test', '.git']);
-/** 配置/类型/构建工件：扩展运行时不需要，开发者修改后会让 Chrome 把根目录当 workspace 误识别。 */
+/** Config/type/build artifacts: not needed at extension runtime; if modified by a developer they make Chrome misidentify the root directory as a workspace. */
 const SKIP_FILES = new Set(['package.json', 'tsconfig.json', 'tsconfig.build.json', 'package-lock.json', 'pnpm-lock.yaml']);
 
 async function walkRecorderDir(root: string, rel: string, out: string[]): Promise<void> {
@@ -284,10 +285,10 @@ async function walkRecorderDir(root: string, rel: string, out: string[]): Promis
   }
 }
 
-/** 解析下载请求对应中台 origin（写到 zip 里的 manifest 与 console-config.default）。
- *  优先级：浏览器 Origin 头 > Referer 解析 > nginx 透传的 Host + X-Forwarded-Proto。
- *  解析失败回退 null（保留 manifest 默认 localhost/127.0.0.1）。
- *  导出仅供测试；生产代码用不到。 */
+/** Resolve the console origin corresponding to the download request (written into the manifest and console-config.default inside the zip).
+ *  Priority: the browser's Origin header > Referer parsing > nginx-forwarded Host + X-Forwarded-Proto.
+ *  On resolution failure fall back to null (keeping the manifest default localhost/127.0.0.1).
+ *  Exported for tests only; production code doesn't use it. */
 export function deriveConsoleOrigin(req: import('express').Request): string | null {
   const xfpRaw = req.headers['x-forwarded-proto'];
   const proto = (typeof xfpRaw === 'string' ? xfpRaw : Array.isArray(xfpRaw) ? xfpRaw[0] : 'http')
@@ -311,17 +312,17 @@ export function deriveConsoleOrigin(req: import('express').Request): string | nu
   return null;
 }
 
-/** 把 origin 拼成 content_scripts matches 项；同源已是 http(s)/* 一条足够。
- *  origin 形如 http://192.168.30.228:8080 → http://192.168.30.228:8080/*
- *  注意：Chromium 拒绝 :/* 这种省略 host 的 pattern，所以要保留 host+port。
- *  导出仅供测试。 */
+/** Join an origin into a content_scripts matches entry; for the same origin one http(s)/* entry suffices.
+ *  An origin like http://192.168.30.228:8080 → http://192.168.30.228:8080/*
+ *  Note: Chromium rejects :/* patterns that omit the host, so host+port must be preserved.
+ *  Exported for tests only. */
 export function originToMatchPattern(origin: string): string {
   return `${origin}/*`;
 }
 
 recorderRoute.get('/extension.zip', async (req, res) => {
   const root = resolveRecorderRoot();
-  // build 产物校验：modules/recorder-manager.js 是 esbuild 入口，缺失 = 还没 build。
+  // Build artifact check: modules/recorder-manager.js is the esbuild entry; missing = not built yet.
   try {
     await stat(join(root, 'modules', 'recorder-manager.js'));
   } catch {
@@ -331,7 +332,7 @@ recorderRoute.get('/extension.zip', async (req, res) => {
       'recorder extension has no build artifacts; run `pnpm --filter @itest/recorder build` first',
     );
   }
-  // manifest version 用作 zip 文件名后缀——build 后会同步更新
+  // manifest version is used as the zip filename suffix — updated in sync after build
   let version = '0.0.0';
   let manifestText: string | null = null;
   try {
@@ -342,8 +343,8 @@ recorderRoute.get('/extension.zip', async (req, res) => {
     logger.warn({ err }, 'extension.zip: manifest.json read failed, using default version');
   }
 
-  // 根据请求 origin 重写 manifest.content_scripts.matches，让下载得到的扩展在对应中台域名直接注入。
-  // 没解析出 origin（curl 直连等）时保留源码 manifest 原样。
+  // Rewrite manifest.content_scripts.matches based on the request origin, so the downloaded extension injects directly on the corresponding console domain.
+  // When no origin resolves (direct curl etc.), the source manifest is kept as-is.
   const consoleOrigin = deriveConsoleOrigin(req);
   if (consoleOrigin && manifestText) {
     try {
@@ -354,7 +355,7 @@ recorderRoute.get('/extension.zip', async (req, res) => {
       if (cs) {
         const defaults = ['http://localhost/*', 'http://127.0.0.1/*'];
         const deployed = originToMatchPattern(consoleOrigin);
-        // 避免重复：部署 origin 已经等于 default 之一时跳过写入。
+        // Avoid duplicates: skip the write when the deployed origin already equals one of the defaults.
         const merged = Array.from(new Set([...(cs.matches ?? []), deployed, ...defaults]));
         cs.matches = merged.filter((m, idx, arr) => arr.indexOf(m) === idx);
         manifestText = JSON.stringify(manifest, null, 2);
@@ -364,14 +365,14 @@ recorderRoute.get('/extension.zip', async (req, res) => {
     }
   }
 
-  // console-config.js 里的 DEFAULT_CONSOLE_ORIGIN 决定 popup 首屏 input 默认值；
-  // 重写为部署 origin，下载即用、跨机器时不必再去弹窗里改。
+  // The DEFAULT_CONSOLE_ORIGIN in console-config.js decides the popup's first-screen input default;
+  // rewriting it to the deployed origin makes it work right after download, no dialog edit needed across machines.
   let consoleConfigText: string | null = null;
   if (consoleOrigin) {
     try {
       const raw = await readFile(join(root, 'modules', 'console-config.js'), 'utf8');
-      // 仅在 DEFAULT_CONSOLE_ORIGIN 是源码默认 http://localhost:5173 时改写，
-      // 避免覆盖测试或后续手工构建的产物。
+      // Only rewrite when DEFAULT_CONSOLE_ORIGIN is the source default http://localhost:5173,
+      // avoiding overwriting test or later hand-built artifacts.
       consoleConfigText = raw.replace(
         /export const DEFAULT_CONSOLE_ORIGIN = 'http:\/\/localhost:5173';/,
         `export const DEFAULT_CONSOLE_ORIGIN = ${JSON.stringify(consoleOrigin)};`,
@@ -398,7 +399,7 @@ recorderRoute.get('/extension.zip', async (req, res) => {
   });
   archive.pipe(res);
 
-  // 先把两个要重写的文件清掉，避免被后面 archive.file 覆盖式同名追加（archiver 不会去重同 name 条目）。
+  // Clear the two files to be rewritten first, avoiding later archive.file overwriting them as same-name appends (archiver doesn't dedupe same-name entries).
   const OVERRIDE_FILES = new Set<string>([
     'manifest.json',
     'modules' + sep + 'console-config.js',
@@ -406,7 +407,7 @@ recorderRoute.get('/extension.zip', async (req, res) => {
 
   for (const rel of files) {
     if (OVERRIDE_FILES.has(rel)) continue;
-    // 双重保险：再断言一遍路径不会逃出 root（防止 manifest.json 被改坏导致 readdir 跑飞）
+    // Double safety: assert again that the path can't escape root (prevents readdir from running wild if manifest.json got corrupted)
     const safe = relative(root, join(root, rel));
     if (safe.startsWith('..') || safe.includes('..' + sep)) continue;
     archive.file(join(root, rel), { name: `itest-recorder${sep}${safe}` });
@@ -415,7 +416,7 @@ recorderRoute.get('/extension.zip', async (req, res) => {
   if (manifestText) {
     archive.append(manifestText, { name: `itest-recorder${sep}manifest.json` });
   } else {
-    // 解析失败时还是带上源码默认 manifest，避免扩展装上空 manifest
+    // On parse failure still include the source default manifest, avoiding the extension installing with an empty manifest
     try {
       const fallback = await readFile(join(root, 'manifest.json'), 'utf8');
       archive.append(fallback, { name: `itest-recorder${sep}manifest.json` });
@@ -437,8 +438,8 @@ recorderRoute.get('/extension.zip', async (req, res) => {
   await archive.finalize();
 });
 
-// 当前部署扩展的版本（manifest.json 里的 version，与 /extension.zip 同源）。
-// 前端徽标拿它和「已装版本」对比：已装较旧时亮出可升级态 + 下载入口。
+// Version of the currently deployed extension (the version in manifest.json, same source as /extension.zip).
+// The frontend badge compares it with the "installed version": when installed is older, show the upgrade-available state + download entry.
 recorderRoute.get('/extension/version', async (_req, res) => {
   const root = resolveRecorderRoot();
   let version = '0.0.0';

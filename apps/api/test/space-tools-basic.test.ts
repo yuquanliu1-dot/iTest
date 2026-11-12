@@ -23,7 +23,7 @@ describe('buildSpaceTools(骨架)', () => {
     const names = buildSpaceTools(ctx).map((t) => t.name);
     expect(names).toContain('announce_plan');
     expect(names).toContain('inspect_page');
-    // repo 工具恒注册,运行时再解析 cwd;未就绪时调用报「仓库尚未就绪」
+    // repo tools are always registered, cwd resolved at runtime; calling before readiness errors with "repo not ready yet"
     expect(names.filter((n) => n.startsWith('repo_'))).toEqual(['repo_ls', 'repo_read', 'repo_grep', 'repo_run']);
   });
 
@@ -49,7 +49,7 @@ describe('buildSpaceTools(骨架)', () => {
     for (const n of ['announce_plan', 'inspect_page', 'manage_cases', 'manage_scenarios', 'manage_environments', 'manage_plans']) {
       expect(names).toContain(n);
     }
-    // 顺序约定:repo_*(若有)在最前,领域工具其后(与 session.ts 注入顺序一致)
+    // Ordering convention: repo_* (if present) come first, domain tools after (matching session.ts's injection order)
     expect(names.indexOf('manage_cases')).toBeLessThan(names.indexOf('manage_plans'));
   });
 });

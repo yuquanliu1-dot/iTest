@@ -1,20 +1,20 @@
 /**
- * manage_skill：空间助手对话式管理全局技能（元数据）。
- * 与系统设置页走同一 `skillsService`（校验/落库共用层），故规则完全一致。
+ * manage_skill: conversationally manage global skills (metadata) from the space assistant.
+ * Goes through the same `skillsService` as the system settings page (shared validation/persistence layer), so the rules are identical.
  *
- * 2026-10-19 存储翻转后内容真源在 SKILLS_ROOT/<name>/。create 支持 files[] 一次写入
- * 完整目录树（模型按用户需求撰写 SKILL.md 正文）；不带 files 仍是空骨架。
- * 其余写入面：import_skill（GitHub 整棵树）与设置页文件树编辑器。
+ * After the 2026-10-19 storage flip, the content source of truth lives in SKILLS_ROOT/<name>/. create supports files[] to write
+ * the full directory tree in one shot (the model writes the SKILL.md body per the user's request); without files it is still an empty skeleton.
+ * Other write surfaces: import_skill (an entire GitHub tree) and the settings-page file-tree editor.
  *
- * 仅对「有效管理员」线程注册（index.ts 按 ctx.manager 装配）；历史/非管理员线程无此工具。
- * action 语义：
- *   - list   ：全局技能清单（name/description/enabled/fileCount；含 id 供核对）
- *   - create ：新建骨架（name/description/enabled?）
- *   - update ：按唯一 name 定位，改 description/enabled（renameTo=改名，目录跟着搬）
- *   - delete ：按唯一 name 删除（连目录）
+ * Registered only on "valid manager" threads (index.ts assembles by ctx.manager); historical/non-manager threads lack this tool.
+ * Action semantics:
+ *   - list   : global skill list (name/description/enabled/fileCount; includes id for verification)
+ *   - create : create a skeleton (name/description/enabled?)
+ *   - update : located by the unique name; changes description/enabled (renameTo = rename; the directory moves with it)
+ *   - delete : delete by the unique name (directory included)
  *
- * 生效口径：改动对【新会话】生效；已停用的技能在新会话里既不进 catalog，
- * read_skill / run_skill_script 也会直接拒绝。
+ * Effectiveness semantics: changes take effect for [new sessions]; disabled skills neither enter the catalog in a new session,
+ * nor will read_skill / run_skill_script accept them (both refuse outright).
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
@@ -27,13 +27,13 @@ import { createSkill, deleteSkill, listSkills, updateSkill } from '../skillsServ
 
 const Actions = z.object({
   action: z.enum(['list', 'create', 'update', 'delete']),
-  /** create 的 slug；update/delete 用它定位目标技能。 */
+  /** The slug for create; update/delete use it to locate the target skill. */
   name: z.string().min(1).max(120).optional(),
   description: z.string().max(500).optional(),
   enabled: z.boolean().optional(),
-  /** update：改名后的新 slug（原 name 仍作定位键）。 */
+  /** update: the new slug after renaming (the original name remains the location key). */
   renameTo: z.string().min(1).max(120).optional(),
-  /** create：技能完整内容（相对路径 + 正文），至少含 SKILL.md；不传则只建骨架。 */
+  /** create: the skill's full content (relative path + body), at least SKILL.md; omitted → only a skeleton is created. */
   files: z.array(z.object({ path: z.string().min(1), content: z.string() })).max(20).optional(),
 });
 
@@ -80,7 +80,7 @@ export function buildManageSkillTool(ctx: SpaceToolsContext): ToolExecutor {
         }
         throw e;
       }
-      // 注册闸门已按 admin 过滤;此处兜底(防会话内降级/骇入拿到未注册工具)。
+      // The registration gate already filtered by admin; this is a defensive backstop (against in-session downgrade/hijacking reaching an unregistered tool).
       if (!ctx.manager) return { ok: false, error: '无管理员权限，不能管理全局技能（需要管理员角色）' };
       try {
         switch (v.action) {

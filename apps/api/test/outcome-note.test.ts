@@ -6,8 +6,8 @@ const CREATE = [{ kind: 'click', locator: [{ strategy: 'css', value: '#newBtn' }
 
 describe('buildOutcomeNote · expectedOutcome 自洽体检', () => {
   it('观察型用例断言业务结果 + 步骤无操作动词 → 提示补造数步骤或调整预期（prod228 实测形态）', () => {
-    // 回归动机:用例只做「进页面看列表」,expectedOutcome 却写「自动启动处置成功」,
-    // 终态判定三轮全败后 AI 把预期改成「页面正常加载」蒙混通过。
+    // Regression motivation: the case only does "open the page and look at the list", yet expectedOutcome claims "disposal auto-started successfully";
+    // after the terminal-state check failed three rounds, the AI changed the expectation to "page loads normally" to sneak through.
     const note = buildOutcomeNote({
       expectedOutcome: '数据中心事件自动启动处置成功',
       stepActions: ['进入数据中心事件页面，查看工单处置状态'],
@@ -20,7 +20,7 @@ describe('buildOutcomeNote · expectedOutcome 自洽体检', () => {
   });
 
   it('「处置」等观察语境高频词不算操作动词（否则观察型用例被误判为会造数）', () => {
-    // "查看工单处置状态" 含「处置」——若纳入动词表,这条观察型用例会被误报。
+    // "查看工单处置状态" contains "处置" — if it joined the verb list, this observation-style case would be a false positive.
     const note = buildOutcomeNote({
       expectedOutcome: '自动启动处置成功',
       stepActions: ['进入数据中心事件页面，查看工单处置状态'],
@@ -43,7 +43,7 @@ describe('buildOutcomeNote · expectedOutcome 自洽体检', () => {
       stepActions: ['通过接口创建事件', '查看列表'],
       stepCompileds: [[{ kind: 'httpRequest', method: 'POST', url: 'http://x/api/event' }], CLICK],
     })).toBeNull();
-    // GET 是读取，不算造数
+    // GET is a read, not state fabrication
     expect(buildOutcomeNote({
       expectedOutcome: '自动启动处置成功',
       stepActions: ['查询事件列表', '查看列表'],
@@ -52,8 +52,8 @@ describe('buildOutcomeNote · expectedOutcome 自洽体检', () => {
   });
 
   it('sendSyslog/sql/observeLog 协议步产生或取证 SUT 状态 → 无提示（dump1 syslog 用例误报回归）', () => {
-    // 回归动机:dump1 实测——「发送 syslog → 查日志确认联动」用例被旧口径误报
-    // 「步骤里没有会产生该结果的操作」,AI 被带偏去补无谓的造数步骤。
+    // Regression motivation: observed in dump1 — the "send syslog → check logs to confirm the linkage" case was a false positive under the old rule
+    // ("no step produces this outcome"), and the AI was misled into adding pointless state-fabrication steps.
     for (const kind of ['sendSyslog', 'sql', 'observeLog']) {
       expect(buildOutcomeNote({
         expectedOutcome: '自动启动处置成功',
@@ -61,7 +61,7 @@ describe('buildOutcomeNote · expectedOutcome 自洽体检', () => {
         stepCompileds: [[{ kind }]],
       })).toBeNull();
     }
-    // 不产生 SUT 状态的 kind（navigate）→ 仍提示
+    // Kinds that don't produce SUT state (navigate) → still flagged
     expect(buildOutcomeNote({
       expectedOutcome: '自动启动处置成功',
       stepActions: ['打开处置页面'],
@@ -70,13 +70,13 @@ describe('buildOutcomeNote · expectedOutcome 自洽体检', () => {
   });
 
   it('纯观察型预期（观察词无强结果词）→ 豁免；观察词+强结果词 → 仍提示', () => {
-    // 「页面正常加载成功」含 RESULT 词（成功）但本质是观察型 → 不体检
+    // "页面正常加载成功" contains a RESULT word (成功) but is observational in nature → not checked
     expect(buildOutcomeNote({
       expectedOutcome: '页面正常加载成功',
       stepActions: ['打开登录页'],
       stepCompileds: [CLICK],
     })).toBeNull();
-    // 「列表可见」+「自动启动处置」两头占 → 不豁免（防弱化措辞蒙混）
+    // "列表可见" + "自动启动处置" claims both sides → not exempt (prevents watered-down wording sneaking through)
     expect(buildOutcomeNote({
       expectedOutcome: '处置列表可见且自动启动处置成功',
       stepActions: ['查看列表'],

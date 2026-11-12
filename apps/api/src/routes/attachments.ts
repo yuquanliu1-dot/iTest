@@ -54,7 +54,7 @@ attachmentsRoute.post('/:caseId/attachments', async (req, res) => {
 
 const ATTACHMENT_LIST_LIMIT = 200;
 
-/** 列出本 project 已上传的全部附件；当前 case 的附件优先置顶。最新优先。 */
+/** Lists all attachments uploaded in this project; the current case's attachments pinned first. Newest first. */
 attachmentsRoute.get('/:caseId/attachments', async (req, res) => {
   const exists = await db.select().from(testCases).where(eq(testCases.id, req.params.caseId));
   if (exists.length === 0) throw new HttpError(404, 'not_found', 'case not found');

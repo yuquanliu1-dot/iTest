@@ -15,29 +15,29 @@ import { WebServiceMissing } from './envContext.js';
 import { readAiFallbackSettings } from './aiFallback.js';
 
 /**
- * 执行单条用例并落报告。CDP 失败 → 写入 CDPUnavailable 失败报告（不再降级 mock）。
- * 返回 reportId 与最终状态，供单用例路由和执行计划共用。
- * 数据集绑定（caseRow.datasetId）：N 个启用行 = N 次独立回放 = N 条 report；
- * 单行失败不中断（每行是独立验证），最终 status 聚合为任一行 failed 即 failed。
- * 配置错误（无启用行/列名非法/解密失败）直接抛 DatasetConfigError，不产生垃圾 report。
- * `storageState` 用于在执行计划中复用登录准备阶段导出的 cookie/localStorage。
- * `forceFail`（测试用）在进入 CDP 前直接写失败报告，便于 fail_fast 行为测试。
- * `envOverride`（计划级）覆盖用例 defaultEnvId，用于执行计划上下文。
- * `ownedBrowser`/`ownedContext`（计划级 loginPrepare 链路）让登录用例在 caller 持有的 chromium + context 中跑，
- *  这样登录成功后可直接从同一 ctx 导出真实 storageState；调用方负责关闭。
- * `preseed`（单用例执行路由用）：路由已提前插入 running 报告行拿 reportId（执行即跳报告页），
- *  传进来后本函数/各 runCaseOnce 按 rowIndex 匹配复用、不再二次插入；null 表示保持原插入语义。
+ * Executes a single case and writes the report. CDP failure → writes a CDPUnavailable failed report (no more mock fallback).
+ * Returns reportId and final status; shared by the single-case route and execution plans.
+ * Dataset binding (caseRow.datasetId): N enabled rows = N independent replays = N reports;
+ * a single row failing doesn't interrupt (each row is an independent verification), and the final status aggregates to failed if any row failed.
+ * Config errors (no enabled rows/illegal column name/decryption failure) throw DatasetConfigError directly — no garbage report is produced.
+ * `storageState` reuses the cookie/localStorage exported by the login-preparation phase within an execution plan.
+ * `forceFail` (for tests) writes a failed report directly before entering CDP, easing fail_fast behavior tests.
+ * `envOverride` (plan-level) overrides the case's defaultEnvId, used in the execution-plan context.
+ * `ownedBrowser`/`ownedContext` (plan-level loginPrepare chain) runs the login case in the caller-held chromium + context,
+ *  so after a successful login the real storageState can be exported directly from the same ctx; the caller is responsible for closing.
+ * `preseed` (used by the single-case execution route): the route has already inserted a running report row to get the reportId (execution jumps straight to the report page),
+ *  and once passed in, this function/each runCaseOnce matches by rowIndex and reuses it without a second insert; null keeps the original insert semantics.
  */
 export interface PreseedReport {
   reportId: string;
   rowIndex: number | null;
 }
 
-/** 插入一条 running 报告行（与 runCaseOnce 原插入值完全一致），返回 reportId。
- *  单用例执行路由提前调用（执行转后台后响应必须带回 reportId），runCaseOnce 靠 preseed 复用。
- *  createdByUserId = 触发执行的人（报告创建人）。
- *  datasetBatchId = 数据集执行的批次 id（同一次 runCase 的所有行共用，报告页行切换器分组键），
- *  仅数据集行（rowPlan 存在）落值。 */
+/** Inserts a running report row (exactly the values runCaseOnce originally inserted), returns reportId.
+ *  Called early by the single-case execution route (after execution goes background, the response must carry the reportId); runCaseOnce reuses it via preseed.
+ *  createdByUserId = who triggered the execution (the report creator).
+ *  datasetBatchId = the dataset execution's batch id (shared by all rows of one runCase run; the report page row-switcher grouping key),
+ *  set only for dataset rows (rowPlan present). */
 export async function insertRunningReportRow(
   caseRow: typeof testCases.$inferSelect,
   rowPlan?: DatasetRowExec,
@@ -68,50 +68,50 @@ export async function runCase(
     storageState?: unknown;
     forceFail?: boolean;
     envOverride?: { envId: string } | null;
-    /** 组级统一覆盖：deviceTargetId / 浏览器上下文（plan_case_groups.target_config）。 */
+    /** Group-level unified override: deviceTargetId / browser context (plan_case_groups.target_config). */
     targetOverride?: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null;
     ownedBrowser?: Browser;
     ownedContext?: BrowserContext;
-    /** playground 实时画面源：透传给执行器，页面切换时跟随（计划运行/单用例执行）。 */
+    /** playground live view source: passed through to the executor, following page switches (plan runs / single-case execution). */
     liveView?: import('./liveView.js').LiveViewHandle;
-    /** 路由已预置的 running 报告行（执行即跳报告页）；提供后跳过本函数内的报告插入。 */
+    /** Running report row pre-inserted by the route (execution jumps straight to the report page); when provided, the report insert inside this function is skipped. */
     preseed?: PreseedReport[];
-    /** 报告创建人 = 触发执行的人；preseed 路径已在路由落库，此处仅覆盖非 preseed 插入。 */
+    /** Report creator = who triggered the execution; the preseed path already persisted it at the route, so this only covers non-preseed inserts. */
     createdByUserId?: string | null;
-    /** 数据集批次 id（行切换器分组键）：缺省时数据集分支自行生成；preseed 路径路由已落库,不传。 */
+    /** Dataset batch id (row-switcher grouping key): the dataset branch generates it itself when absent; on the preseed path the route already persisted it — don't pass. */
     datasetBatchId?: string | null;
     /**
-     * 计划所属项目 id（执行计划链路传入）。用于判定环境 guard 是否该施加：
-     * 同项目用例维持「环境必须属于本项目」的强校验；跨产品线共享进来的用例不施加，
-     * 否则它会因「环境属于别的项目」而逐条失败。语义见 resolveEnv 调用处注释。
+     * The plan's project id (passed in by the execution-plan chain). Decides whether the environment guard applies:
+     * same-project cases keep the strong check "the environment must belong to this project"; cases shared in across product lines are exempt,
+     * otherwise they'd fail one by one for "the environment belongs to another project". Semantics documented at the resolveEnv call site.
      */
     planProjectId?: string | null;
-    /** 报告行一落库就回调（reportId + 数据集行号；非数据集为 null）。
-     *  计划运行据此立刻把 report_id 回填到 plan_run_cases —— 否则 report_id 要等整条用例
-     *  跑完才回填，执行期间前端拿不到报告 id，页面只能显示「排队等待执行」，
-     *  步骤要等用例结束才一次性出现。 */
+    /** Callback as soon as the report row is persisted (reportId + dataset row index; null for non-dataset).
+     *  Plan runs use it to backfill report_id into plan_run_cases immediately — otherwise report_id waits for the whole case
+     *  to finish before backfill, the frontend gets no report id during execution, the page can only show「排队等待执行」,
+     *  and steps only appear in one shot after the case ends. */
     onReportCreated?: (reportId: string, rowIndex: number | null) => void | Promise<void>;
-    /** 数据集行选择（启用行下标）。传了用传的值（执行路由预检时冻结的集合），
-     *  没传回落用例上存的 datasetRowIndexes（计划运行路径）。[] = 所有启用行。 */
+    /** Dataset row selection (enabled row indexes). When passed, uses the passed value (the set frozen at the execution route's precheck);
+     *  when absent, falls back to the case-stored datasetRowIndexes (plan-run path). [] = all enabled rows. */
     datasetRowIndexes?: number[];
-    /** 终止检查点（计划运行取消）：注入执行器步循环与 AI 轮次，命中即停。 */
+    /** Abort checkpoint (plan-run cancellation): injected into the executor's step loop and AI turns; stops on hit. */
     shouldAbort?: () => boolean | Promise<boolean>;
   },
 ): Promise<{ reportId: string; status: string; reportIds?: string[] }> {
   const caseRow = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!caseRow) throw new Error('case not found');
 
-  // 数据集绑定：前置校验（0 启用行/列名非法/解密失败）直接抛 DatasetConfigError —— 配置错误不产生垃圾 report。
+  // Dataset binding: precheck failures (0 enabled rows/illegal column name/decryption failure) throw DatasetConfigError directly — config errors produce no garbage report.
   if (caseRow.datasetId) {
-    // 行选择：执行路由冻结的最终下标集合优先；否则回落用例上存的选择（计划运行路径）。
+    // Row selection: the execution route's frozen final index set wins; otherwise fall back to the case-stored selection (plan-run path).
     const rowIndexes = opts?.datasetRowIndexes ?? caseRow.datasetRowIndexes ?? [];
     const plan = await loadDatasetForRun(caseRow.datasetId, { rowIndexes });
-    // 批次 id：非 preseed 路径在此生成（plan run / 批量固化等）；preseed 路由已随插入落库，无需再传。
+    // Batch id: generated here on non-preseed paths (plan run / batch solidify etc.); the preseed route already persisted it with the insert — no need to pass again.
     const batchId = opts?.preseed ? undefined : randomUUID();
     const reportIds: string[] = [];
     let finalStatus = 'passed';
     for (const row of plan.rows) {
-      // 行失败不中断：任何单行错误已在 runCaseOnce 内记为该行 report failed，这里只聚合。
+      // Row failure doesn't interrupt: any single-row error was already recorded as that row's failed report inside runCaseOnce; this only aggregates.
       const r = await runCaseOnce(caseId, caseRow, { ...opts, datasetBatchId: batchId }, row);
       reportIds.push(r.reportId);
       if (r.status !== 'passed') finalStatus = 'failed';
@@ -121,8 +121,8 @@ export async function runCase(
   return runCaseOnce(caseId, caseRow, opts);
 }
 
-/** 单次执行（数据集模式下每行调一次）。rowPlan 存在时：report 带 rowIndex/快照，执行器注入初始变量；
- *  且插入 report 之后的任何意外错误都在这里兜底为该行 failed report，不中断迭代、不留 running 僵尸。 */
+/** Single execution (called once per row in dataset mode). With rowPlan present: the report carries rowIndex/a snapshot and the executor injects initial variables;
+ *  and any unexpected error after the report insert is caught here as that row's failed report — no iteration interruption, no running zombies left behind. */
 async function runCaseOnce(
   caseId: string,
   caseRow: typeof testCases.$inferSelect,
@@ -154,8 +154,8 @@ async function runCaseOnce(
     .where(eq(testSteps.caseId, caseId))
     .orderBy(asc(testSteps.order));
 
-  // preseed（路由已预置该行的 running 报告行）→ 按 rowIndex 匹配复用 reportId，不二次插入。
-  // 匹配不上（数据集在预检与后台执行之间被改）抛错，由数据集行兜底/路由 catch 记为 failed。
+  // preseed (the route pre-inserted this row's running report row) → match by rowIndex and reuse the reportId, no second insert.
+  // On no match (the dataset changed between precheck and background execution) throw; the dataset-row fallback/route catch records it as failed.
   let reportId: string;
   if (opts?.preseed) {
     const match = opts.preseed.find((p) => (p.rowIndex ?? null) === (rowPlan?.rowIndex ?? null));
@@ -165,9 +165,9 @@ async function runCaseOnce(
     reportId = await insertRunningReportRow(caseRow, rowPlan, opts?.createdByUserId, opts?.datasetBatchId);
   }
 
-  // 报告行已落库（status=running）：立刻通知调用方，让计划运行能把 report_id 回填到
-  // plan_run_cases —— 前端据此定位报告并 2s 轮询，逐步看到步骤结果。
-  // 回填失败不该中断执行（前端退化成「等用例结束一次性显示」，与今天一致），故吞掉异常。
+  // The report row is persisted (status=running): notify the caller immediately so the plan run can backfill report_id into
+  // plan_run_cases — the frontend locates the report from this and polls every 2s, seeing step results progressively.
+  // Backfill failure shouldn't interrupt execution (the frontend degrades to "one-shot display after the case ends", same as today), so exceptions are swallowed.
   if (opts?.onReportCreated) {
     try {
       await opts.onReportCreated(reportId, rowPlan?.rowIndex ?? null);
@@ -176,10 +176,10 @@ async function runCaseOnce(
     }
   }
 
-  // 非数据集模式保持原语义：内部错误照常上抛（由 HTTP 边界处理）。
+  // Non-dataset mode keeps the original semantics: internal errors still propagate (handled at the HTTP boundary).
   if (!rowPlan) return runCaseOnceInner(caseId, caseRow, opts, projectId, steps, reportId, undefined);
-  // 数据集行兜底：report 已落库，之后任何意外错误（解密/URL 解析/最终落库等）不抛出迭代循环，
-  // 而是记为该行 InternalError failed report —— 满足「任何单行错误一律 failed，继续下一行」。
+  // Dataset row fallback: the report is persisted, so any later unexpected error (decryption/URL resolution/final persist etc.) doesn't escape the iteration loop
+  // but is recorded as that row's InternalError failed report — satisfying "any single-row error is failed, continue to the next row".
   try {
     return await runCaseOnceInner(caseId, caseRow, opts, projectId, steps, reportId, rowPlan);
   } catch (e) {
@@ -212,7 +212,7 @@ async function runCaseOnce(
   }
 }
 
-/** report 插入之后的执行主体（runCaseOnce 完成前置查询与 report 落库后调用）。 */
+/** The execution body after the report insert (called by runCaseOnce after its pre-queries and report persist). */
 async function runCaseOnceInner(
   caseId: string,
   caseRow: typeof testCases.$inferSelect,
@@ -220,7 +220,7 @@ async function runCaseOnceInner(
     storageState?: unknown;
     forceFail?: boolean;
     envOverride?: { envId: string } | null;
-    /** 组级统一覆盖：deviceTargetId / 浏览器上下文（plan_case_groups.target_config）。 */
+    /** Group-level unified override: deviceTargetId / browser context (plan_case_groups.target_config). */
     targetOverride?: { deviceTargetId?: string; browserContext?: 'incognito' | 'persistent' } | null;
     ownedBrowser?: Browser;
     ownedContext?: BrowserContext;
@@ -233,7 +233,7 @@ async function runCaseOnceInner(
   reportId: string,
   rowPlan: DatasetRowExec | undefined,
 ): Promise<{ reportId: string; status: string }> {
-  // 确定性测试钩子：不启动浏览器，直接落失败报告。
+  // Deterministic test hook: no browser launch, writes the failed report directly.
   if (opts?.forceFail) {
     const stepResults: ExecStepResult[] = [];
     await db
@@ -248,8 +248,8 @@ async function runCaseOnceInner(
     width: caseRow.windowWidth ?? undefined,
     height: caseRow.windowHeight ?? undefined,
   };
-  // 组级 targetOverride（plan_case_groups.target_config）优先于用例行：
-  // browserContext 覆盖 incognito，deviceTargetId 覆盖 mobileDeviceTargetId。
+  // Group-level targetOverride (plan_case_groups.target_config) takes priority over the case row:
+  // browserContext overrides incognito; deviceTargetId overrides mobileDeviceTargetId.
   const incognito = opts?.targetOverride?.browserContext
     ? opts.targetOverride.browserContext === 'incognito'
     : !!caseRow.incognito;
@@ -258,10 +258,10 @@ async function runCaseOnceInner(
   // Resolve envCtx before any CDP launch: planEnv > case defaultEnv > version link > project default.
   // EnvMissing/EnvProjectMismatch are surfaced as a single failed stepResult (no 500). DecryptError propagates.
   //
-  // expectedProjectId 一直传「用例所属项目」——它是解析链最后一步「兜底查该项目默认环境」的依据，
-  // 关掉会让跨项目用例既拿不到计划环境也拿不到自己项目的默认环境。
-  // 真正需要豁免的只是「归属复核」：计划环境挂在计划自己的项目下，跨产品线共享进来的用例拿到它是
-  // 预期行为，照拦就会每条以 EnvProjectMismatch 失败。allowCrossProjectEnv 即该豁免开关。
+  // expectedProjectId always receives "the case's own project" — it's the basis for the resolve chain's last step "fall back to querying that project's default environment";
+  // turning it off would leave cross-project cases with neither the plan environment nor their own project's default environment.
+  // What actually needs exemption is only the "ownership re-check": the plan environment hangs under the plan's own project, and a case shared in across product lines receiving it is
+  // expected behavior — blocking it as-is would fail every case with EnvProjectMismatch. allowCrossProjectEnv is exactly that exemption switch.
   const sameProjectAsPlan = !opts?.planProjectId || opts.planProjectId === projectId;
   const { resolveEnv } = await import('./envContext.js');
   let envCtx: import('./envContext.js').EnvCtx | undefined;
@@ -306,8 +306,8 @@ async function runCaseOnceInner(
     throw e;
   }
 
-  // 初始导航:绝对 url 直通;相对 url 由环境 web 服务拼 origin(spec 2026-10-16)。
-  // WebServiceMissing 与 EnvMissing 同呈现:单步失败报告。
+  // Initial navigation: absolute url passes through; relative url joins the origin from the environment's web service (spec 2026-10-16).
+  // WebServiceMissing is presented the same as EnvMissing: a single failed step report.
   let resolved: string | null = null;
   let caseWebOrigin: string | null = null;
   try {
@@ -329,8 +329,8 @@ async function runCaseOnceInner(
     }
     throw e;
   }
-  // 绝对 url 直通用例:bad webServiceRef 不参与初始导航,容忍为 null(T7 相对 navigate 步骤级再报错)。
-  // WebServiceMissing 消息此刻丢弃是刻意的——相对 url 用例已在上方 resolveCaseUrl 抛过,不会到这里。
+  // Absolute-url pass-through cases: a bad webServiceRef doesn't participate in initial navigation, tolerated as null (T7 reports it at step level for relative navigate steps).
+  // Dropping the WebServiceMissing message here is deliberate — relative-url cases already threw at resolveCaseUrl above and never reach here.
   if (envCtx) {
     try {
       caseWebOrigin = envCtx.resolveWebOrigin(caseRow.webServiceRef ?? null);
@@ -341,19 +341,19 @@ async function runCaseOnceInner(
   const targetUrl = resolved && /^https?:\/\//.test(resolved) ? resolved : undefined;
 
   const startedAt = Date.now();
-  // 落 started_at：真正开始跑步骤的时刻（环境/URL 解析之后，与 duration_ms 同基线）。
-  // 立即落库而非等终态——running 期间报告页就能看到「执行开始」；worker 挂掉留僵尸行时
-  // 也有据可查（前端用 createdAt 兜底展示「请求于」）。
+  // Persist started_at: the moment steps actually start running (after environment/URL resolution; same baseline as duration_ms).
+  // Persist immediately rather than at the final state — during running, the report page can already show「执行开始」; when a worker dies leaving a zombie row
+  // there's also evidence to check (the frontend falls back to createdAt to display「请求于」).
   await db.update(reports).set({ startedAt: new Date(startedAt) }).where(eq(reports.id, reportId));
   let stepResults: ExecStepResult[];
   let preflightReport: PreflightReport | undefined;
   let status: 'passed' | 'failed';
   const isMobile = caseRow.platform === 'mobile';
-  // 增量落库：每步结束把当前累计结果刷进报告行（status 仍为 running），让报告页 2s
-  // 轮询逐步看到结果，而不是等整段跑完才一次性出现。
-  // 写入是 fire-and-forget（失败只记日志，不打断执行），但末尾终态写入前必须等它们落定，
-  // 否则迟到的增量写会用旧快照盖掉终态 stepResults。failed 步骤同样增量落库，
-  // 这样「跑到失败那步停下」也能立刻看到失败原因。
+  // Incremental persistence: each finished step flushes the accumulated results into the report row (status still running), so the report page's 2s
+  // polling sees results progressively instead of one shot after the whole run.
+  // Writes are fire-and-forget (failures only log, never interrupt execution), but before the final-state write at the end they must be awaited,
+  // otherwise a late incremental write would overwrite the final stepResults with an old snapshot. Failed steps are persisted incrementally too,
+  // so "stopping at the failed step" shows the failure reason immediately as well.
   const liveSteps: ExecStepResult[] = [];
   const pendingWrites: Promise<unknown>[] = [];
   const onStep = (r: ExecStepResult) => {
@@ -368,7 +368,7 @@ async function runCaseOnceInner(
     );
   };
   try {
-    // 回放 AI 降级开关（全局设置）：每次执行读一次，注入 executor 供 dispatcher 触达；全关时不透传。
+    // Replay AI-fallback switches (global settings): read once per execution, injected into the executor for the dispatcher to reach; not passed through when all are off.
     const aiFallback = await readAiFallbackSettings();
     const stepInput = steps.map((s) => ({
       order: s.order,
@@ -378,12 +378,12 @@ async function runCaseOnceInner(
       tabRef: s.tabRef,
       componentKind: s.componentKind,
       sensitive: s.sensitive,
-      // 2026-10-06:dispatcher 唯一回放依据 compiled;action 列已于 0030 DROP。
+      // 2026-10-06: the dispatcher's sole replay basis is compiled; the action column was DROPped in 0030.
       compiled: s.compiled as unknown[] | null | undefined,
-      // AI 降级兜底用：行级自然语言指令（正常机械回放不读）。
+      // For the AI-fallback path: row-level natural-language instruction (normal mechanical replay doesn't read it).
       instruction: s.instruction,
     }));
-    // web_<name> 系统变量：环境 web 服务 origin（覆盖同名数据集变量；web_ 为保留前缀）。
+    // web_<name> system variables: the environment web services' origins (override same-named dataset variables; web_ is a reserved prefix).
     const webVars: Record<string, string> = {};
     for (const w of envCtx?.webServices ?? []) {
       if (w.name) webVars[`web_${w.name}`] = w.origin;
@@ -393,7 +393,7 @@ async function runCaseOnceInner(
       reportId,
       projectId,
       envCtx,
-      // Track 1：把用例级 expectedOutcome / title / url 传给 cdp，触发最后 vision 判定。
+      // Track 1: pass the case-level expectedOutcome / title / url to cdp, triggering the final vision verdict.
       expectedOutcome: caseRow.expectedOutcome ?? null,
       caseTitle: caseRow.title,
       caseUrl: caseRow.url ?? null,
@@ -407,8 +407,8 @@ async function runCaseOnceInner(
       ...(aiFallback.locatorFailed ? { aiFallback } : {}),
       ...(opts?.shouldAbort ? { shouldAbort: opts.shouldAbort } : {}),
     };
-    // mobile 用例：直接走 MobileEngine；web 用例：登录准备链路（ownedBrowser）走 executeCaseInBrowser 复用 ctx,
-    // 其余走 WebEngine.execute → executeCaseReal（保留 storageState/incognito 注入语义）。
+    // Mobile cases: go straight through MobileEngine; web cases: the login-preparation chain (ownedBrowser) goes through executeCaseInBrowser reusing the ctx,
+    // the rest go through WebEngine.execute → executeCaseReal (preserving the storageState/incognito injection semantics).
     const mobileOs = (caseRow.mobileOs === 'ios' || caseRow.mobileOs === 'android')
       ? caseRow.mobileOs
       : null;
@@ -462,8 +462,8 @@ async function runCaseOnceInner(
         if (envCtx && !opts?.ownedBrowser) envCtx.close().catch(() => undefined);
       }
     } else if (opts?.ownedBrowser && opts?.ownedContext) {
-      // 计划级 loginPrepare 链路：在 caller 持有的 chromium + context 中跑（不再注入 storageState，
-      // context 已含登录 cookie；再注入反而覆盖）。浏览器与 context 由 caller 管理。
+      // Plan-level loginPrepare chain: runs in the caller-held chromium + context (no storageState injection anymore —
+      // the context already holds the login cookies; injecting again would overwrite them). The browser and context are managed by the caller.
       stepResults = await executeCaseInBrowser(
         caseId,
         stepInput,
@@ -530,14 +530,14 @@ async function runCaseOnceInner(
       }
     }
   } finally {
-    // caller owned browser 路径下浏览器生命周期由 caller 管；envCtx 仍在本函数内关闭，
-    // 因为每个用例各自解析独立 pg.Pool（不做共享），立即关避免长连接泄漏。
+    // On the caller-owned-browser path the browser lifecycle is the caller's; envCtx is still closed inside this function,
+    // because each case resolves its own pg.Pool (no sharing) — closing immediately avoids long-connection leaks.
     if (envCtx && !opts?.ownedBrowser) envCtx.close().catch(() => undefined);
   }
 
   const durationMs = Date.now() - startedAt;
-  // 移动端报表补 deviceName：deviceTargets service 在 Task 5 引入,这里用 dynamic import 兜底:
-  // service 尚未实现(MVP 阶段顺序容忍)或解析失败时静默跳过,deviceName 保持 null。
+  // Mobile reports supplement deviceName: the deviceTargets service arrives with Task 5; dynamic import is the fallback here:
+  // when the service isn't implemented yet (MVP-stage ordering tolerance) or resolution fails, skip silently and deviceName stays null.
   let deviceName: string | null = null;
   if (caseRow.platform === 'mobile' && caseRow.mobileDeviceTargetId) {
     try {
@@ -545,10 +545,10 @@ async function runCaseOnceInner(
       const t = await resolveDeviceTarget(caseRow.mobileDeviceTargetId);
       if (t) deviceName = t.name;
     } catch {
-      // service 还未实现(MVP 阶段顺序容忍)
+      // service not implemented yet (MVP-stage ordering tolerance)
     }
   }
-  // 等所有增量写落定再写终态：否则迟到的增量快照会用旧数据盖掉终态 stepResults。
+  // Wait for all incremental writes to settle before writing the final state: otherwise a late incremental snapshot would overwrite the final stepResults with stale data.
   await Promise.all(pendingWrites);
   await db
     .update(reports)
@@ -561,7 +561,7 @@ async function runCaseOnceInner(
       summary: buildSummary(stepResults, preflightReport),
       preflight: preflightReport ?? null,
       ...(deviceName ? { deviceName } : {}),
-      // 双通过率口径：passed 且有步骤 healed（aiTask 缓存分叉后 AI 自愈成功）
+      // Dual pass-rate criterion: passed and some step healed (AI self-heal succeeded after the aiTask cache divergence)
       healed: status === 'passed' && stepResults.some((r) => r.healed === true),
     })
     .where(eq(reports.id, reportId));

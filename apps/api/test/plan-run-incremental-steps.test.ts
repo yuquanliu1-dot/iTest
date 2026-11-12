@@ -5,13 +5,14 @@ import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
 /**
- * 计划运行「执行中步骤不可见」回归（2026-10-26 实测 prod228）。
+ * Regression for "steps invisible during execution" in plan runs (field-verified on prod228, 2026-10-26).
  *
- * 根因：plan_run_cases.report_id 原先只在用例跑完后才回填。执行期间前端拿不到报告 id →
- * 计划运行详情页只能显示「排队等待执行」，步骤要等整条用例结束才一次性出现。
+ * Root cause: plan_run_cases.report_id used to be backfilled only after the case finished. During execution the frontend
+ * had no report id, so the plan-run detail page could only show "queued for execution"; steps appeared all at once only
+ * after the whole case ended.
  *
- * 本测试断言：报告行一落库（status=running）就回填 report_id，
- * 且增量写入的 step_results 在用例【仍在执行】时即可读到。
+ * This test asserts: report_id is backfilled as soon as the report row lands (status=running),
+ * and incrementally written step_results are readable while the case is still executing.
  */
 const { execMock } = vi.hoisted(() => ({ execMock: vi.fn() }));
 vi.mock('../src/execute/cdp.js', async (importOriginal) => {
@@ -83,7 +84,7 @@ async function makeRun(caseIds: string[]): Promise<string> {
   return r.rows[0].id as string;
 }
 
-/** executeCaseReal 的第 9 个参数就是 onStep（见 cdp.ts executeCaseReal 签名）。 */
+/** The 9th argument of executeCaseReal is onStep (see the executeCaseReal signature in cdp.ts). */
 type OnStep = (r: unknown) => void;
 
 describe('计划运行执行期间步骤增量可见', () => {
@@ -91,14 +92,14 @@ describe('计划运行执行期间步骤增量可见', () => {
     const caseId = await insertCase('增量用例');
     const planRunId = await makeRun([caseId]);
 
-    // 在「第一步完成、后续步骤仍在跑」的时刻断言——模拟真实执行中的中间态。
+    // Assert at the moment "step 1 finished, later steps still running" — simulating a real mid-execution state.
     let reportIdDuringRun: string | null = null;
     let stepsDuringRun: unknown[] = [];
     execMock.mockReset();
     execMock.mockImplementation(async (...args: unknown[]) => {
       const onStep = args[8] as OnStep | undefined;
       onStep?.({ order: 1, status: 'passed', durationMs: 12 });
-      // 增量写是 fire-and-forget，等它落定再读（runCase 的 pendingWrites 在终态才 await）
+      // Incremental writes are fire-and-forget; wait for them to settle before reading (runCase awaits pendingWrites only at terminal state)
       await new Promise((r) => setTimeout(r, 60));
       const prc = await pool.query(`SELECT report_id FROM plan_run_cases WHERE plan_run_id = $1`, [planRunId]);
       reportIdDuringRun = (prc.rows[0]?.report_id as string | null) ?? null;
@@ -106,7 +107,7 @@ describe('计划运行执行期间步骤增量可见', () => {
         const rep = await pool.query(`SELECT step_results FROM reports WHERE id = $1`, [reportIdDuringRun]);
         stepsDuringRun = (rep.rows[0]?.step_results ?? []) as unknown[];
       }
-      // 后续步骤很慢：让用例「仍在执行」时断言已经发生
+      // Later steps are slow: the assertion happens while the case is "still executing"
       await new Promise((r) => setTimeout(r, 80));
       return [{ order: 1, status: 'passed', durationMs: 12 }];
     });
@@ -114,11 +115,11 @@ describe('计划运行执行期间步骤增量可见', () => {
     const { runPlanAsync } = await import('../src/execute/runPlan.js');
     await runPlanAsync({ planRunId });
 
-    // 执行期间：report_id 已回填 + 第一步已可见
+    // During execution: report_id already backfilled + step 1 already visible
     expect(reportIdDuringRun).toBeTruthy();
     expect(stepsDuringRun).toHaveLength(1);
 
-    // 终态：report_id 仍指向同一条报告
+    // Terminal state: report_id still points to the same report
     const prc = await pool.query(`SELECT report_id, status FROM plan_run_cases WHERE plan_run_id = $1`, [planRunId]);
     expect(prc.rows[0].report_id).toBe(reportIdDuringRun);
     expect(prc.rows[0].status).toBe('passed');
@@ -132,7 +133,7 @@ describe('计划运行执行期间步骤增量可见', () => {
     execMock.mockReset();
     execMock.mockImplementation(async (...args: unknown[]) => {
       await new Promise((r) => setTimeout(r, 60));
-      // 用例仍在执行 → 此刻打详情接口
+      // Case still executing → hit the detail endpoint now
       const detail = await request(app).get(`/api/plan-runs/${planRunId}`);
       const c = detail.body.cases?.find((x: { caseId: string }) => x.caseId === caseId);
       detailDuringRun = { reportId: c?.reportId ?? null };
@@ -159,7 +160,7 @@ describe('计划运行执行期间步骤增量可见', () => {
       const prc = await pool.query(`SELECT report_id FROM plan_run_cases WHERE plan_run_id = $1`, [planRunId]);
       const rid = (prc.rows[0]?.report_id as string | null) ?? null;
       if (rid) {
-        // 用例仍在执行 → 此刻打报告详情
+        // Case still executing → hit the report detail endpoint now
         const rep = await request(app).get(`/api/reports/${rid}`);
         repDuringRun = { status: rep.status, body: rep.body };
       }

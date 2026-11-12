@@ -1,10 +1,12 @@
 /**
- * 取证类工具（pi 链路）：sql_probe（只读查库）/ repo_read（只读读码）。
+ * Forensics tools (pi chain): sql_probe (read-only DB query) / repo_read (read-only code reading).
  *
- * - sql_probe：双闸同 legacy——平台侧 assertReadOnlySql 先拦一道，runSql 内部 sqlGuard 再兜一道；
- *   会话级配额（EXPLORATION_MAX_SQL_PROBES）；行封顶走 renderSqlProbeRows（行数/单元格/单行/整块）。
- * - repo_read：通道实现完全复用 createRepoReadChannel（assertInCwd 沙箱 + realpath + rg 超时 +
- *   6000 字符封顶 + 会话级配额都收口在通道里）；仅有代码提交范围的会话才装配。
+ * - sql_probe: same double gate as legacy — platform-side assertReadOnlySql intercepts first,
+ *   the in-runSql sqlGuard backs it up; session-level quota (EXPLORATION_MAX_SQL_PROBES); row
+ *   capping goes through renderSqlProbeRows (row count/cell/single row/whole block).
+ * - repo_read: the channel implementation fully reuses createRepoReadChannel (assertInCwd sandbox
+ *   + realpath + rg timeout + 6000-char cap + session-level quota all closed inside the channel);
+ *   mounted only for sessions with a code commit scope.
  */
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
@@ -19,10 +21,10 @@ import type { RepoReadRequest, RepoReadResult } from '../../../execute/aiTask.js
 import { toolErr, toolOk } from './result.js';
 import { logger } from '../../../logger.js';
 
-/** 单次只读取证的等待侧超时（只截断等待，不取消底层查询——只读查询代价可接受）。 */
+/** Wait-side timeout for a single read-only probe (truncates the wait only, does not cancel the underlying query — read-only query cost is acceptable). */
 const SQL_PROBE_TIMEOUT_MS = 10_000;
 
-/** sql_probe 依赖的最小环境形状（resolveEnv 产物的结构子集，便于测试打桩）。 */
+/** Minimal environment shape sql_probe depends on (structural subset of resolveEnv's product, easy to stub in tests). */
 export interface SqlProbeEnv {
   resolveDb(ref?: string | null): { label: string; dialect: string } | null;
   resolveDbPool(ref?: string | null): Promise<QueryPool>;
@@ -49,7 +51,7 @@ export function createSqlProbeTool(deps: { env: SqlProbeEnv; dbRefs: Array<{ lab
       if (!query) {
         return toolErr('查询为空', 'sql_probe: error query 为空。');
       }
-      // 双闸第一道：只读守卫（写语句直接拒；runSql 内部还有第二道）。
+      // First gate of the double gate: read-only guard (write statements rejected outright; a second gate lives inside runSql).
       try {
         assertReadOnlySql(query);
       } catch (e) {
@@ -84,7 +86,7 @@ export function createSqlProbeTool(deps: { env: SqlProbeEnv; dbRefs: Array<{ lab
         );
         const rows = r.rows as Array<Record<string, unknown>>;
         const text = `sql_probe（${entry.label}）：${r.rowCount} 行${r.truncated ? '（已按 limit 截断）' : ''}\n${renderSqlProbeRows(rows, r.rowCount, !!r.truncated)}`;
-        // 留痕摘要 = 「查到了什么」（行数 + 首行），detail 另存取证原文（升格用例的 expected 用）。
+        // Trail summary = "what was found" (row count + first row); detail stores the raw forensics text (used by a promoted case's expected).
         const first = rows[0] ? Object.entries(rows[0]).slice(0, 3).map(([k, v]) => `${k}=${String(v).slice(0, 30)}`).join(' ') : '';
         return toolOk(
           `${entry.label} 返回 ${r.rowCount} 行${r.truncated ? '（已按 limit 截断）' : ''}${first ? `｜首行 ${first}` : ''}`,
@@ -104,7 +106,7 @@ export function createSqlProbeTool(deps: { env: SqlProbeEnv; dbRefs: Array<{ lab
 
 export function createRepoReadTool(deps: {
   channel: (req: RepoReadRequest) => Promise<RepoReadResult>;
-  /** 有 diff 可看时提示（无提交范围时 diff op 由通道恒拒）。 */
+  /** Shown when a diff is viewable (with no commit scope the diff op is always rejected by the channel). */
   hasDiff: boolean;
 }) {
   return defineTool({

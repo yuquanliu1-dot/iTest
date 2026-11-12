@@ -68,11 +68,11 @@ describe('query_stats 工具', () => {
     };
     const [tool] = buildHistoryTools(ctx as never);
 
-    // 空历史:failures → 明确文案(不是空数组 JSON)
+    // Empty history: failures → explicit message (not an empty-array JSON)
     const empty = (await tool.execute({ action: 'failures', days: 7 })) as { ok: true; data: string };
     expect(empty.data).toContain('近 7 天无失败记录');
 
-    // 长错误截断:600 字不截(预算内);1200 → 1000 + 省略号
+    // Long error truncation: 600 chars not truncated (within budget); 1200 → 1000 + ellipsis
     const caseId = (await pool.query(
       `INSERT INTO test_cases(group_id, version_id, title) VALUES ($1,$2,'t-截断') RETURNING id`, [seed.groupId, seed.versionId],
     )).rows[0]!.id as string;
@@ -84,7 +84,7 @@ describe('query_stats 工具', () => {
     expect(detail.steps[0].error.length).toBe(1001); // 1000 + '…'
     expect(detail.steps[0].error.endsWith('…')).toBe(true);
 
-    // 参数校验:未知 action / 缺 reportId / limit 超界
+    // Parameter validation: unknown action / missing reportId / limit out of range
     const bad1 = await tool.execute({ action: 'nope' });
     expect(bad1.ok).toBe(false);
     const bad2 = await tool.execute({ action: 'report_detail' });
@@ -92,7 +92,7 @@ describe('query_stats 工具', () => {
     const bad3 = await tool.execute({ action: 'failures', limit: 1000 });
     expect(bad3).toMatchObject({ ok: false, error: expect.stringContaining('参数不合法') });
 
-    // 不存在/跨项目报告
+    // Nonexistent / cross-project report
     const nf = await tool.execute({ action: 'report_detail', reportId: '00000000-0000-0000-0000-000000000000' });
     expect(nf).toMatchObject({ ok: false, error: '报告不存在或不属于当前项目' });
   }, 30_000);

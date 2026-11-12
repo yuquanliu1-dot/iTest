@@ -1,13 +1,14 @@
 /**
- * 助手附件（版本级）：预上传端点与 read_thread_attachment 工具的共享服务。
- * 支持 .docx（mammoth 提取）与 .xlsx（exceljs 提取），类型由端点按 X-Filename
- * 扩展名白名单判定后以 ext 传入（本模块不做扩展名判断）。
+ * Assistant attachments (version-scoped): shared service for the pre-upload endpoint and the read_thread_attachment tool.
+ * Supports .docx (mammoth extraction) and .xlsx (exceljs extraction); the type is decided by the endpoint from the
+ * X-Filename extension whitelist and passed in as ext (this module does no extension judgment).
  *
- * 设计不变量（勿破坏，见 docs/superpowers/specs/2026-11-03-xlsx-attachment-and-skill-design.md）：
- *  - 引用标签由前端 adapter 在 send() 拼进消息正文，后端不改写任何消息文本——
- *    react-pi 的乐观消息按纯文本 key（userContentKey）与 pi 回放消息对账去重，
- *    后端改写文本会让两侧 key 不一致 → 重复用户气泡。
- *  - 附件文件是 skill 脚本的输入：zip 魔数校验防伪造扩展名把任意内容送进 python。
+ * Design invariants (do not break; see docs/superpowers/specs/2026-11-03-xlsx-attachment-and-skill-design.md):
+ *  - Reference tags are composed into the message body by the frontend adapter in send(); the backend never rewrites
+ *    any message text — react-pi reconciles optimistic messages against pi replay messages by the plain-text key
+ *    (userContentKey); backend rewrites would make the two sides' keys disagree → duplicated user bubbles.
+ *  - Attachment files are inputs to skill scripts: the zip magic check prevents a forged extension from feeding
+ *    arbitrary content into python.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -22,21 +23,21 @@ import { UPLOAD_DIR } from '../../lib/attachments.js';
 
 export const WORDPROCESSINGML_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 export const SPREADSHEETML_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-/** 单文件上限：与既有 uploadMaxBytes()（10MB）对齐；web 侧 FileAttachmentAdapter 有同值校验。 */
+/** Single-file cap: aligned with the existing uploadMaxBytes() (10MB); the web-side FileAttachmentAdapter validates the same value. */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-/** read_thread_attachment 的返回上限：防长文刷爆上下文。 */
+/** Return cap for read_thread_attachment: keeps long text from blowing up the context. */
 export const MAX_ATTACHMENT_READ_CHARS = 80_000;
 
-/** 上传端点按 X-Filename 扩展名白名单判定的类型。 */
+/** Types decided by the upload endpoint from the X-Filename extension whitelist. */
 export type AttachmentExt = 'docx' | 'xlsx';
 
-/** 版本上传目录。UPLOAD_DIR 与 case 附件同根（.data/uploads）。 */
+/** Version upload directory. UPLOAD_DIR shares the same root as case attachments (.data/uploads). */
 export function versionUploadDir(versionId: string): string {
   return path.join(UPLOAD_DIR, 'assistant', versionId);
 }
 
-/** docx 与 xlsx 同为 zip 容器，头四字节必为 PK\x03\x04。不带魔数一律 400（防伪造扩展名）；
- *  .xls 是 OLE2 二进制（D0 CF 11 E0），改名混进来也在此被拒。 */
+/** docx and xlsx are both zip containers; the first four bytes must be PK\x03\x04. No magic → always 400 (anti forged extension);
+ *  .xls is OLE2 binary (D0 CF 11 E0) and is rejected here too even when renamed in. */
 export function assertZipMagic(buf: Buffer): void {
   if (buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b || buf[2] !== 0x03 || buf[3] !== 0x04) {
     throw new HttpError(400, 'bad_request', 'not a docx/xlsx (zip) file');
@@ -48,8 +49,8 @@ async function realpathOrNull(p: string): Promise<string | null> {
 }
 
 /**
- * 路径约束：p（realpath 后）必须严格位于 baseDir 之内（软链先解引用再判）。
- * 返回规范化绝对路径；越界/不存在返回 null。调用方再叠 DB 行校验形成双保险。
+ * Path confinement: p (after realpath) must lie strictly within baseDir (symlinks are dereferenced before judging).
+ * Returns the normalized absolute path; null on escape/nonexistence. The caller layers DB row validation on top as a double guard.
  */
 export async function confinedPath(baseDir: string, p: string): Promise<string | null> {
   const real = await realpathOrNull(p);
@@ -60,14 +61,14 @@ export async function confinedPath(baseDir: string, p: string): Promise<string |
   return real;
 }
 
-// ── xlsx → 文本提取（sidecar 用，供 read_thread_attachment 一般问答）──
-// 深解析（渐进读 sheet/大表/合并单元格）走 file-to-cases 技能的 parse_xlsx.py，
-// 这里只做有界快照：每 sheet 行数与单 cell 字符双护栏。
+// ── xlsx → text extraction (sidecar; used for read_thread_attachment general Q&A) ──
+// Deep parsing (progressive sheet reading / large tables / merged cells) goes through the file-to-cases skill's parse_xlsx.py;
+// this only does a bounded snapshot: dual guardrails of per-sheet row count and single-cell characters.
 const XLSX_MAX_ROWS_PER_SHEET = 2000;
 const XLSX_MAX_CELL_CHARS = 200;
 
-/** exceljs cell.value 联合类型 → 纯文本：公式取 result（空给占位，不写公式原文）、
- *  富文本 join、超链接取显示文本、错误给 [error:code]、日期 ISO 格式（不落 locale）。 */
+/** exceljs cell.value union type → plain text: formulas take result (empty → placeholder, never the formula source text),
+ *  rich text joins, hyperlinks take the display text, errors become [error:code], dates in ISO format (no locale). */
 function xlsxCellToText(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (value instanceof Date) return value.toISOString();
@@ -79,7 +80,7 @@ function xlsxCellToText(value: unknown): string {
   if (Array.isArray(o.richText)) {
     return (o.richText as Array<{ text?: unknown }>).map((r) => (typeof r.text === 'string' ? r.text : '')).join('');
   }
-  // 公式 cell：重读后无缓存值时没有 result 键，靠 formula/sharedFormula 键识别。
+  // Formula cell: when there is no cached value after re-read there is no result key; identify via the formula/sharedFormula keys.
   if ('result' in o || 'formula' in o || 'sharedFormula' in o) return xlsxCellToText(o.result) || '[formula]';
   if (typeof o.text === 'string') return o.text;
   if (typeof o.hyperlink === 'string') return o.hyperlink;
@@ -87,13 +88,14 @@ function xlsxCellToText(value: unknown): string {
   return String(value);
 }
 
-/** workbook → 文本：每 sheet 一段 `## Sheet: 名 (rows=N,cols=M[,hidden])` + 管道分隔行。
- *  每 sheet 2000 行截断标注；行内裁尾随空段、跳过全空行；隐藏 sheet 照常提取并标注
- *  （需求常藏在隐藏页）。文件损坏/加密时 load() 抛错，由调用方按「提取失败不阻断」处理。 */
+/** workbook → text: one `## Sheet: 名 (rows=N,cols=M[,hidden])` section per sheet + pipe-separated rows.
+ *  Per-sheet truncation note at 2000 rows; trailing empty segments trimmed within rows, entirely empty rows skipped;
+ *  hidden sheets extracted as usual and marked (requirements often hide in hidden sheets). On corrupted/encrypted files
+ *  load() throws; the caller treats it as "extraction failure must not block". */
 export async function xlsxToText(buf: Buffer): Promise<string> {
   const wb = new ExcelJS.Workbook();
-  // exceljs 的 d.ts 用 `declare interface Buffer extends ArrayBuffer {}` 全局改写了 Buffer，
-  // 与 @types/node 的 Buffer 泛型定义互相打架——参数类型直接从 load 签名反推，绕开这滩浑水。
+  // exceljs's d.ts globally rewrites Buffer with `declare interface Buffer extends ArrayBuffer {}`,
+  // which fights @types/node's Buffer generic definition — infer the parameter type directly from the load signature to sidestep this mess.
   await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
   const parts: string[] = [];
   for (const sheet of wb.worksheets) {
@@ -108,13 +110,13 @@ export async function xlsxToText(buf: Buffer): Promise<string> {
         cells.push(text);
         if (text !== '') maxCols = Math.max(maxCols, c);
       }
-      // 稀疏行的空洞补空串对齐列；裁掉 maxCols 之外的尾随空段。
+      // Pad holes in sparse rows with empty strings to align columns; trim trailing segments beyond maxCols.
       while (cells.length > maxCols) cells.pop();
       if (cells.some((c) => c !== '')) rows.push(cells.join(' | '));
     }
-    if (rows.length === 0) continue; // 全空 sheet 不出段落
+    if (rows.length === 0) continue; // an entirely empty sheet produces no section
     const total = sheet.actualRowCount;
-    // 仅在行护栏真实触发时标注，避免 actualRowCount 与逐行扫描口径差造成假截断提示。
+    // Annotate only when the row guardrail truly fires, to avoid false truncation notes from the accounting gap between actualRowCount and row-by-row scanning.
     const truncatedNote = rows.length >= XLSX_MAX_ROWS_PER_SHEET && total > rows.length
       ? `\n[已截断：共 ${total} 行，仅提取前 ${rows.length} 行]`
       : '';
@@ -135,9 +137,9 @@ export interface SavedAttachment {
   deduped: boolean;
 }
 
-/** 预上传落盘：zip 魔数 → sha256 → 版本内去重 → 写原件 → 按扩展名提取（失败不阻断）→ 插行。
- *  去重键只有 (versionId, sha256)：同一份字节改扩展名重传会命中既有行返回原类型——
- *  内容级去重的既定语义，可接受。 */
+/** Pre-upload persistence: zip magic → sha256 → in-version dedup → write the original → extract by extension (failure doesn't block) → insert the row.
+ *  The dedup key is only (versionId, sha256): the same bytes re-uploaded with a different extension hit the existing row and return the original type —
+ *  accepted semantics of content-level dedup. */
 export async function saveAssistantAttachmentUpload(input: {
   versionId: string;
   name: string;
@@ -162,7 +164,7 @@ export async function saveAssistantAttachmentUpload(input: {
   const storagePath = path.join(dir, `${sha256}.${ext}`);
   await fs.writeFile(storagePath, buf);
 
-  // 提取失败不阻断上传：sidecar 缺失 → 标签 chars="unknown"，skill 的 python 解析器仍可读原件。
+  // Extraction failure doesn't block the upload: missing sidecar → tag chars="unknown"; the skill's python parser can still read the original.
   let extractedPath: string | null = null;
   let extractedChars: number | null = null;
   try {
@@ -170,7 +172,7 @@ export async function saveAssistantAttachmentUpload(input: {
     extractedPath = path.join(dir, `${sha256}.txt`);
     await fs.writeFile(extractedPath, text, 'utf8');
     extractedChars = text.length;
-  } catch { /* 保持 null：文件损坏/加密等，原件 path 仍有效 */ }
+  } catch { /* stay null: corrupted/encrypted files etc.; the original path remains valid */ }
 
   const inserted = (await db.insert(aiAssistantAttachments).values({
     versionId,
@@ -184,12 +186,12 @@ export async function saveAssistantAttachmentUpload(input: {
     createdByUserId: input.createdByUserId,
   }).onConflictDoNothing().returning())[0];
   if (inserted) return { row: inserted, deduped: false };
-  // 并发同文件：唯一约束兜底 → 回读既有行。
+  // Concurrent same-file upload: the unique constraint catches it → read back the existing row.
   const again = (await dupeSel())[0]!;
   return { row: again, deduped: true };
 }
 
-/** read_thread_attachment 的读路径：目录约束 + DB 行归属双校验 → sidecar 全文（截断标注）。 */
+/** Read path of read_thread_attachment: directory confinement + DB row ownership, both checked → sidecar full text (truncation noted). */
 export async function readAssistantAttachmentText(
   versionId: string,
   p: string,

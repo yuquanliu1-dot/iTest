@@ -1,6 +1,6 @@
 /**
- * S1 常驻指令（assistant_guides）加载与渲染。
- * 加载点 = buildSpaceSystemPrompt 第三参 → 每轮 builderSystemPrompt 重算 → DB 改动对新线程热生效。
+ * S1 resident guides (assistant_guides) loading and rendering.
+ * Load point = buildSpaceSystemPrompt's third argument → builderSystemPrompt recomputed every turn → DB changes take hot effect on new threads.
  */
 import { and, eq, or } from 'drizzle-orm';
 import { db } from '../../db/client.js';
@@ -9,16 +9,16 @@ import { aiLangFrom, type AiLang } from '../../agent/langDirective.js';
 
 export type AssistantGuideRow = typeof assistantGuides.$inferSelect;
 
-/** 会话 lang → guide lang 匹配值；en-US → 'en'，其余（含 zh-CN/无）→ 'zh'。 */
+/** Session lang → guide lang match value; en-US → 'en', everything else (including zh-CN/none) → 'zh'. */
 export function guideLangOf(lang?: AiLang): 'zh' | 'en' {
   return aiLangFrom(lang ?? null) === 'en-US' ? 'en' : 'zh';
 }
 
 const SCOPE_RANK: Record<string, number> = { version: 0, project: 1, global: 2 };
 
-/** 加载当前 (lang, projectId, versionId) 的启用 guides，按 scope 优先级 + sort 稳定排序。
- *  scope 优先级：version > project > global（同 scope 按 sort，再按 createdAt 保序）。
- *  同一 kind 可叠加（无互斥去重，由运营侧负责语义）。 */
+/** Loads the enabled guides for the current (lang, projectId, versionId), stably sorted by scope priority + sort.
+ *  Scope priority: version > project > global (within the same scope, by sort, then createdAt for stable order).
+ *  Same kind can stack (no mutual exclusion/dedup — semantics are operations' responsibility). */
 export async function loadActiveGuides(opts: { projectId: string; versionId: string; lang?: AiLang }): Promise<AssistantGuideRow[]> {
   const rows = await db
     .select()
@@ -41,7 +41,7 @@ export async function loadActiveGuides(opts: { projectId: string; versionId: str
     || a.createdAt.getTime() - b.createdAt.getTime());
 }
 
-/** 渲染 guides 为 system prompt 尾部两节：flow → # 流程指令，reference → # 知识参考。无则返回空串。 */
+/** Renders guides as the system prompt's trailing two sections: flow → the `# 流程指令` heading, reference → the `# 知识参考` heading. Returns '' when none. */
 export function buildGuidesSection(guides: Array<Pick<AssistantGuideRow, 'kind' | 'body'>>): string {
   const flow = guides.filter((g) => g.kind === 'flow').map((g) => g.body).join('\n\n');
   const ref = guides.filter((g) => g.kind === 'reference').map((g) => g.body).join('\n\n');

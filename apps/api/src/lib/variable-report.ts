@@ -32,7 +32,7 @@ export interface VariableReport {
   invalidNames: VarNameIssue[];
 }
 
-/** 从 step 抓可被 substitute 的所有字符串字段路径。 */
+/** Grabs all string field paths on a step that substituteVars can substitute. */
 function stringFields(step: StepAction): Array<{ field: string; text: string }> {
   const out: Array<{ field: string; text: string }> = [];
   const a = step as Record<string, unknown>;
@@ -81,9 +81,10 @@ export function buildVariableReport(steps: StepAction[], initialVars?: string[])
   const regexIssues: RegexIssue[] = [];
   const invalidNames: VarNameIssue[] = [];
 
-  // 初始变量（绑定数据集的列）：视为步骤 0 前已定义（order=-1）。
-  // 只消灭 undefined/forwardRefs 误报；不参与 duplicates —— extract 覆盖同名初始变量属合法运行时语义（后写生效），
-  // 且 definedOrder 保留 -1：对它的前向引用用初始值，不算 forward。
+  // Initial variables (columns of a bound dataset): treated as defined before step 0 (order=-1).
+  // Only kills undefined/forwardRefs false positives; does not participate in duplicates — an extract overwriting an
+  // initial variable of the same name is legal runtime semantics (last write wins), and definedOrder keeps -1:
+  // forward references to it use the initial value and do not count as forward.
   for (const name of initialVars ?? []) definedOrder.set(name, -1);
 
   // First pass: register all extract varName / httpRequest saveAs varName → earliest definition order.
@@ -103,7 +104,7 @@ export function buildVariableReport(steps: StepAction[], initialVars?: string[])
       } else if (prev === undefined) {
         definedOrder.set(name, i);
       }
-      // prev === -1（初始变量）：保留 -1，不记 duplicate
+      // prev === -1 (initial variable): keep -1, do not record a duplicate
       if (a.mode === 'regex' && a.pattern) {
         const r = safeRegex(a.pattern);
         if (!r.ok) regexIssues.push({ stepOrder: i, reason: r.reason });

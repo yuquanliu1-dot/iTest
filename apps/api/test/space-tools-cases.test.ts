@@ -6,8 +6,8 @@ import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 import type { ToolExecutor } from '../src/pi/tools.js';
 
-// 注意:buildCasesTools 链上静态引入 db/client(DATABASE_URL 在 beforeAll 才指向容器),
-// 必须在测试体内动态 import(与 cases.service.test.ts 同模式),否则查询打到默认本地库。
+// Note: the buildCasesTools chain statically imports db/client (DATABASE_URL only points at the container inside beforeAll),
+// so it must be dynamically imported inside the test body (same pattern as cases.service.test.ts), otherwise queries hit the default local DB.
 async function buildCasesToolsLazy(ctx: SpaceToolsContext): Promise<ToolExecutor> {
   const { buildCasesTools } = await import('../src/pi/space/tools/cases.js');
   return buildCasesTools(ctx)[0]!;
@@ -65,21 +65,21 @@ describe('manage_cases 工具', () => {
     const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await buildCasesToolsLazy(ctx);
 
-    // 缺省只搜当前版本
+    // Default search covers only the current version
     const cur = await tool.execute({ action: 'search', keyword: '登录' });
     expect((cur as { ok: true; data: string }).data).toContain('本版登录用例');
     expect((cur as { ok: true; data: string }).data).not.toContain('别版登录用例');
 
-    // 传 versionId 检索同项目其它版本
+    // Passing versionId searches other versions of the same project
     const cross = await tool.execute({ action: 'search', keyword: '登录', versionId: v1 });
     expect((cross as { ok: true; data: string }).data).toContain('别版登录用例');
     expect((cross as { ok: true; data: string }).data).not.toContain('本版登录用例');
 
-    // 他项目版本 / 他项目分组拒绝
+    // Other project's version / other project's group rejected
     expect(await tool.execute({ action: 'search', versionId: other.versionId })).toMatchObject({ ok: false });
     expect(await tool.execute({ action: 'search', groupId: other.groupId })).toMatchObject({ ok: false });
 
-    // create_group 仍实时写
+    // create_group still writes in real time
     const g = await tool.execute({ action: 'create_group', groupName: 'AI分组' });
     expect(g.ok).toBe(true);
     expect((await pool.query(`SELECT id FROM groups WHERE name='AI分组' AND project_id=$1`, [seed.projectId])).rowCount).toBe(1);
@@ -125,7 +125,7 @@ describe('manage_cases 工具', () => {
     const { ctx } = makeCtx({ projectId: seed.projectId, versionId: seed.versionId });
     const tool = await buildCasesToolsLazy(ctx);
 
-    // 缺省目标 = 当前线程版本(v0)
+    // Default target = the current thread version (v0)
     const r = await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: seed.groupId });
     expect(r.ok).toBe(true);
     const copied = (await pool.query(
@@ -140,14 +140,14 @@ describe('manage_cases 工具', () => {
     expect(steps[0]!.compiled?.[0]?.kind).toBe('navigate');
     expect(steps[1]!.compiled).toBeNull();
 
-    // 显式目标版本 v2
+    // Explicit target version v2
     await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: seed.groupId, versionId: v2 });
     expect((await pool.query(
       `SELECT id FROM test_cases WHERE title = '登录用例 副本1' AND version_id = $1`,
       [v2],
     )).rowCount).toBe(1);
 
-    // 归属拒绝:他项目源用例 / 他项目目标分组 / 他项目目标版本
+    // Ownership rejected: other project's source case / other project's target group / other project's target version
     expect(await tool.execute({ action: 'copy_to_version', caseId: otherCaseId, targetGroupId: seed.groupId }))
       .toMatchObject({ ok: false });
     expect(await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: other.groupId }))
@@ -155,7 +155,7 @@ describe('manage_cases 工具', () => {
     expect(await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: seed.groupId, versionId: other.versionId }))
       .toMatchObject({ ok: false });
 
-    // 不存在的版本
+    // Nonexistent version
     expect(await tool.execute({ action: 'copy_to_version', caseId: srcId, targetGroupId: seed.groupId, versionId: randomUUID() }))
       .toMatchObject({ ok: false });
   }, 30_000);
@@ -185,7 +185,7 @@ describe('manage_cases 工具', () => {
     const { buildDatasetsTools } = await import('../src/pi/space/tools/datasets.js');
     const tool = buildDatasetsTools(ctx)[0]!;
 
-    // list:仅结构(列/敏感标记/行数),无行值;projectId/updatedAt 字段不外泄
+    // list: structure only (columns / sensitive flags / row counts), no row values; projectId/updatedAt fields don't leak
     const r = await tool.execute({ action: 'list' });
     expect(r.ok).toBe(true);
     const raw = (r as { ok: true; data: string }).data;
@@ -203,7 +203,7 @@ describe('manage_cases 工具', () => {
     expect(raw).not.toContain('projectId');
     expect(raw).not.toContain('updatedAt');
 
-    // get:非敏感明文可见;敏感格 {__masked:true} 占位,敏感明文/密文绝不外泄
+    // get: non-sensitive plaintext visible; sensitive cells show a {__masked:true} placeholder; sensitive plaintext/ciphertext never leaks
     const g = await tool.execute({ action: 'get', datasetId: ds.id });
     expect(g.ok).toBe(true);
     const gRaw = (g as { ok: true; data: string }).data;
@@ -214,7 +214,7 @@ describe('manage_cases 工具', () => {
     expect(gRaw).not.toContain('secret-pass');
     expect(gRaw).not.toContain('"c"');
 
-    // 跨项目数据集拒绝
+    // Cross-project dataset rejected
     expect(await tool.execute({ action: 'get', datasetId: otherDs.id })).toMatchObject({ ok: false });
   }, 30_000);
 
@@ -250,10 +250,10 @@ describe('manage_cases 工具', () => {
         { name: 'password', sensitive: true },
       ],
       enabledRowCount: 1,
-      // 行选择：启用行下标数组；[] = 所有启用行
+      // Row selection: array of enabled-row indexes; [] = all enabled rows
       rowIndexes: [],
     });
-    // dataset 结构信息里不含任何行值
+    // The dataset structure contains no row values at all
     expect(boundRaw).not.toContain('alice');
     expect(boundRaw).not.toContain('secret-pass');
 

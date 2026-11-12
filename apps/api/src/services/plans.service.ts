@@ -1,7 +1,7 @@
 /**
- * 执行计划领域服务:计划 CRUD 与组内用例编排(set/add/remove/move/reorder)。
- * 归属校验(计划 ∈ project、version/environment/cases ∈ 计划所属 project)在这里;
- * 用户可见性由调用方(HTTP 边界)负责。
+ * Execution plan domain service: plan CRUD and in-group case orchestration (set/add/remove/move/reorder).
+ * Ownership validation (plan ∈ project; version/environment/cases ∈ the plan's project) lives here;
+ * user visibility is the caller's job (HTTP boundary).
  */
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -27,8 +27,8 @@ export async function listPlansByVersion(versionId: string) {
   return attachCreators(plans.map((p) => ({ ...p, caseCount: countByPlan.get(p.id) ?? 0 })));
 }
 
-/** 计划级覆盖：用例默认 device_target / 浏览器上下文可在「加进计划」时改写,
- *  不动用例本体,仅本次计划执行时按覆盖解析。null = 沿用例自带值。 */
+/** Plan-level override: a case's default device_target / browser context can be rewritten at "add to plan" time,
+ *  without touching the case itself; resolved per the override only for this plan's execution. null = use the case's own value. */
 export type TargetOverride = {
   deviceTargetId?: string;
   browserContext?: 'incognito' | 'persistent';
@@ -43,8 +43,8 @@ export interface UpdatePlanCaseResult {
   targetOverride: TargetOverride;
 }
 
-/** 计划内用例覆盖值写入；null/undefined 显式落 null（清空覆盖回到用例自带值），
- *  undefined 表示不动（与 nullable 的语义分离，调用方通过 patch 里字段是否存在判定）。 */
+/** Writes a plan-case's override value; null/undefined explicitly land null (clearing the override back to the case's own value),
+ *  undefined means untouched (semantics split from nullability; callers judge by whether the field exists in the patch). */
 export async function updatePlanCase(planId: string, caseId: string, patch: UpdatePlanCasePatch): Promise<UpdatePlanCaseResult> {
   const existing = (await db.select().from(planCases).where(and(eq(planCases.planId, planId), eq(planCases.caseId, caseId))).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'plan case not found');
@@ -55,9 +55,9 @@ export async function updatePlanCase(planId: string, caseId: string, patch: Upda
   return { caseId, targetOverride: after?.targetOverride ?? null };
 }
 
-/** 计划级数据集行选择写入：按 plan_cases.id 定位（同用例跨组=多行，各改各的）。
- *  null = 清覆盖（执行回落用例级）；[] = 全部启用行；非空 = 启用行下标子集。
- *  非空时校验口径与用例级共用 assertDatasetRowIndexes（已绑数据集 + 下标在启用行范围内）。 */
+/** Writes the plan-level dataset row selection: located by plan_cases.id (same case across groups = multiple rows, each edited independently).
+ *  null = clear the override (execution falls back to case level); [] = all enabled rows; non-empty = subset of enabled-row indexes.
+ *  Non-empty values share assertDatasetRowIndexes with the case level (dataset bound + indexes within the enabled-row range). */
 export async function updatePlanCaseDatasetRows(
   planId: string,
   planCaseId: string,
@@ -139,16 +139,16 @@ export async function updatePlan(planId: string, patch: UpdatePlanPatch) {
   return rows[0]!;
 }
 
-/** 计划详情:分组形状 groups[].cases(组内 order 1..n,带 planCaseId);另保留平铺 cases(按组序拼接,
- *  order=组内序、globalOrder=全局 1..N)做旧读取兼容。versionName 一并解析。
- *  每条用例额外回带 projectId/projectName/versionName——跨产品线共享后,同一个计划里可能混着
- *  基线项目与局点项目的用例,前端要靠它标出「这条用例来自哪个项目哪个版本」。 */
+/** Plan detail: grouped shape groups[].cases (in-group order 1..n, with planCaseId); also keeps the flat cases (concatenated in group
+ *  order, order=in-group sequence, globalOrder=global 1..N) for old-reader compatibility. versionName is resolved too.
+ *  Each case additionally carries projectId/projectName/versionName — after cross-product-line sharing a plan may mix cases from
+ *  baseline and site projects, and the frontend needs it to label "which project and version this case came from". */
 export async function getPlanDetail(planId: string) {
   const plan = (await db.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1))[0];
   if (!plan) return null;
   const gs = await db.select().from(planCaseGroups).where(eq(planCaseGroups.planId, plan.id)).orderBy(asc(planCaseGroups.order));
   const pcs = await db.select().from(planCases).where(eq(planCases.planId, plan.id)).orderBy(asc(planCases.order));
-  // 一次 join 取回每个用例的项目/版本归属,避免逐条回查（N+1）
+  // One join fetches each case's project/version ownership, avoiding per-row lookups (N+1)
   const caseRows = pcs.length
     ? await db
         .select({
@@ -159,7 +159,7 @@ export async function getPlanDetail(planId: string) {
           versionName: projectVersions.name,
           projectId: groups.projectId,
           projectName: projects.name,
-          // 计划级数据行选择三态展示所需：绑定的数据集 id + 用例级选择
+          // Needed for the plan-level row-selection three-state display: bound dataset id + case-level selection
           datasetId: testCases.datasetId,
           caseRowIndexes: testCases.datasetRowIndexes,
         })
@@ -169,7 +169,7 @@ export async function getPlanDetail(planId: string) {
         .leftJoin(projectVersions, eq(projectVersions.id, testCases.versionId))
         .where(inArray(testCases.id, pcs.map((p) => p.caseId)))
     : [];
-  // 登录用例可能不在计划用例之列：单独按组配置的 loginCaseId 取回标题/数据集字段（行选择三态展示与弹窗回显用）。
+  // The login case may not be among the plan's cases: fetch title/dataset fields separately via each group's loginCaseId (for row-selection three-state display and dialog echo).
   const loginIds = [...new Set(gs.map((g) => g.loginCaseId).filter((v): v is string => !!v))];
   const loginRows = loginIds.length
     ? await db
@@ -183,8 +183,8 @@ export async function getPlanDetail(planId: string) {
         .where(inArray(testCases.id, loginIds))
     : [];
   const loginById = new Map(loginRows.map((r) => [r.id, r]));
-  // 数据集名称与启用行数：按 distinct datasetId 一次性取回,rows jsonb 每个数据集只解析一次
-  // （曾在 join 里用相关子查询逐行统计,导致 N×M 重复解析整份 rows）。计划用例与登录用例的 datasetId 合并去重。
+  // Dataset names and enabled-row counts: fetched in one shot per distinct datasetId, each dataset's rows jsonb parsed only once
+  // (a correlated subquery in the join used to count per row, re-parsing the whole rows N×M times). Plan-case and login-case datasetIds are merged and deduped.
   const dsIds = [...new Set(
     [...caseRows.map((r) => r.datasetId), ...loginRows.map((r) => r.datasetId)].filter((v): v is string => !!v),
   )];
@@ -210,7 +210,7 @@ export async function getPlanDetail(planId: string) {
       versionName: c?.versionName ?? null,
       projectId: c?.projectId ?? null,
       projectName: c?.projectName ?? null,
-      // 计划级数据行选择三态展示所需（未绑数据集时 datasetId 为 null）
+      // Needed for the plan-level row-selection three-state display (datasetId null when no dataset is bound)
       datasetId: c?.datasetId ?? null,
       datasetName: ds?.name ?? null,
       datasetEnabledRowCount: ds?.enabledRowCount ?? 0,
@@ -233,7 +233,7 @@ export async function getPlanDetail(planId: string) {
     loginSuccessSelector: g.loginSuccessSelector,
     loginUnauthorizedKeywords: g.loginUnauthorizedKeywords,
     failFast: g.failFast,
-    // 登录用例展示/行选择三态所需：选中用例的标题 + 其绑定的数据集（与计划用例同形字段）
+    // Needed for login-case display / row-selection three-state: the selected case's title + its bound dataset (same-shaped fields as plan cases)
     loginCaseTitle: g.loginCaseId ? loginById.get(g.loginCaseId)?.title ?? null : null,
     loginCaseDatasetId: g.loginCaseId ? loginById.get(g.loginCaseId)?.datasetId ?? null : null,
     loginCaseRowIndexes: g.loginCaseId ? loginById.get(g.loginCaseId)?.caseRowIndexes ?? [] : [],
@@ -241,18 +241,18 @@ export async function getPlanDetail(planId: string) {
       const dsId = g.loginCaseId ? loginById.get(g.loginCaseId)?.datasetId : null;
       return dsId ? dsMeta.get(dsId)?.enabledRowCount ?? 0 : 0;
     })(),
-    // 登录用例行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集
+    // Login-case row override three-state: null = follow case level; [] = all rows; non-empty = subset
     loginDatasetRowIndexes: g.loginDatasetRowIndexes ?? null,
     targetConfig: g.targetConfig,
     cases: pcs.filter((pc) => pc.groupId === g.id).map((pc, i) => ({
       planCaseId: pc.id,
       order: i + 1,
       ...caseMeta(pc.caseId),
-      // 计划行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集
+      // Plan row override three-state: null = follow case level; [] = all rows; non-empty = subset
       planRowIndexes: pc.datasetRowIndexes ?? null,
     })),
   }));
-  // 平铺 cases:按组序拼接,order=组内序,globalOrder=全局 1..N(兼容旧读取/UI 过渡)
+  // Flat cases: concatenated in group order, order=in-group sequence, globalOrder=global 1..N (old-reader compatibility / UI transition)
   const flat = planGroups.flatMap((g) => g.cases);
   return attachCreator({
     ...plan,
@@ -263,10 +263,10 @@ export async function getPlanDetail(planId: string) {
 }
 
 /**
- * 计划可容纳的用例所属项目集合。
+ * The set of projects whose cases a plan may contain.
  *
- * 项目未归入产品线（product_line_id 为 null）时只放它自己——保持既有严格语义不变；
- * 归入产品线后，放行该产品线下所有项目的用例，这是「基线用例被各局点计划共享」的落点。
+ * When the project isn't attached to a product line (product_line_id null), only itself is allowed — keeping the existing strict semantics;
+ * once attached, cases from every project under that product line are allowed — this is where "baseline cases shared by site plans" lands.
  */
 async function allowedCaseProjectIds(planProjectId: string): Promise<string[]> {
   const row = (await db
@@ -282,7 +282,7 @@ async function allowedCaseProjectIds(planProjectId: string): Promise<string[]> {
   return lineProjects.map((p) => p.id);
 }
 
-/** 返回不属于允许项目集合的 caseId（含不存在者）；空数组即全部通过。 */
+/** Returns the caseIds outside the allowed project set (nonexistent ones included); an empty array means all passed. */
 async function caseIdsOutsideAllowedProjects(planProjectId: string, caseIds: string[]): Promise<string[]> {
   const ids = [...new Set(caseIds)];
   if (ids.length === 0) return [];
@@ -301,7 +301,7 @@ async function caseIdsOutsideAllowedProjects(planProjectId: string, caseIds: str
   return [...ids.filter((id) => !found.has(id)), ...new Set(invalid)];
 }
 
-/** 所有 caseIds 必须落在计划所属项目（或其产品线的兄弟项目）内；重复 id 去重后校验，避免误报 409。 */
+/** All caseIds must fall within the plan's project (or sibling projects of its product line); duplicate ids are deduped before validation to avoid false 409s. */
 async function assertCasesInProject(projectId: string, caseIds: string[]): Promise<void> {
   if (caseIds.length === 0) return;
   const outside = await caseIdsOutsideAllowedProjects(projectId, caseIds);
@@ -310,19 +310,19 @@ async function assertCasesInProject(projectId: string, caseIds: string[]): Promi
   }
 }
 
-/** assertCasesInProject 的只读预检版:返回不被允许的 caseId(含不存在者),空数组即全部通过。供工具在弹确认卡前校验,避免用户确认必然失败的操作。 */
+/** Read-only precheck variant of assertCasesInProject: returns disallowed caseIds (nonexistent ones included); an empty array means all passed. Lets the tool validate before popping the confirm card, so the user never confirms an operation doomed to fail. */
 export async function caseIdsOutsideProject(projectId: string, caseIds: string[]): Promise<string[]> {
   return caseIdsOutsideAllowedProjects(projectId, caseIds);
 }
 
 /**
- * 事务内第一步锁计划行(SELECT ... FOR UPDATE):同计划的所有编排串行化,
- * 消除查-算-插竞态与 order 撞号;行不存在 → 404(requirePlan 语义并入锁步骤)。
+ * First step inside the transaction locks the plan row (SELECT ... FOR UPDATE): serializes all orchestration of the same plan,
+ * eliminating the read-compute-insert race and order collisions; missing row → 404 (requirePlan semantics folded into the lock step).
  */
-/** db.transaction 回调的 tx 参数类型（组编排 helper 共用）。 */
+/** The tx parameter type of db.transaction callbacks (shared by the group-orchestration helpers). */
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-/** 事务内锁计划行 + 校验组归属（组编排写路径共用）。 */
+/** Locks the plan row + verifies group ownership inside the transaction (shared by group-orchestration write paths). */
 async function lockPlanGroup(tx: Tx, planId: string, groupId: string) {
   const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
   if (!plan) throw new HttpError(404, 'not_found', 'plan not found');
@@ -332,7 +332,7 @@ async function lockPlanGroup(tx: Tx, planId: string, groupId: string) {
   return { plan, group: g };
 }
 
-/** 整包替换该组用例(组内去重、1..n;空数组=清空该组);跨组重复合法。事务 + 计划行锁。 */
+/** Whole-batch replaces the group's cases (deduped in-group, 1..n; empty array = clears the group); cross-group duplicates are legal. Transaction + plan row lock. */
 export async function setPlanGroupCases(planId: string, groupId: string, caseIds: string[]): Promise<number> {
   const ids = [...new Set(caseIds)];
   return db.transaction(async (tx) => {
@@ -346,7 +346,7 @@ export async function setPlanGroupCases(planId: string, groupId: string, caseIds
   });
 }
 
-/** 组内重排:caseIds 必须恰为该组当前用例集合。事务 + 计划行锁。 */
+/** In-group reorder: caseIds must be exactly the group's current case set. Transaction + plan row lock. */
 export async function reorderPlanGroupCases(planId: string, groupId: string, caseIds: string[]) {
   const ids = [...new Set(caseIds)];
   return db.transaction(async (tx) => {
@@ -365,7 +365,7 @@ export async function reorderPlanGroupCases(planId: string, groupId: string, cas
   });
 }
 
-/** 跨组移动行(按 plan_cases.id,不是 caseId——同用例可多行)。追加到目标组尾,源组重排。事务 + 计划行锁。 */
+/** Moves rows across groups (by plan_cases.id, not caseId — one case may occupy several rows). Appends to the target group's tail; source groups are renumbered. Transaction + plan row lock. */
 export async function movePlanCases(planId: string, planCaseIds: string[], toGroupId: string) {
   const ids = [...new Set(planCaseIds)];
   return db.transaction(async (tx) => {
@@ -378,7 +378,7 @@ export async function movePlanCases(planId: string, planCaseIds: string[], toGro
     for (let i = 0; i < rows.length; i++) {
       await tx.update(planCases).set({ groupId: toGroupId, order: base + i + 1 }).where(eq(planCases.id, rows[i]!.id));
     }
-    // 源组重排
+    // Renumber source groups
     for (const gid of [...new Set(rows.map((r) => r.groupId))]) {
       if (gid === toGroupId) continue;
       await renumberGroup(tx, gid);
@@ -387,7 +387,7 @@ export async function movePlanCases(planId: string, planCaseIds: string[], toGro
   });
 }
 
-/** 组内行按现有 order 重排为 1..m(删除/移动后收口)。 */
+/** Renumbers the group's rows to 1..m by existing order (compacts after delete/move). */
 async function renumberGroup(tx: Tx, groupId: string) {
   const rest = await tx.select({ id: planCases.id }).from(planCases)
     .where(eq(planCases.groupId, groupId)).orderBy(asc(planCases.order));
@@ -396,7 +396,7 @@ async function renumberGroup(tx: Tx, groupId: string) {
   }
 }
 
-/** 追加用例到指定组(缺省取第一个组;无组计划自动建「默认分组」)。仅对目标组内已有 id 去重,跨组重复合法。 */
+/** Appends cases to the given group (defaults to the first group; a group-less plan auto-creates "默认分组"). Dedupes only against ids already in the target group; cross-group duplicates are legal. */
 export async function addPlanCases(planId: string, caseIds: string[], groupId?: string): Promise<number> {
   return db.transaction(async (tx) => {
     const plan = (await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update'))[0];
@@ -423,7 +423,7 @@ export async function addPlanCases(planId: string, caseIds: string[], groupId?: 
   });
 }
 
-/** 移除用例(按 caseId 删该计划所有行——同用例多行一并删),受影响组内重排 1..m;事务 + 计划行锁,无命中返回 0。 */
+/** Removes cases (by caseId, deleting every row of this plan — multiple rows of one case all go), affected groups renumbered 1..m; transaction + plan row lock, returns 0 on no match. */
 export async function removePlanCases(planId: string, caseIds: string[]): Promise<number> {
   if (caseIds.length === 0) return 0;
   return db.transaction(async (tx) => {
@@ -445,7 +445,7 @@ export interface PlanGroupLoginPrepareInput {
   detectionUrl?: string | null;
   successSelector?: string | null;
   unauthorizedKeywords?: string[] | null;
-  /** 登录用例数据行覆盖三态：null = 跟随用例级；[] = 全部行；非空 = 子集 */
+  /** Login-case dataset row override three-state: null = follow case level; [] = all rows; non-empty = subset */
   datasetRowIndexes?: number[] | null;
 }
 
@@ -461,7 +461,7 @@ export interface UpdatePlanGroupPatch extends Partial<Omit<CreatePlanGroupInput,
   name?: string;
 }
 
-/** 组必须属于该计划;不存在 → 404(事务外用的只读版)。 */
+/** The group must belong to this plan; missing → 404 (read-only variant used outside transactions). */
 async function getPlanGroup(planId: string, groupId: string) {
   const g = (await db.select().from(planCaseGroups)
     .where(and(eq(planCaseGroups.id, groupId), eq(planCaseGroups.planId, planId))).limit(1))[0];
@@ -518,8 +518,8 @@ export async function updatePlanGroup(planId: string, groupId: string, patch: Up
     update.detectionUrl = patch.loginPrepare.detectionUrl ?? null;
     update.loginSuccessSelector = patch.loginPrepare.successSelector ?? null;
     update.loginUnauthorizedKeywords = patch.loginPrepare.unauthorizedKeywords ?? null;
-    // 登录用例行覆盖：换用例/清空用例 → 置 null（下标空间属于旧用例的数据集，跳过校验防陈旧值误报）；
-    // 用例不变才接受显式值，非空时与用例级/计划级同口径校验。
+    // Login-case row override: switching/clearing the case → set null (the index space belongs to the old case's dataset; validation skipped to avoid stale-value false alarms);
+    // an explicit value is accepted only when the case is unchanged, validated with the same criteria as case/plan level when non-empty.
     let loginRows: number[] | null;
     if (patch.loginPrepare.caseId !== existing.loginCaseId) {
       loginRows = null;
@@ -536,7 +536,7 @@ export async function updatePlanGroup(planId: string, groupId: string, patch: Up
   return (await db.update(planCaseGroups).set(update).where(eq(planCaseGroups.id, groupId)).returning())[0]!;
 }
 
-/** 组内有用例 → 409(对齐删产品线 409 惯例);空组直接删。 */
+/** Group still has cases → 409 (aligned with the delete-product-line 409 convention); an empty group deletes directly. */
 export async function deletePlanGroup(planId: string, groupId: string) {
   await getPlanGroup(planId, groupId);
   const n = (await db.select({ c: sql<number>`count(*)::int` }).from(planCases)
@@ -546,7 +546,7 @@ export async function deletePlanGroup(planId: string, groupId: string) {
   return { ok: true };
 }
 
-/** 组排序整包替换;groupIds 必须恰好是计划的全部分组。事务 + 计划行锁。 */
+/** Whole-batch replaces group ordering; groupIds must be exactly the plan's full group set. Transaction + plan row lock. */
 export async function reorderPlanGroups(planId: string, groupIds: string[]) {
   return db.transaction(async (tx) => {
     await tx.select().from(executionPlans).where(eq(executionPlans.id, planId)).limit(1).for('update');

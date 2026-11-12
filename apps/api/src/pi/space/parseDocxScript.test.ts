@@ -10,7 +10,7 @@ import archiver from 'archiver';
 const exec = promisify(execFile);
 const SCRIPT = path.resolve(process.cwd(), 'scripts/file-to-cases-content/scripts/parse_docx.py');
 
-/** 用 archiver（已有依赖）现场构造最小 docx（zip + document.xml/styles.xml）。 */
+/** Builds a minimal docx on the fly with archiver (an existing dependency) (zip + document.xml/styles.xml). */
 async function buildDocx(files: Record<string, string>): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'docx-'));
   const out = path.join(dir, 'fixture.docx');

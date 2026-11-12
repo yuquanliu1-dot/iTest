@@ -40,7 +40,7 @@ interface Seeded {
   versionIds: string[];
 }
 
-/** 建项目 + 两个分组 + 两个版本，并给「登录系统」组在 v1/v2 各放 1 条用例、「规则管理」组只在 v1 放 2 条。 */
+/** Create a project + two groups + two versions; put 1 case in the "登录系统" group under each of v1/v2, and 2 cases in the "规则管理" group only under v1. */
 async function seedCasesAcrossVersions(): Promise<Seeded> {
   const { productLineId } = await seedProductLine(pool);
   const p = await pool.query(`INSERT INTO projects(product_line_id, name) VALUES ($1, '计数项目') RETURNING id`, [
@@ -58,10 +58,10 @@ async function seedCasesAcrossVersions(): Promise<Seeded> {
       [groupId, versionId, title],
     );
   };
-  // 登录系统：v1 一条、v2 一条 → 跨版本合计 2
+  // "登录系统" group: one in v1, one in v2 → 2 across versions
   await insertCase(login.rows[0]!.id, v1.rows[0]!.id, '登录-甲');
   await insertCase(login.rows[0]!.id, v2.rows[0]!.id, '登录-乙');
-  // 规则管理：只在 v1 两条 → v1 内 2、v2 内 0
+  // "规则管理" group: only two in v1 → 2 in v1, 0 in v2
   await insertCase(rule.rows[0]!.id, v1.rows[0]!.id, '规则-甲');
   await insertCase(rule.rows[0]!.id, v1.rows[0]!.id, '规则-乙');
 
@@ -88,7 +88,7 @@ describe('GET /projects/:id/groups 分组计数随版本范围收窄', () => {
     const res = await request(app).get(`/api/projects/${projectId}/groups?versionIds=${v1}`);
     expect(res.status).toBe(200);
     const byName = Object.fromEntries(res.body.map((g: { name: string; caseCount: number }) => [g.name, g.caseCount]));
-    // v1：登录系统 1 条、规则管理 2 条
+    // v1: "登录系统" 1 case, "规则管理" 2 cases
     expect(byName['登录系统']).toBe(1);
     expect(byName['规则管理']).toBe(2);
   });

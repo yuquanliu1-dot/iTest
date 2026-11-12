@@ -6,7 +6,7 @@ import type { isCancelRequested as IsCancelRequestedFn } from '../src/execute/ru
 
 let pool: Pool;
 
-/** isCancelRequested 依赖 db client（模块加载时读 DATABASE_URL），须先起容器再动态 import。 */
+/** isCancelRequested depends on the db client (reads DATABASE_URL at module load), so the container must be up before dynamic import. */
 let isCancelRequested: typeof IsCancelRequestedFn;
 
 beforeAll(async () => {
@@ -36,20 +36,20 @@ describe('plan-run cancel across containers', () => {
     );
     const runId = run.rows[0].id as string;
 
-    // cancel_requested 默认 false → 未取消
+    // cancel_requested defaults to false → not cancelled
     expect(await isCancelRequested(runId)).toBe(false);
 
-    // 模拟另一副本/direct 写入 cancel_requested=true → 本函数须读到
+    // Simulate another replica/direct write of cancel_requested=true → this function must read it
     await pool.query(`UPDATE plan_runs SET cancel_requested = true WHERE id = $1`, [runId]);
     expect(await isCancelRequested(runId)).toBe(true);
 
-    // 复位 false → 重新读到未取消
+    // Reset to false → reads not-cancelled again
     await pool.query(`UPDATE plan_runs SET cancel_requested = false WHERE id = $1`, [runId]);
     expect(await isCancelRequested(runId)).toBe(false);
   });
 
   it('falls back to DB false for unknown runId (no in-memory state)', async () => {
-    // 未在内存 runState 注册的行：不抛、返回 false
+    // Rows not registered in in-memory runState: no throw, returns false
     await expect(isCancelRequested('00000000-0000-0000-0000-000000000001')).resolves.toBe(false);
   });
 });

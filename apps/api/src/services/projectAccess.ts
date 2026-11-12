@@ -6,8 +6,8 @@ import type { AuthUser } from './auth.service.js';
 import { visibleOrgIdsFor } from './orgTree.js';
 
 /**
- * 解析 project → 所属 org id（经 product_lines）；项目不存在或无产品线返回 null。
- * 项目已无自己的组织列，「项目属于哪个组织」恒等于「它的产品线属于哪个组织」。
+ * Resolve project → owning org id (via product_lines); returns null when the project doesn't exist or has no product line.
+ * Projects no longer have their own org column; "which org the project belongs to" is always "which org its product line belongs to".
  */
 async function projectOrgId(projectId: string): Promise<string | null> {
   const rows = await db
@@ -20,8 +20,8 @@ async function projectOrgId(projectId: string): Promise<string | null> {
 }
 
 /**
- * 项目可见性断言：不存在与不可见统一 404，不泄露存在性。
- * 所有按 id 访问项目及其子资源的入口都必须先过这道检查。
+ * Project visibility assertion: missing and invisible both 404, no existence leakage.
+ * Every entry point that accesses a project or its sub-resources by id must pass this check first.
  */
 export async function assertProjectVisible(projectId: string, user: AuthUser): Promise<void> {
   const orgId = await projectOrgId(projectId);
@@ -30,7 +30,7 @@ export async function assertProjectVisible(projectId: string, user: AuthUser): P
   if (!visible.has(orgId)) throw new HttpError(404, 'not_found', 'project not found');
 }
 
-/** 解析 case 所属项目 id（case → group → project）；链路不存在返回 null。 */
+/** Resolve the case's owning project id (case → group → project); returns null when the chain is missing. */
 export async function resolveCaseProjectId(caseId: string): Promise<string | null> {
   const rows = await db
     .select({ projectId: groups.projectId })
@@ -41,15 +41,15 @@ export async function resolveCaseProjectId(caseId: string): Promise<string | nul
   return rows[0]?.projectId ?? null;
 }
 
-/** case 可见性断言：经所属项目判定，404 文案不区分「不存在」与「不可见」。 */
+/** case visibility assertion: judged via the owning project; the 404 wording doesn't distinguish "missing" from "invisible". */
 export async function assertCaseVisible(caseId: string, user: AuthUser): Promise<void> {
   const projectId = await resolveCaseProjectId(caseId);
   if (!projectId) throw new HttpError(404, 'not_found', 'case not found');
-  // 组织判定已内聚在 assertProjectVisible 里，不必再自己查一遍 org。
+  // Org judgment is already folded into assertProjectVisible; no need to query the org again here.
   await assertProjectVisible(projectId, user);
 }
 
-/** report 可见性断言：经 case → group → project 链路判定，404 文案不区分「不存在」与「不可见」。 */
+/** report visibility assertion: judged via the case → group → project chain; the 404 wording doesn't distinguish "missing" from "invisible". */
 export async function assertReportVisible(reportId: string, user: AuthUser): Promise<void> {
   const rows = await db
     .select({ projectId: groups.projectId })
@@ -63,7 +63,7 @@ export async function assertReportVisible(reportId: string, user: AuthUser): Pro
   await assertProjectVisible(projectId, user);
 }
 
-/** plan run 可见性断言：plan_runs.projectId 直接落在 projects，链路判定后兜底。 */
+/** plan run visibility assertion: plan_runs.projectId lands directly on projects; the chain check covers it. */
 export async function assertPlanRunVisible(planRunId: string, user: AuthUser): Promise<void> {
   const rows = await db.select({ projectId: planRuns.projectId }).from(planRuns).where(eq(planRuns.id, planRunId)).limit(1);
   const projectId = rows[0]?.projectId;
@@ -71,7 +71,7 @@ export async function assertPlanRunVisible(planRunId: string, user: AuthUser): P
   await assertProjectVisible(projectId, user);
 }
 
-/** 用户可见的全部项目 id（列表接口无组织维度过滤参数时用）。 */
+/** All project ids visible to the user (for list endpoints with no org-dimension filter parameter). */
 export async function visibleProjectIds(user: AuthUser): Promise<string[]> {
   const visibleOrgs = await visibleOrgIdsFor(user);
   if (visibleOrgs.size === 0) return [];
@@ -83,7 +83,7 @@ export async function visibleProjectIds(user: AuthUser): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
-/** 解析 environment 所属项目 id（env → project）；链路不存在返回 null。 */
+/** Resolve the environment's owning project id (env → project); returns null when the chain is missing. */
 export async function resolveEnvironmentProjectId(envId: string): Promise<string | null> {
   const rows = await db
     .select({ projectId: testEnvironments.projectId })
@@ -93,7 +93,7 @@ export async function resolveEnvironmentProjectId(envId: string): Promise<string
   return rows[0]?.projectId ?? null;
 }
 
-/** environment 可见性断言：经所属项目判定，404 文案不区分「不存在」与「不可见」。 */
+/** environment visibility assertion: judged via the owning project; the 404 wording doesn't distinguish "missing" from "invisible". */
 export async function assertEnvironmentVisible(envId: string, user: AuthUser): Promise<{ projectId: string }> {
   const rows = await db
     .select({ projectId: testEnvironments.projectId })
@@ -106,7 +106,7 @@ export async function assertEnvironmentVisible(envId: string, user: AuthUser): P
   return { projectId };
 }
 
-/** 解析 dataset 所属项目 id（dataset → project）；链路不存在返回 null。 */
+/** Resolve the dataset's owning project id (dataset → project); returns null when the chain is missing. */
 export async function resolveDatasetProjectId(datasetId: string): Promise<string | null> {
   const rows = await db
     .select({ projectId: datasets.projectId })
@@ -116,7 +116,7 @@ export async function resolveDatasetProjectId(datasetId: string): Promise<string
   return rows[0]?.projectId ?? null;
 }
 
-/** dataset 可见性断言：经所属项目判定，404 文案不区分「不存在」与「不可见」。 */
+/** dataset visibility assertion: judged via the owning project; the 404 wording doesn't distinguish "missing" from "invisible". */
 export async function assertDatasetVisible(datasetId: string, user: AuthUser): Promise<{ projectId: string }> {
   const projectId = await resolveDatasetProjectId(datasetId);
   if (!projectId) throw new HttpError(404, 'not_found', 'dataset not found');
@@ -124,7 +124,7 @@ export async function assertDatasetVisible(datasetId: string, user: AuthUser): P
   return { projectId };
 }
 
-/** 解析 version 所属项目 id（version → project）；链路不存在返回 null。 */
+/** Resolve the version's owning project id (version → project); returns null when the chain is missing. */
 export async function resolveVersionProjectId(versionId: string): Promise<string | null> {
   const rows = await db
     .select({ projectId: projectVersions.projectId })
@@ -134,7 +134,7 @@ export async function resolveVersionProjectId(versionId: string): Promise<string
   return rows[0]?.projectId ?? null;
 }
 
-/** version 可见性断言：经 version → project 链路判定，404 文案不区分「不存在」与「不可见」。 */
+/** version visibility assertion: judged via the version → project chain; the 404 wording doesn't distinguish "missing" from "invisible". */
 export async function assertVersionVisible(versionId: string, user: AuthUser): Promise<{ projectId: string }> {
   const projectId = await resolveVersionProjectId(versionId);
   if (!projectId) throw new HttpError(404, 'not_found', 'version not found');
@@ -142,7 +142,7 @@ export async function assertVersionVisible(versionId: string, user: AuthUser): P
   return { projectId };
 }
 
-/** 解析 device target 所属项目 id（device_target → project）；链路不存在返回 null。 */
+/** Resolve the device target's owning project id (device_target → project); returns null when the chain is missing. */
 export async function resolveDeviceTargetProjectId(deviceTargetId: string): Promise<string | null> {
   const rows = await db
     .select({ projectId: deviceTargets.projectId })
@@ -152,7 +152,7 @@ export async function resolveDeviceTargetProjectId(deviceTargetId: string): Prom
   return rows[0]?.projectId ?? null;
 }
 
-/** device target 可见性断言：经所属项目判定，404 文案不区分「不存在」与「不可见」。 */
+/** device target visibility assertion: judged via the owning project; the 404 wording doesn't distinguish "missing" from "invisible". */
 export async function assertDeviceTargetVisible(deviceTargetId: string, user: AuthUser): Promise<{ projectId: string }> {
   const projectId = await resolveDeviceTargetProjectId(deviceTargetId);
   if (!projectId) throw new HttpError(404, 'not_found', 'device target not found');
@@ -161,8 +161,8 @@ export async function assertDeviceTargetVisible(deviceTargetId: string, user: Au
 }
 
 /**
- * 产品线可见性断言：产品线挂在组织下，可见性直接走 visibleOrgIdsFor（与 assertProjectVisible 同构），
- * 不存在与不可见统一 404，不泄露存在性。
+ * Product line visibility assertion: product lines hang under orgs, so visibility goes straight through visibleOrgIdsFor (isomorphic to assertProjectVisible);
+ * missing and invisible both 404, no existence leakage.
  */
 export async function assertProductLineVisible(productLineId: string, user: AuthUser): Promise<{ organizationId: string }> {
   const rows = await db
@@ -177,7 +177,7 @@ export async function assertProductLineVisible(productLineId: string, user: Auth
   return { organizationId: orgId };
 }
 
-/** 用户可见的全部产品线 id（按可见组织过滤）。 */
+/** All product line ids visible to the user (filtered by visible orgs). */
 export async function visibleProductLineIds(user: AuthUser): Promise<string[]> {
   const visibleOrgs = await visibleOrgIdsFor(user);
   if (visibleOrgs.size === 0) return [];
@@ -188,7 +188,7 @@ export async function visibleProductLineIds(user: AuthUser): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
-/** 产品线下的全部项目 id；产品线不存在返回 null（由调用方决定 404）。 */
+/** All project ids under a product line; returns null when the product line is missing (caller decides the 404). */
 export async function productLineProjectIds(productLineId: string): Promise<string[]> {
   const rows = await db
     .select({ id: projects.id })

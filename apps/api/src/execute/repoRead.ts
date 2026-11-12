@@ -1,9 +1,9 @@
 /**
- * 仓库读码通道实现（探索会话的 repo 动作）：只读 + 沙箱限版本工作树的 repo/ 内。
- * read/grep/ls/diff 四 op；路径越界（assertInCwd 抛 SandboxViolationError）、文件不存在、
- * 配额耗尽都转成 ok:false 的错误反馈——错误文本是给模型看的，措辞必须可行动。
- * 与 pi 侧 buildRepoSandboxTools 的 repo_* 工具刻意不共用实现：那边是助手工具协议
- * （{ok,data} 字符串载荷），这边是 aiTask 的 RepoReadResult，封顶口径也不同。
+ * Repo code-reading channel implementation (the exploratory session's repo actions): read-only + sandboxed to the version workspace's repo/ tree.
+ * Four ops: read/grep/ls/diff; path escapes (assertInCwd throws SandboxViolationError), missing files,
+ * and exhausted quotas all become ok:false error feedback — the error text is read by the model, so the wording must be actionable.
+ * Deliberately not shared with the pi side's buildRepoSandboxTools repo_* tools: that side is the assistant tool protocol
+ * ({ok,data} string payloads); this side is aiTask's RepoReadResult, with a different capping scheme.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -11,16 +11,16 @@ import { spawn } from 'node:child_process';
 import { assertInCwd, gitRead, REPO_RUN_TIMEOUT_MS } from '../pi/repo.js';
 import { REPO_OUTPUT_MAX_CHARS, type RepoReadRequest, type RepoReadResult } from './aiTask.js';
 
-/** ls 单次列出的条目上限（模型反馈不需要全量目录树，截断带说明）。 */
+/** ls per-call entry cap (model feedback doesn't need the full directory tree; truncate with a note). */
 const LS_MAX_ENTRIES = 200;
 
 export interface RepoReadChannelOptions {
-  /** 仓库工作树根（versionWorkspaceDir(versionId)）。 */
+  /** Repo worktree root (versionWorkspaceDir(versionId)). */
   repoDir: string;
-  /** 提交范围基线 → 头（diff op 用）。未解析出范围时 diff 恒拒（通道根本不会被创建）。 */
+  /** Commit-range baseline → head (for the diff op). When no range resolves, diff always refuses (the channel isn't even created). */
   fromSha?: string | null;
   toSha?: string | null;
-  /** 会话级调用配额（防模型把预算烧在读码上，照 sql 取证的配额形态）。 */
+  /** Session-level call quota (stops the model burning budget on code reading; mirrors the sql evidence channel's quota shape). */
   maxCalls: number;
 }
 
@@ -37,9 +37,9 @@ function spawnRg(cwd: string, args: string[]): Promise<{ stdout: string; code: n
   });
 }
 
-/** assertInCwd 通过后的绝对路径 → 给 rg/git 用的相对路径（输出干净、不泄机器绝对路径）。
- *  repoRoot 必须传 realpath 过的根：assertInCwd 内部按 realpath 比较，混用符号链接路径
- *  （macOS /tmp → /private/tmp）会让 path.relative 吐出 ../private/... 的废路径。 */
+/** Absolute path (after assertInCwd passes) → relative path for rg/git (clean output; leaks no machine-absolute paths).
+ *  repoRoot must be the realpath-ed root: assertInCwd compares by realpath internally, and mixing symlinked paths
+ *  (macOS /tmp → /private/tmp) makes path.relative produce garbage like ../private/.... */
 async function toRelative(repoRoot: string, target?: string): Promise<string> {
   if (!target || !target.trim()) return '.';
   const real = await assertInCwd(repoRoot, target);
@@ -51,7 +51,7 @@ const capContent = (s: string): string =>
   s.length > REPO_OUTPUT_MAX_CHARS ? `${s.slice(0, REPO_OUTPUT_MAX_CHARS)}\n…（已截断，用 path 参数缩小范围）` : s;
 
 /**
- * 创建会话级读码通道：闭包持有配额计数，实例 = 一个探索会话的 runRepoRead。
+ * Creates the session-level code-reading channel: the closure holds the quota counter; one instance = one exploratory session's runRepoRead.
  */
 export function createRepoReadChannel(opts: RepoReadChannelOptions): (req: RepoReadRequest) => Promise<RepoReadResult> {
   let calls = 0;
@@ -61,8 +61,8 @@ export function createRepoReadChannel(opts: RepoReadChannelOptions): (req: RepoR
     }
     calls += 1;
     try {
-      // 根也过一次 assertInCwd（等价于取 realpath）：后续 join/relative 全用真根，
-      // 避免符号链接路径（macOS /tmp）与 realpath 比较错位。
+      // The root also goes through assertInCwd once (equivalent to taking the realpath): all later join/relative calls use the true root,
+      // avoiding a symlinked path (macOS /tmp) mismatching the realpath comparison.
       const repoRoot = await assertInCwd(opts.repoDir, '.');
       switch (req.op) {
         case 'ls': {
@@ -78,8 +78,8 @@ export function createRepoReadChannel(opts: RepoReadChannelOptions): (req: RepoR
           return { ok: true, content: capContent(lines.join('\n') + note) || '（空目录）' };
         }
         case 'read': {
-          // 先 stat 再过沙箱：realpath 对不存在的路径会失败并被误判成「越界」；
-          // stat 在先才能给出「文件不存在」的正确反馈（越界路径 stat  succeeds 后仍会被沙箱拦住）。
+          // stat first, then the sandbox: realpath fails on nonexistent paths and would be misjudged as "out of bounds";
+          // stat going first gives the correct "file missing" feedback (an out-of-bounds path that stat succeeds on is still blocked by the sandbox).
           const joined = path.join(repoRoot, req.path);
           const stat = await fs.stat(joined).catch(() => null);
           if (!stat) return { ok: false, error: `文件不存在：${req.path}（先 ls 上级目录或 grep 关键词定位）` };
@@ -105,7 +105,7 @@ export function createRepoReadChannel(opts: RepoReadChannelOptions): (req: RepoR
         }
         case 'grep': {
           const rel = await toRelative(repoRoot, req.path);
-          // rg 位置参数顺序：PATTERN 在前、PATH 在后（-- 之后第一个位置参数是 pattern）。
+          // rg positional-arg order: PATTERN before PATH (the first positional after -- is the pattern).
           const args = ['--no-heading', '-n', '-S', `--max-count=${req.maxLines}`, '--', req.pattern, rel];
           const { stdout, code, stderr } = await spawnRg(repoRoot, args);
           if (code !== 0 && code !== 1) return { ok: false, error: `rg 失败（exit ${code}）：${stderr.trim().slice(0, 200)}` };
@@ -133,7 +133,7 @@ export function createRepoReadChannel(opts: RepoReadChannelOptions): (req: RepoR
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // 沙箱越界给出可行动的反馈；其它异常照原样（spawn 失败/权限等）
+      // Sandbox escapes get actionable feedback; other exceptions pass through as-is (spawn failure/permissions etc.)
       return { ok: false, error: msg.includes('path escapes cwd') ? `路径越界：${req.op === 'read' ? req.path : (req.path ?? '.')}（只能在仓库工作树内）` : msg.slice(0, 200) };
     }
   };

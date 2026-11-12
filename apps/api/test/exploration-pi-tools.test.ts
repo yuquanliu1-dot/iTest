@@ -1,16 +1,16 @@
 /**
- * pi 探索工具层（P3）单测：闸门、沙箱、账本、证据帧落库。
+ * pi exploration tool layer (P3) unit tests: gates, sandbox, ledgers, evidence frame persistence.
  *
- * 覆盖：
- *  - click 破坏性闸（默认拒 / 显式授权放行）+ 脆弱 selector 闸；
- *  - fill 凭据占位符替换（留痕只记原值）+ 回读不一致反馈 + 缺凭据 → 终止性错误回调；
- *  - evaluate 三层沙箱的 L1（静态扫描拒收）与 L3（返回值封顶/序列化）闸；
- *  - C1 覆盖账本（路径去重/交互计数/回灌摘要）+ 终态覆盖摘要（盖住多少/还差什么）；
- *  - D3 错误信号（console/HTTP 采集、增量 drain、封顶）；
- *  - A1 证据帧：finding 落库带 evidence_frame、重复条目去重、落库成功后留痕片段清空；
- *  - trailStepOf 的动作留痕形状（legacy 词表对齐：sql/repo/press/wait…）。
+ * Coverage:
+ *  - click destructive gate (default deny / explicit authorization allows) + fragile selector gate;
+ *  - fill credential placeholder substitution (trail records only the original value) + readback mismatch feedback + missing credentials → fatal error callback;
+ *  - evaluate three-layer sandbox: L1 (static-scan rejection) and L3 (return value cap/serialization) gates;
+ *  - C1 coverage ledger (path dedupe/interaction counts/feed-back digest) + terminal coverage digest (how much covered / what's missing);
+ *  - D3 error signals (console/HTTP collection, incremental drain, cap);
+ *  - A1 evidence frame: finding persisted with evidence_frame, duplicate entry dedupe, trail segment cleared after successful persist;
+ *  - trailStepOf action trail shape (legacy vocabulary alignment: sql/repo/press/wait…).
  *
- * 工具用假 page 驱动（只提供工具真正调用的方法）；finding 落库走真 PG（列形状要真）。
+ * Tools are driven by a fake page (only the methods tools actually call); finding persistence goes through real PG (column shapes must be real).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { Pool } from 'pg';
@@ -18,14 +18,14 @@ import type { Page } from 'playwright-core';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-/** 假 page：只提供工具真正调用的方法，并记录动作。 */
+/** Fake page: provides only the methods tools actually call, and records actions. */
 interface FakePageOpts {
   url?: string;
-  /** locator().first().evaluate() 的返回值（click 取元素信息；fill 取下拉展开判定）。 */
+  /** Return value of locator().first().evaluate() (click reads element info; fill reads the dropdown-expanded check). */
   locatorEvaluateResult?: unknown;
-  /** locator().first().inputValue() 的回读值。 */
+  /** Readback value of locator().first().inputValue(). */
   inputValue?: string;
-  /** page.evaluate() 的返回值（evaluate 工具）。 */
+  /** Return value of page.evaluate() (evaluate tool). */
   evaluateResult?: unknown;
 }
 
@@ -104,7 +104,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** 建一条会话行（findings 外键指向它）。 */
+/** Insert a session row (findings reference it via foreign key). */
 async function insertSession(): Promise<string> {
   sessionCounter += 1;
   const r = await pool.query(
@@ -175,7 +175,7 @@ describe('pi 探索工具层', () => {
     expect(fake.calls.typed).toEqual(['wy']);
     expect(JSON.stringify(ok.content)).toContain('占位符已替换');
 
-    // 回读值不同（且发生了替换）→ 反馈只给长度，绝不回显真实值。
+    // Readback differs (and a substitution happened) → feedback gives only the length, never echoes the real value.
     const mismatch = makeFakePage({ inputValue: 'other' });
     const fill2 = createFillTool({
       page: mismatch.page,
@@ -239,7 +239,7 @@ describe('pi 探索工具层', () => {
 
     tracker.recordUrl(p1.page);
     tracker.recordUrl(p2.page);
-    tracker.recordUrl(p3.page); // 根路径不记账
+    tracker.recordUrl(p3.page); // root path is not recorded
     tracker.recordInteraction('click');
     tracker.recordInteraction('click');
     tracker.recordInteraction('fill');
@@ -277,10 +277,10 @@ describe('pi 探索工具层', () => {
     expect(digest).toContain('交互 4 次');
     expect(digest).toContain('子目标 1/3');
     expect(digest).toContain('g2 空值提交看是否被拒');
-    // 未完成项最多点名 3 条（再多只给条数，不铺开——摘要会随每轮 observe 回灌烧 token）。
+    // At most 3 unfinished items are named (beyond that only a count is given, no full listing — the digest is fed back with every observe round and burns tokens).
     const many = coverageDigest({ ...snapshot, goals: Array.from({ length: 6 }, (_, i) => ({ id: `g${i}`, text: `目标${i}`, done: false })) });
     expect(many).toContain('（另 3 条）');
-    // 无子目标时不提子目标（窄章程别塞空话）。
+    // With no subgoals, subgoals are not mentioned (a narrow charter should not be padded with filler).
     expect(coverageDigest({ ...snapshot, goals: [] })).not.toContain('子目标');
   }, 20000);
 
@@ -303,11 +303,11 @@ describe('pi 探索工具层', () => {
     expect(drained.text).toContain('[console] Uncaught TypeError');
     expect(drained.text).toContain('[http] HTTP 500');
     expect(drained.count).toBe(2);
-    // 增量语义：drain 后再 drain 为空（observe 回灌只带新信号，不重复轰炸）。
+    // Incremental semantics: draining again after a drain yields empty (observe feedback carries only new signals, no repeat bombardment).
     expect(collector.drainRendered()).toEqual({ text: '', count: 0 });
     expect(collector.all()).toHaveLength(2);
 
-    // 封顶：超过 200 条后丢弃新条目。
+    // Cap: new entries are dropped once past 200.
     for (let i = 0; i < 260; i += 1) handlers.console?.[0]?.({ type: () => 'error', text: () => `e${i}` });
     expect(collector.all().length).toBeLessThanOrEqual(200);
     collector.close();
@@ -335,7 +335,7 @@ describe('pi 探索工具层', () => {
     expect(first.ok).toBe(true);
     expect(first.order).toBe(1);
     expect(store.savedCount).toBe(1);
-    // 落库成功后「自上一条 finding 起」的留痕片段清空。
+    // After a successful persist, the trail segment "since the previous finding" is cleared.
     expect(trail).toHaveLength(0);
 
     const row = await pool.query(
@@ -345,7 +345,7 @@ describe('pi 探索工具层', () => {
     expect(row.rows).toHaveLength(1);
     expect(row.rows[0]!.title).toBe('删除后列表未刷新');
     expect(row.rows[0]!.severity).toBe('P1');
-    // judge/人工审阅前状态仍是 pending（平台不改）。
+    // Status stays pending before judge/human review (the platform does not change it).
     expect(row.rows[0]!.status).toBe('pending');
     const frame = row.rows[0]!.evidence_frame as { trailIndex: number; url: string };
     expect(frame.trailIndex).toBe(7);
@@ -353,12 +353,12 @@ describe('pi 探索工具层', () => {
     const actionsTrail = row.rows[0]!.actions_trail as Array<{ type: string }>;
     expect(actionsTrail.map((t) => t.type)).toEqual(['navigate', 'click']);
 
-    // 重复条目（近义去重）→ 不落库，savedCount 不涨。
+    // Duplicate entry (near-synonym dedupe) → not persisted, savedCount unchanged.
     const dup = await store.report({ title: '删除后列表未刷新', description: '同一缺陷换个说法' });
     expect(dup.ok).toBe(false);
     expect(store.savedCount).toBe(1);
 
-    // 缺标题/描述 → 形状容错拒收。
+    // Missing title/description → rejected by shape tolerance.
     const bad = await store.report({});
     expect(bad.ok).toBe(false);
   }, 30000);

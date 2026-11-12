@@ -1,4 +1,4 @@
-/** R3.5 蒸馏层：S1/S2/S3 信号聚合与消费幂等/教训蒸馏校验/提案输入过滤；R3.6 增 S4 session 信号。 */
+/** R3.5 distillation layer: S1/S2/S3 signal aggregation and consumption idempotency / lesson distillation validation / proposal input filtering; R3.6 adds S4 session signals. */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
@@ -29,7 +29,7 @@ beforeEach(async () => {
   await pool.query(`TRUNCATE assistant_failure_signals, assistant_failure_lessons, assistant_solidify_proposals, assistant_solidify_batches, assistant_prompt_module_versions, ai_assistant_feedback, ai_threads`);
 });
 
-/** 顺序计数 stub：按调用次序回放 value；记录每次入参（形状无关断言用 JSON.stringify）。 */
+/** Sequential-count stub: replays value in call order; records every call arg (shape-agnostic assertions use JSON.stringify). */
 function sequentialStub(values: Array<unknown | ((prevReq: unknown) => unknown)>) {
   let i = 0;
   const calls: unknown[] = [];
@@ -128,13 +128,13 @@ describe('collectUnconsumedSignals', () => {
     const { signals, total } = await collectUnconsumedSignals();
     expect(signals).toHaveLength(60);
     expect(total).toBe(71);
-    expect(signals.find((s) => s.refId === String(seq))).toBeTruthy(); // S1 没被截掉
+    expect(signals.find((s) => s.refId === String(seq))).toBeTruthy(); // S1 was not truncated
   });
 });
 
-// ── R3.6 S4 session 信号 ──
+// ── R3.6 S4 session signals ──
 
-/** 可疑会话 JSONL（同 collector 测试款：verify 死循环 3 连 + 31min 时长 → 嫌疑分 7）。 */
+/** Suspicious session JSONL (same style as the collector test: 3 consecutive verify dead loops + 31min duration → suspicion score 7). */
 function suspiciousJsonl(firstUserText = '首条需求：核查SOC事件列表'): string {
   const t0 = Date.parse('2026-11-01T10:00:00Z');
   const at = (min: number) => new Date(t0 + min * 60_000).toISOString();
@@ -148,7 +148,7 @@ function suspiciousJsonl(firstUserText = '首条需求：核查SOC事件列表')
   return lines.join('\n');
 }
 
-/** 插 chat 线程 + 写 JSONL（updated_at 用 UTC 墙钟串——drizzle 写路径同款语义，见 collector 测试）。 */
+/** Insert a chat thread + write JSONL (updated_at as a UTC wall-clock string — same semantics as the drizzle write path, see the collector test). */
 async function seedChatThread(firstUserText?: string): Promise<{ id: string; refIdPrefix: string }> {
   const file = join(sessionsRoot, `sess_${randomUUID()}.jsonl`);
   await writeFile(file, suspiciousJsonl(firstUserText));
@@ -168,7 +168,7 @@ describe('R3.6 session 信号', () => {
     expect(s.key).toBe(s.refId);
     expect(s.line).toBe('global');
     expect(s.excerpt).toContain('首条需求：核查SOC事件列表');
-    // 流经蒸馏：LLM 引用 session 信号 key → 教训入库且 signals 记账为 session
+    // Flows through distillation: the LLM references the session signal key → lesson persisted and the signal booked as session
     const stub = sequentialStub([{
       lessons: [{ attribution: 'prompt', title: 'verify 死循环教训', lesson: 'l', signalRefs: [s.refId] }],
       notes: [],
@@ -191,8 +191,8 @@ describe('R3.6 session 信号', () => {
     const { signals, total } = await collectUnconsumedSignals({ sessionsRoot });
     expect(signals).toHaveLength(60);
     expect(total).toBe(72);
-    expect(signals.find((s) => s.refId === String(seq))).toBeTruthy(); // S1 天然优先
-    expect(signals.find((s) => s.refId.startsWith(t.refIdPrefix))).toBeUndefined(); // session append 末位先被截
+    expect(signals.find((s) => s.refId === String(seq))).toBeTruthy(); // S1 naturally takes priority
+    expect(signals.find((s) => s.refId.startsWith(t.refIdPrefix))).toBeUndefined(); // session, appended at the tail, is truncated first
   });
 
   it('消费幂等贯通：lesson 引用 session refId 后不再采集同 epoch 线程', async () => {

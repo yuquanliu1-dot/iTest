@@ -1,4 +1,4 @@
-/** R3 三张新表的 SCHEMA_SQL 可用性：版本链 partial unique 幂等、批次/提案级联。 */
+/** SCHEMA_SQL usability of the three new R3 tables: version-chain partial unique idempotency, batch/proposal cascade. */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';

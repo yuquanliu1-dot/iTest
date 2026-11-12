@@ -6,8 +6,8 @@ import {
   clearAnnotation,
 } from '../src/execute/liveView.js';
 
-/** fake playwright Page：脚本化 screenshot 行为（成功返回 buffer / 抛错 / 挂起）。
- *  screenshot 之外的 liveView 依赖（context().newCDPSession 用于 screencast）统一 mock 为不可用 → 落轮询兜底。 */
+/** Fake playwright Page: scripted screenshot behavior (returns buffer on success / throws / hangs).
+ *  liveView dependencies other than screenshot (context().newCDPSession for screencast) are uniformly mocked as unavailable → falls to the polling fallback. */
 function fakePage(script: Array<(() => Promise<Buffer>) | Error | 'pending'>) {
   let i = 0;
   return {
@@ -20,7 +20,7 @@ function fakePage(script: Array<(() => Promise<Buffer>) | Error | 'pending'>) {
   };
 }
 
-/** fake req/res：捕获 writeHead/write/end，req.on('close') 记回调。 */
+/** Fake req/res: captures writeHead/write/end; req.on('close') records the callback. */
 function fakeConn() {
   let onClose: (() => void) | null = null;
   const chunks: Array<string | Buffer> = [];
@@ -57,10 +57,10 @@ const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 const JPEG2 = Buffer.from([0xff, 0xd8, 0xff, 0xda]);
 const JPEG3 = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
 
-/** multipart 分帧头（每帧各出现一次；用于统计录制/回放帧数）。 */
+/** multipart frame header (appears once per frame; used to count recording/replay frames). */
 const FRAME_HEADER = Buffer.from('--frame\r\nContent-Type: image/jpeg');
 
-/** 统计 buf 中非重叠的 pat 出现次数。 */
+/** Counts non-overlapping occurrences of pat in buf. */
 function countBytes(buf: Buffer, pat: Buffer): number {
   let n = 0;
   let i = 0;
@@ -96,9 +96,9 @@ describe('registerLiveView 生命周期', () => {
     const b = registerLiveView('dup');
     const conn = fakeConn();
     handleLiveView(conn.req, conn.res, 'dup');
-    expect(conn.res.status).toBe(200); // 新源接管
+    expect(conn.res.status).toBe(200); // new source takes over
     a.close();
-    expect(conn.res.writableEnded).toBe(false); // a.close 不影响 b 的源
+    expect(conn.res.writableEnded).toBe(false); // a.close does not affect b's source
     b.close();
   });
 });
@@ -121,42 +121,42 @@ describe('handleLiveView MJPEG 帧泵（轮询兜底）', () => {
       Buffer.from('\r\n'),
     ]);
     expect(body.equals(expected)).toBe(true);
-    expect(conn.res.writableEnded).toBe(false); // 流保持打开
+    expect(conn.res.writableEnded).toBe(false); // stream stays open
     live.close();
   });
 
   it('多订阅 hub：同一帧扇出给所有连接；后连接回放最近一帧', async () => {
-    // 走 CDP 快路径（不经 KEEPALIVE 节流）；MIN_FRAME_GAP 用真实 Date.now，帧间需睡 210ms 真实时间
+    // Takes the CDP fast path (bypasses KEEPALIVE throttling); MIN_FRAME_GAP uses real Date.now, so 210ms of real time is needed between frames
     const { page, emit } = screencastPage();
     const live = registerLiveView();
     live.setPage(page as never);
     const a = fakeConn();
     handleLiveView(a.req, a.res, live.key);
-    await new Promise((r) => setTimeout(r, 10)); // flush tryStartScreencast 启动链（含事件监听注册）
-    emit(Buffer.from(JPEG).toString('base64')); // 帧 1
+    await new Promise((r) => setTimeout(r, 10)); // flush the tryStartScreencast startup chain (including event listener registration)
+    emit(Buffer.from(JPEG).toString('base64')); // frame 1
     expect(a.hasJpeg()).toBe(true);
-    // 第二个连接：立即回放最近一帧（<img> 不空白）
+    // Second connection: immediately replays the most recent frame (<img> not blank)
     const b = fakeConn();
     handleLiveView(b.req, b.res, live.key);
     expect(b.hasJpeg()).toBe(true);
     b.close();
     await new Promise((r) => setTimeout(r, 210));
     const frames = a.body().length;
-    emit(Buffer.from(JPEG).toString('base64')); // 帧 2：只剩 a，仍应收到
-    expect(a.body().length).toBeGreaterThan(frames); // …且帧在推进
+    emit(Buffer.from(JPEG).toString('base64')); // frame 2: only a remains, still should receive it
+    expect(a.body().length).toBeGreaterThan(frames); // …and frames keep advancing
     live.close();
   });
 
   it('截图抛错跳帧续流：坏帧不写、好帧照常写', async () => {
     vi.useFakeTimers();
     const live = registerLiveView();
-    // setPage 立即 tick 耗掉第 1 个坏帧（KEEPALIVE 恒定满足）；t=500 再耗 1 个；t=1000 出好帧
+    // setPage ticks immediately, consuming the 1st bad frame (KEEPALIVE is constantly satisfied); t=500 consumes another; t=1000 yields a good frame
     live.setPage(fakePage([new Error('nav'), new Error('nav'), () => Promise.resolve(JPEG)]) as never);
     const conn = fakeConn();
     handleLiveView(conn.req, conn.res, live.key);
-    await vi.advanceTimersByTimeAsync(600); // t=500 抛错 → 跳过
+    await vi.advanceTimersByTimeAsync(600); // t=500 throws → skipped
     expect(conn.chunks.length).toBe(0);
-    await vi.advanceTimersByTimeAsync(500); // t=1000 成功
+    await vi.advanceTimersByTimeAsync(500); // t=1000 succeeds
     expect(conn.hasJpeg()).toBe(true);
     expect(conn.res.writableEnded).toBe(false);
     live.close();
@@ -168,9 +168,9 @@ describe('handleLiveView MJPEG 帧泵（轮询兜底）', () => {
     live.setPage(fakePage(['pending', () => Promise.resolve(JPEG)]) as never);
     const conn = fakeConn();
     handleLiveView(conn.req, conn.res, live.key);
-    await vi.advanceTimersByTimeAsync(2400); // 首帧 pending：inFlight 置位，期间各 tick 均跳帧不叠截图
+    await vi.advanceTimersByTimeAsync(2400); // first frame pending: inFlight set; every tick during this period skips the frame without stacking screenshots
     expect(conn.chunks.length).toBe(0);
-    // 2500ms 软超时与 tick 同刻到点（超时定时器先注册 → 先释放 inFlight）→ 该 tick 补一帧
+    // The 2500ms soft timeout lands on the same beat as the tick (timeout timer registered first → releases inFlight first) → that tick writes a frame
     await vi.advanceTimersByTimeAsync(1200);
     expect(conn.hasJpeg()).toBe(true);
     expect(conn.res.writableEnded).toBe(false);
@@ -189,7 +189,7 @@ describe('handleLiveView MJPEG 帧泵（轮询兜底）', () => {
     expect(conn.res.writableEnded).toBe(true);
     const frames = conn.body().length;
     await vi.advanceTimersByTimeAsync(2000);
-    expect(conn.body().length).toBe(frames); // interval 已清，不再产出帧
+    expect(conn.body().length).toBe(frames); // interval cleared, no more frames produced
   });
 
   it('客户端断开（req close）→ 停泵（订阅移除）；torn 连接不再被 end', async () => {
@@ -200,9 +200,9 @@ describe('handleLiveView MJPEG 帧泵（轮询兜底）', () => {
     handleLiveView(conn.req, conn.res, live.key);
     conn.close();
     await vi.advanceTimersByTimeAsync(1200);
-    // v2 语义：断开只移除订阅并停泵，不主动 end 响应（socket 已断，无意义）
+    // v2 semantics: disconnect only removes the subscription and stops the pump; the response is not actively ended (socket already broken — pointless)
     expect(conn.res.writableEnded).toBe(false);
-    // 订阅已移除，teardown 也没有该连接可 end（writableEnded 维持 false 属预期）
+    // Subscription removed, so teardown has no connection left to end (writableEnded staying false is expected)
     live.close();
     await vi.advanceTimersByTimeAsync(100);
     expect(conn.res.writableEnded).toBe(false);
@@ -221,10 +221,10 @@ describe('handleLiveView MJPEG 帧泵（轮询兜底）', () => {
     b.close();
     const still = a.body().length;
     await vi.advanceTimersByTimeAsync(2000);
-    expect(a.body().length).toBe(still); // 无观看者，零额外帧（泵停转）
+    expect(a.body().length).toBe(still); // no viewers, zero extra frames (pump stopped)
     const c = fakeConn();
     handleLiveView(c.req, c.res, live.key);
-    await vi.advanceTimersByTimeAsync(600); // 新观看者 → 泵重启
+    await vi.advanceTimersByTimeAsync(600); // new viewer → pump restarts
     expect(c.hasJpeg()).toBe(true);
     live.close();
   });
@@ -236,7 +236,7 @@ describe('handleLiveView MJPEG 帧泵（轮询兜底）', () => {
     handleLiveView(conn.req, conn.res, live.key);
     expect(conn.res.status).toBe(200);
     await vi.advanceTimersByTimeAsync(1500);
-    expect(conn.res.writableEnded).toBe(false); // 页面源未就绪前不结束（等待 setPage 竞态窗口）
+    expect(conn.res.writableEnded).toBe(false); // does not end before the page source is ready (waiting out the setPage race window)
     expect(conn.chunks.length).toBe(0);
     live.setPage(fakePage([() => Promise.resolve(JPEG)]) as never);
     await vi.advanceTimersByTimeAsync(600);
@@ -245,7 +245,7 @@ describe('handleLiveView MJPEG 帧泵（轮询兜底）', () => {
   });
 });
 
-/** fake Page 支持 CDP screencast：context().newCDPSession 返回可发帧的假 session。 */
+/** Fake Page supporting CDP screencast: context().newCDPSession returns a fake session that can emit frames. */
 function screencastPage() {
   const listeners: Record<string, (ev: { data?: string; sessionId?: number }) => void> = {};
   const sends: string[] = [];
@@ -274,13 +274,13 @@ describe('CDP screencast 提帧', () => {
     live.setPage(page as never);
     const conn = fakeConn();
     handleLiveView(conn.req, conn.res, live.key);
-    // 启动 screencast
+    // Start screencast
     await vi.advanceTimersByTimeAsync(0);
     expect(sends()).toContain('Page.startScreencast');
-    // CDP 推一帧
+    // CDP pushes one frame
     emit(Buffer.from(JPEG).toString('base64'));
     expect(conn.hasJpeg()).toBe(true);
-    // 新鲜帧窗口内轮询兜底不抢跑（screencast 活着时不截图）
+    // Within the fresh-frame window the polling fallback doesn't jump ahead (no screenshots while screencast is alive)
     await vi.advanceTimersByTimeAsync(600);
     expect(conn.chunks.filter((c) => typeof c === 'object')).toHaveLength(1);
     live.close();
@@ -290,7 +290,7 @@ describe('CDP screencast 提帧', () => {
 
   it('screencast 停滞后轮询兜底补帧（自愈）', async () => {
     vi.useFakeTimers();
-    // session 不推帧（startScreencast 成功但无 screencastFrame 事件）
+    // session pushes no frames (startScreencast succeeds but no screencastFrame event)
     const session = {
       on: () => {},
       send: async () => {},
@@ -304,7 +304,7 @@ describe('CDP screencast 提帧', () => {
     live.setPage(page as never);
     const conn = fakeConn();
     handleLiveView(conn.req, conn.res, live.key);
-    await vi.advanceTimersByTimeAsync(1500); // 超过 KEEPALIVE_MS(1200)，轮询兜底出帧
+    await vi.advanceTimersByTimeAsync(1500); // past KEEPALIVE_MS(1200), the polling fallback produces a frame
     expect(conn.hasJpeg()).toBe(true);
     live.close();
   });
@@ -312,7 +312,7 @@ describe('CDP screencast 提帧', () => {
   it('screencast 启动失败（newCDPSession 抛错）→ 纯轮询兜底，不中断', async () => {
     vi.useFakeTimers();
     const live = registerLiveView();
-    live.setPage(fakePage([() => Promise.resolve(JPEG)]) as never); // 无 context() → newCDPSession 抛错
+    live.setPage(fakePage([() => Promise.resolve(JPEG)]) as never); // no context() → newCDPSession throws
     const conn = fakeConn();
     handleLiveView(conn.req, conn.res, live.key);
     await vi.advanceTimersByTimeAsync(600);
@@ -322,7 +322,7 @@ describe('CDP screencast 提帧', () => {
   });
 });
 
-/** fake Page 记录 evaluate 调用（供高亮 DOM 注入断言）。 */
+/** Fake Page that records evaluate calls (for highlight DOM injection assertions). */
 function evalPage() {
   const calls: unknown[] = [];
   const page = {
@@ -338,24 +338,24 @@ describe('动作高亮（blackboard 层）', () => {
     const live = registerLiveView();
     live.setPage(page as never);
     const conn = fakeConn();
-    handleLiveView(conn.req, conn.res, live.key); // 1 个观看者
+    handleLiveView(conn.req, conn.res, live.key); // 1 viewer
     const box = { x: 1, y: 2, width: 10, height: 20 };
     let boxEvaluated = false;
     await annotateAction(page as never, () => { boxEvaluated = true; return Promise.resolve(box); });
     expect(boxEvaluated).toBe(true);
     expect(calls()).toHaveLength(1);
     expect((calls()[0] as [string, unknown])[1]).toEqual(box);
-    // clearAnnotation 同样注入（remove 调用）
+    // clearAnnotation also injects (remove call)
     await clearAnnotation(page as never);
     expect(calls()).toHaveLength(2);
-    // 观看者全部断开 → 高亮零开销：annotate 的懒 box 不再求值（不 evaluate）
+    // All viewers disconnected → zero highlight overhead: annotate's lazy box is no longer evaluated (no evaluate)
     conn.close();
     const before = calls().length;
     boxEvaluated = false;
     await annotateAction(page as never, () => { boxEvaluated = true; return Promise.resolve(box); });
     expect(boxEvaluated).toBe(false);
     expect(calls().length).toBe(before);
-    // clearAnnotation 是清理安全网：不再注入（无人看），但已注册过的页仍会执行 remove
+    // clearAnnotation is a cleanup safety net: no longer injects (no one watching), but pages that were registered still run remove
     await clearAnnotation(page as never);
     expect(calls().length).toBe(before + 1);
     live.close();
@@ -376,8 +376,8 @@ describe('动作高亮（blackboard 层）', () => {
 });
 
 describe('录制与回放', () => {
-  /** 注册表是模块级单例且跨用例共享：录制类用例用 vi.resetModules() + 动态 import 拿全新实例，
-   *  避免 TTL/LRU 计数被更早的残留污染（否则「仍在保留窗口内」断言会随用例顺序偶发失败）。 */
+  /** The registry is a module-level singleton shared across cases: recording-type cases use vi.resetModules() + dynamic import to get a fresh instance,
+   *  avoiding TTL/LRU counters polluted by earlier leftovers (otherwise the "still within the retention window" assertion would fail sporadically depending on case order). */
   async function freshLiveView() {
     vi.resetModules();
     return (await import('../src/execute/liveView.js')) as typeof import('../src/execute/liveView.js');
@@ -387,43 +387,43 @@ describe('录制与回放', () => {
     vi.useFakeTimers();
     const { registerLiveView: reg, handleLiveReplay: replay } = await freshLiveView();
     const live = reg();
-    // 无任何观看者：setPage 立即录首帧，t=2000 录次帧（无人慢节流 -> 回放帧差 2000）
+    // No viewers at all: setPage records the first frame immediately, t=2000 records the second (unviewed slow throttle -> replay frame gap 2000)
     live.setPage(fakePage([() => Promise.resolve(JPEG), () => Promise.resolve(JPEG2)]) as never);
     await vi.advanceTimersByTimeAsync(2200);
-    live.close(); // 置 dead，录制保留供回放
+    live.close(); // set dead; recording kept for replay
     const conn = fakeConn();
     replay(conn.req, conn.res, live.key);
     expect(conn.res.status).toBe(200);
     expect(conn.res.headers?.['Content-Type']).toBe('multipart/x-mixed-replace; boundary=frame');
     const body1 = Buffer.concat(conn.body());
-    expect(countBytes(body1, FRAME_HEADER)).toBe(1); // 首帧即出
+    expect(countBytes(body1, FRAME_HEADER)).toBe(1); // first frame out immediately
     expect(body1.includes(JPEG)).toBe(true);
-    expect(conn.res.writableEnded).toBe(false); // 中段不 end
-    await vi.advanceTimersByTimeAsync(2600); // 帧差 2000 → 次帧 + end
+    expect(conn.res.writableEnded).toBe(false); // no end mid-stream
+    await vi.advanceTimersByTimeAsync(2600); // frame gap 2000 → next frame + end
     const body = Buffer.concat(conn.body());
     expect(countBytes(body, FRAME_HEADER)).toBe(2);
     expect(body.includes(JPEG2)).toBe(true);
-    expect(body.indexOf(JPEG)).toBeLessThan(body.indexOf(JPEG2)); // 顺序保持
-    expect(conn.res.writableEnded).toBe(true); // 末帧后 end
+    expect(body.indexOf(JPEG)).toBeLessThan(body.indexOf(JPEG2)); // order preserved
+    expect(conn.res.writableEnded).toBe(true); // end after the last frame
     const len = conn.body().length;
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(conn.body().length).toBe(len); // end 后不再写
+    expect(conn.body().length).toBe(len); // nothing written after end
   });
 
   it('录制节流：观看 500ms / 无人 2000ms 一帧（洪泛采样 / 慢轮询）', async () => {
     vi.useFakeTimers();
     const { registerLiveView: reg, handleLiveView: view, handleLiveReplay: replay } = await freshLiveView();
-    // 观看者存在：screencast 洪泛推帧，录制按 500ms 窗口采样
+    // Viewers present: screencast floods frames; recording samples on a 500ms window
     const { page, emit } = screencastPage();
     const live = reg();
     live.setPage(page as never);
     const conn = fakeConn();
     view(conn.req, conn.res, live.key);
     await vi.advanceTimersByTimeAsync(0); // flush startScreencast
-    await vi.advanceTimersByTimeAsync(250); // 越过 MIN_FRAME_GAP，首批 CDP 帧可用
-    emit(Buffer.from(JPEG).toString('base64')); // 250ms：<500ms 录制门未开 → 只扇出不录
-    await vi.advanceTimersByTimeAsync(250); // t=500 观看轮询 tick（KEEPALIVE 未满足不抢帧）
-    emit(Buffer.from(JPEG).toString('base64')); // 500ms：录制门开 → 录
+    await vi.advanceTimersByTimeAsync(250); // past MIN_FRAME_GAP, first batch of CDP frames available
+    emit(Buffer.from(JPEG).toString('base64')); // 250ms: <500ms recording gate not open → fanout only, no recording
+    await vi.advanceTimersByTimeAsync(250); // t=500 viewer polling tick (KEEPALIVE unsatisfied, doesn't grab frames)
+    emit(Buffer.from(JPEG).toString('base64')); // 500ms: recording gate open → recorded
     await vi.advanceTimersByTimeAsync(100);
     live.close();
     const rp = fakeConn();
@@ -431,13 +431,13 @@ describe('录制与回放', () => {
     expect(rp.res.status).toBe(200);
     await vi.advanceTimersByTimeAsync(3000);
     const bod = Buffer.concat(rp.body());
-    expect(countBytes(bod, FRAME_HEADER)).toBe(2); // 首帧(setPage) + 500ms 那帧
+    expect(countBytes(bod, FRAME_HEADER)).toBe(2); // first frame (setPage) + the 500ms frame
     expect(rp.res.writableEnded).toBe(true);
 
-    // 无人观看：轮询按 2000ms 慢节流录制
+    // No viewers: polling records on the 2000ms slow throttle
     const live2 = reg('unviewed-cad');
     live2.setPage(fakePage([() => Promise.resolve(JPEG)]) as never);
-    await vi.advanceTimersByTimeAsync(2200); // t=0 首帧 + t=2000 第 2 帧
+    await vi.advanceTimersByTimeAsync(2200); // t=0 first frame + t=2000 second frame
     live2.close();
     const rp2 = fakeConn();
     replay(rp2.req, rp2.res, 'unviewed-cad');
@@ -450,7 +450,7 @@ describe('录制与回放', () => {
   it('回放前提：live 未结束 404、录制为空 404', async () => {
     vi.useFakeTimers();
     const { registerLiveView: reg, handleLiveReplay: replay } = await freshLiveView();
-    // 仍在 live（未 close）→ 404
+    // Still live (not closed) → 404
     const live = reg();
     live.setPage(fakePage([() => Promise.resolve(JPEG)]) as never);
     await vi.advanceTimersByTimeAsync(0);
@@ -458,7 +458,7 @@ describe('录制与回放', () => {
     replay(conn.req, conn.res, live.key);
     expect(conn.res.status).toBe(404);
     live.close();
-    // 从未出帧（无录制）→ 404
+    // Never produced a frame (no recording) → 404
     const empty = reg();
     empty.close();
     const conn2 = fakeConn();
@@ -471,12 +471,12 @@ describe('录制与回放', () => {
     const { registerLiveView: reg, handleLiveReplay: replay } = await freshLiveView();
     const a = reg('dup-replay');
     a.setPage(fakePage([() => Promise.resolve(JPEG)]) as never);
-    await vi.advanceTimersByTimeAsync(0); // 首帧入录
+    await vi.advanceTimersByTimeAsync(0); // first frame recorded
     a.close();
     let rp = fakeConn();
     replay(rp.req, rp.res, 'dup-replay');
-    expect(rp.res.status).toBe(200); // run1 回放可用
-    const b = reg('dup-replay'); // 第二次执行：旧源（含旧录制）被终结
+    expect(rp.res.status).toBe(200); // run1 replay available
+    const b = reg('dup-replay'); // second run: the old source (with its old recording) is terminated
     b.setPage(fakePage([() => Promise.resolve(JPEG2)]) as never);
     await vi.advanceTimersByTimeAsync(0);
     b.close();
@@ -485,8 +485,8 @@ describe('录制与回放', () => {
     expect(rp.res.status).toBe(200);
     await vi.advanceTimersByTimeAsync(3000);
     const bod = Buffer.concat(rp.body());
-    expect(bod.includes(JPEG)).toBe(false); // 旧帧不在
-    expect(bod.includes(JPEG2)).toBe(true); // 只有新录制
+    expect(bod.includes(JPEG)).toBe(false); // old frame absent
+    expect(bod.includes(JPEG2)).toBe(true); // only the new recording
     expect(rp.res.writableEnded).toBe(true);
   });
 
@@ -495,7 +495,7 @@ describe('录制与回放', () => {
     const { registerLiveView: reg, handleLiveReplay: replay } = await freshLiveView();
     const live = reg();
     live.setPage(fakePage([() => Promise.resolve(JPEG), () => Promise.resolve(JPEG2)]) as never);
-    await vi.advanceTimersByTimeAsync(2200); // 2 帧入录
+    await vi.advanceTimersByTimeAsync(2200); // 2 frames recorded
     live.close();
     const p1 = fakeConn();
     replay(p1.req, p1.res, live.key);
@@ -503,7 +503,7 @@ describe('录制与回放', () => {
     replay(p2.req, p2.res, live.key);
     expect(p1.res.status).toBe(200);
     expect(p2.res.status).toBe(200);
-    p1.close(); // 断开一路（清其回放定时器）
+    p1.close(); // disconnect one (clears its replay timers)
     await vi.advanceTimersByTimeAsync(3000);
     expect(p2.res.writableEnded).toBe(true);
     const b1 = Buffer.concat(p2.body());
@@ -519,17 +519,17 @@ describe('录制与回放', () => {
       const key = `lru-${k}`;
       const live = reg(key);
       live.setPage(fakePage([() => Promise.resolve(JPEG)]) as never);
-      await vi.advanceTimersByTimeAsync(0); // 冲掉 setPage 首 tick 截图入录
-      live.close(); // 逐份终结 → 7 份录制撑破 MAX_RETAINED_RECORDINGS
+      await vi.advanceTimersByTimeAsync(0); // flush the setPage first-tick screenshot into the recording
+      live.close(); // terminate one by one → 7 recordings overflow MAX_RETAINED_RECORDINGS
       keys.push(key);
     }
     const dropped = fakeConn();
     replay(dropped.req, dropped.res, keys[0]!);
-    expect(dropped.res.status).toBe(404); // 最早过期者被淘汰
+    expect(dropped.res.status).toBe(404); // the earliest-expiring one was evicted
     for (const key of keys.slice(1)) {
       const conn = fakeConn();
       replay(conn.req, conn.res, key);
-      expect(conn.res.status).toBe(200); // 界内者仍可回放
+      expect(conn.res.status).toBe(200); // in-bound ones still replayable
     }
   });
 
@@ -538,54 +538,54 @@ describe('录制与回放', () => {
     const { registerLiveView: reg, handleLiveReplay: replay } = await freshLiveView();
     const live = reg('ttl-rec');
     live.setPage(fakePage([() => Promise.resolve(JPEG)]) as never);
-    await vi.advanceTimersByTimeAsync(500); // 录首帧（close 前）
-    live.close(); // dead，expiresAt = close + 30min
+    await vi.advanceTimersByTimeAsync(500); // record the first frame (before close)
+    live.close(); // dead, expiresAt = close + 30min
     const within = fakeConn();
     replay(within.req, within.res, 'ttl-rec');
-    expect(within.res.status).toBe(200); // TTL 内可回放
-    await vi.advanceTimersByTimeAsync(31 * 60_000); // 越过 30min
+    expect(within.res.status).toBe(200); // replayable within TTL
+    await vi.advanceTimersByTimeAsync(31 * 60_000); // past 30min
     const expired = fakeConn();
     replay(expired.req, expired.res, 'ttl-rec');
-    expect(expired.res.status).toBe(404); // 懒检查删除
+    expect(expired.res.status).toBe(404); // removed by lazy check
     const again = fakeConn();
     replay(again.req, again.res, 'ttl-rec');
-    expect(again.res.status).toBe(404); // 注册表已清（再次确认）
+    expect(again.res.status).toBe(404); // registry cleared (reconfirmed)
   });
 
   it('回放倍速：speed=N 压缩帧间隔（约 1/N），非法/缺失 → 1x', async () => {
     vi.useFakeTimers();
     const { registerLiveView: reg, handleLiveReplay: replay, replaySpeedOf } = await freshLiveView();
-    // 两帧录制，原始帧差 2000ms（无人观看慢节流）
+    // Two-frame recording, original frame gap 2000ms (unviewed slow throttle)
     const record = (key: string) => {
       const live = reg(key);
       live.setPage(fakePage([() => Promise.resolve(JPEG), () => Promise.resolve(JPEG2)]) as never);
       return live;
     };
-    // 1x：帧差 2000ms
+    // 1x: frame gap 2000ms
     const one = record('sp-1');
     await vi.advanceTimersByTimeAsync(2200);
     one.close();
     const c1 = fakeConn();
     replay(c1.req, c1.res, 'sp-1', { speed: 1 });
     await vi.advanceTimersByTimeAsync(1999);
-    expect(countBytes(Buffer.concat(c1.body()), FRAME_HEADER)).toBe(1); // 尚未到次帧
+    expect(countBytes(Buffer.concat(c1.body()), FRAME_HEADER)).toBe(1); // next frame not yet due
     await vi.advanceTimersByTimeAsync(1);
     expect(countBytes(Buffer.concat(c1.body()), FRAME_HEADER)).toBe(2);
 
-    // 4x：2000/4 = 500ms 出第二帧并 end
+    // 4x: 2000/4 = 500ms, second frame then end
     const four = record('sp-4');
     await vi.advanceTimersByTimeAsync(2200);
     four.close();
     const c4 = fakeConn();
     replay(c4.req, c4.res, 'sp-4', { speed: 4 });
-    expect(countBytes(Buffer.concat(c4.body()), FRAME_HEADER)).toBe(1); // 首帧即出
+    expect(countBytes(Buffer.concat(c4.body()), FRAME_HEADER)).toBe(1); // first frame out immediately
     await vi.advanceTimersByTimeAsync(499);
     expect(countBytes(Buffer.concat(c4.body()), FRAME_HEADER)).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(countBytes(Buffer.concat(c4.body()), FRAME_HEADER)).toBe(2);
     expect(c4.res.writableEnded).toBe(true);
 
-    // 8x：2000/8 = 250ms（受 REPLAY_MIN_GAP 之前的压缩值，未触底）
+    // 8x: 2000/8 = 250ms (the compressed value before hitting REPLAY_MIN_GAP, not yet at the floor)
     const eight = record('sp-8');
     await vi.advanceTimersByTimeAsync(2200);
     eight.close();
@@ -595,7 +595,7 @@ describe('录制与回放', () => {
     expect(countBytes(Buffer.concat(c8.body()), FRAME_HEADER)).toBe(2);
     expect(c8.res.writableEnded).toBe(true);
 
-    // 参数解析：缺失 / 0 / 负数 / NaN → 1；超上限 → 8；小数透传
+    // Param parsing: missing / 0 / negative / NaN → 1; above the cap → 8; decimals pass through
     expect(replaySpeedOf({})).toBe(1);
     expect(replaySpeedOf({ speed: '0' })).toBe(1);
     expect(replaySpeedOf({ speed: '-4' })).toBe(1);
@@ -613,24 +613,24 @@ describe('录制与回放', () => {
       meta(c.res as never, key);
       return { status: c.res.status, body: jsonOf(c) };
     };
-    // 运行中（未 dead）→ 无可回放
+    // Running (not dead) → nothing replayable
     const live = reg('meta-live');
     live.setPage(fakePage([() => Promise.resolve(JPEG)]) as never);
-    await vi.advanceTimersByTimeAsync(0); // 冲掉 setPage 首 tick 截图入录
+    await vi.advanceTimersByTimeAsync(0); // flush the setPage first-tick screenshot into the recording
     expect(probe('meta-live')).toEqual({ status: 200, body: { available: false } });
-    // 运行结束且有录制 → available + 元信息
+    // Run ended with a recording → available + metadata
     live.close();
     expect(probe('meta-live')).toEqual({
       status: 200,
       body: { available: true, frames: 1, durationMs: 0, expiresAt: expect.any(Number) },
     });
-    // 从未出帧 → 无可回放
+    // Never produced a frame → nothing replayable
     const empty = reg('meta-empty');
     empty.close();
     expect(probe('meta-empty').body).toEqual({ available: false });
-    // 未注册的 key → 无可回放
+    // Unregistered key → nothing replayable
     expect(probe('meta-nope').body).toEqual({ available: false });
-    // TTL 过期（懒检查先把条目删出注册表）→ 无可回放
+    // TTL expired (the lazy check first deletes the entry from the registry) → nothing replayable
     await vi.advanceTimersByTimeAsync(31 * 60_000);
     expect(probe('meta-live').body).toEqual({ available: false });
   });

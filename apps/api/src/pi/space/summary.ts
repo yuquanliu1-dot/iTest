@@ -1,6 +1,6 @@
 /**
- * 版本空间上下文摘要:经 system prompt 注入(线程创建时),让 AI 免查直答"有哪些环境/分组/需求"。
- * 上限防 prompt 膨胀;密钥只计数量,绝不进摘要。
+ * Version-space context summary: injected via the system prompt (at thread creation) so the AI can answer "which environments/groups/requirements exist" without querying.
+ * Caps guard against prompt bloat; secrets are counted only, never included in the summary.
  */
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/client.js';
@@ -18,7 +18,7 @@ const MAX_REQS = 20;
 const MAX_DEVICES = 10;
 const MAX_DATASETS = 20;
 
-/** 摘要单字段预算:项目描述超 100 字截断。 */
+/** Per-field summary budget: project descriptions over 100 chars are truncated. */
 function clip100(s: string): string {
   return s.length > 100 ? `${s.slice(0, 100)}…` : s;
 }
@@ -83,7 +83,7 @@ export async function buildSpaceSummary(versionId: string): Promise<SpaceSummary
     lines.push(`用例分组:${gs.slice(0, MAX_GROUPS).map((g) => g.name).join('、')}${gs.length > MAX_GROUPS ? ' …' : ''}`);
   }
 
-  // 场景从属需求(scenarios.requirement_id 非空),AI 操作场景前需要能对上需求 id
+  // Scenarios belong to requirements (scenarios.requirement_id non-null); the AI needs to map requirement ids before operating on scenarios
   const reqs = await db
     .select({ id: requirements.id, title: requirements.title })
     .from(requirements)

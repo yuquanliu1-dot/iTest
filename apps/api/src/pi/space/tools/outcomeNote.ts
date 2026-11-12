@@ -1,56 +1,58 @@
 /**
- * expectedOutcome 自洽性体检（stage_case 新建 / stage_case_op 改预期共用）：
+ * expectedOutcome self-consistency check (shared by stage_case creation / stage_case_op expectation changes):
  *
- * verify 的终态判定（VisionAssertionFailed）只有一条软肋——expectedOutcome 断言了一个
- * 步骤根本不会产生的业务状态，终态判定必然落空，AI 又没有更好的过关手段，于是弱化预期
- * 蒙混通过。2026-10-13 prod228 实测：用例只做「进页面看列表」，expectedOutcome 却写
- * 「自动启动处置成功」；自动处置 tab 恒 0 条，三轮验证全败后 AI 把预期改成
- * 「页面正常加载」过关——用例被改成测不出东西，比失败更糟。
+ * verify's final-state judgment (VisionAssertionFailed) has only one soft spot — when expectedOutcome asserts a business
+ * state the steps can never produce, the final-state judgment is guaranteed to miss, the AI has no better way to pass,
+ * and so it waters down the expectation to sneak through. Measured on prod228 2026-10-13: the case only did "open the page
+ * and look at the list", yet expectedOutcome said 「自动启动处置成功」; the auto-disposition tab stayed at 0 rows, and after
+ * three failed verification rounds the AI changed the expectation to 「页面正常加载」 to pass — the case was rewritten into
+ * something that tests nothing, which is worse than failing.
  *
- * 本模块把这类不自洽摆到**暂存那一刻**（而不是验证失败之后）：断言业务结果 + 步骤里却没有
- * 能产生该结果的操作 → 提示补造数步骤，或如实调整预期。
+ * This module surfaces such inconsistencies at the moment of staging (not after verification fails): asserting a business
+ * result + no step capable of producing it → prompt to add a data-seeding step, or honestly adjust the expectation.
  *
- * 纯启发式、只提示不判死：步骤描述是自然语言，写法千变万化，误报把正确用例带偏比漏报更伤。
- * 2026-10-29 dump1 实录再补两类免报形态：① 步骤用 sendSyslog/sql/observeLog 等协议步
- * 产生或取证 SUT 状态（syslog 事件本身就能触发 SUT 联动），旧口径只认 UI 动词与
- * mutating http，把这类用例误报成「造不出状态」；② 预期本身就是纯观察型（页面可达/
- * 元素可见），没有「造不出」可言。
+ * Purely heuristic, advisory only, never a hard kill: step descriptions are natural language in endless varieties; a false
+ * positive leading a correct case astray hurts more than a missed one. The 2026-10-29 dump1 field log added two exempted shapes:
+ * (1) steps using sendSyslog/sql/observeLog-style protocol steps to produce or capture SUT state (a syslog event by itself can
+ * trigger SUT side-effects); the old rule only recognized UI verbs and mutating http, misreporting such cases as "cannot produce
+ * the state"; (2) expectations that are themselves purely observational (page reachable / element visible), where "cannot produce"
+ * doesn't even apply.
  */
 import type { StepAction } from '@itest/shared';
 
-/** 会改变服务端状态的操作动词——出现即认为本步骤自己造得出被断言的业务状态。
- *  刻意排除「处理/处置/分配」等在观察语境里同样高频的词：prod228 实测
- *  「查看工单处置状态」含「处置」，纳入会让观察型用例被误判为「会造数」。 */
+/** Operation verbs that change server-side state — presence means the step can itself produce the asserted business state.
+ *  Deliberately excludes words like 「处理/处置/分配」 that are equally frequent in observational contexts: measured on prod228,
+ *  「查看工单处置状态」 contains 「处置」; including it would misjudge observational cases as "will seed data". */
 const OP_VERB_RE = /新建|新增|创建|添加|录入|导入|上传|提交|保存|删除|移除|修改|编辑|更新|启用|禁用|停用|发布|撤回|撤销|重试|同步/;
 
-/** expectedOutcome 断言了「某件事已发生」而非「页面能打开」。 */
+/** expectedOutcome asserts "something has happened" rather than "the page can be opened". */
 const RESULT_RE = /成功|失败|生效|触发|已?生成|完成|变更|更新为|变更为|显示为|自动启动/;
 
-/** 造数的另一种形态：mutating httpRequest（API 造数 → UI 验证）。 */
+/** Another shape of data seeding: mutating httpRequest (seed via API → verify via UI). */
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-/** 会产生或取证 SUT 状态的 compiled 动作 kind：sendSyslog 向被测系统写事件（可触发 SIEM
- *  联动=业务结果本身）、sql 可写被测库、observeLog 验证 SUT 已发生的事实（事件由真实流量
- *  产生）。
- *  httpRequest 不在此列：mutating 与否按 method 判（GET 是读取，MUTATING_METHODS 已覆盖）。 */
+/** compiled action kinds that produce or capture SUT state: sendSyslog writes events into the SUT (can trigger SIEM
+ *  side-effects = the business result itself), sql can write the SUT database, observeLog verifies facts that already
+ *  happened in the SUT (events produced by real traffic).
+ *  httpRequest is not in this set: mutating or not is judged by method (GET is a read; MUTATING_METHODS already covers it). */
 const EVIDENCE_KINDS: ReadonlySet<string> = new Set(['sendSyslog', 'sql', 'observeLog']);
 
-/** 纯观察型预期（页面可达 / 元素可见）：不存在「造不出」的问题，不体检。 */
+/** Purely observational expectations (page reachable / element visible): "cannot produce" doesn't apply; not checked. */
 const OBSERVATIONAL_OUTCOME_RE = /可达|可见|渲染|展示|显示|加载出|页面正常|正常打开/;
 
-/** 强业务结果词：与观察词同时出现时不豁免（「列表可见且自动启动处置」仍要体检——
- *  防「弱化成观察措辞 + 保留结果词」两头占的蒙混形态）。 */
+/** Strong business-result words: when co-occurring with observational words, no exemption (「列表可见且自动启动处置」 is still checked —
+ *  guarding against the both-ends sneak shape of "water down to observational wording + keep the result word"). */
 const STRONG_RESULT_RE = /生效|触发|已?生成|变更|更新为|变更为|显示为|自动启动/;
 
 export interface OutcomeNoteInput {
   expectedOutcome: string | null | undefined;
-  /** 步骤的自然语言描述（staged case 的 action / DB step 的 instruction）。 */
+  /** The step's natural-language description (a staged case's action / a DB step's instruction). */
   stepActions: Array<string | null | undefined>;
-  /** 步骤的 compiled，用于识别 httpRequest / 协议步造数。 */
+  /** The step's compiled, used to recognize httpRequest / protocol-step data seeding. */
   stepCompileds: Array<unknown>;
 }
 
-/** 步骤里是否有能产生业务状态的操作动作（操作动词 / mutating httpRequest / 协议取证步）。 */
+/** Whether the steps contain an operation action that can produce the business state (operation verbs / mutating httpRequest / protocol evidence steps). */
 function hasStateChangingAction(stepActions: string[], stepCompileds: unknown[]): boolean {
   if (stepActions.some((a) => typeof a === 'string' && OP_VERB_RE.test(a))) return true;
   return stepCompileds.some((compiled) =>
@@ -62,13 +64,13 @@ function hasStateChangingAction(stepActions: string[], stepCompileds: unknown[])
 }
 
 /**
- * 返回体检提示；无问题返回 null。
- * 只覆盖「预期断言了业务结果、步骤却造不出」这一种——最常见、危害最大的一类不自洽。
+ * Returns the check note; null when there is no problem.
+ * Covers only "the expectation asserts a business result but the steps cannot produce it" — the most common, most damaging kind of inconsistency.
  */
 export function buildOutcomeNote(input: OutcomeNoteInput): string | null {
   const outcome = typeof input.expectedOutcome === 'string' ? input.expectedOutcome.trim() : '';
   if (!outcome || !RESULT_RE.test(outcome)) return null;
-  // 纯观察型预期（观察词 + 无强结果词）不体检：它验证的是可达性/可见性，不欠一笔「造数」。
+  // Purely observational expectations (observational words + no strong-result word) are not checked: they verify reachability/visibility and owe no "data seeding".
   if (OBSERVATIONAL_OUTCOME_RE.test(outcome) && !STRONG_RESULT_RE.test(outcome)) return null;
   if (hasStateChangingAction(
     input.stepActions.filter((a): a is string => typeof a === 'string'),

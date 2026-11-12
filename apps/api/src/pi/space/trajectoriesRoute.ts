@@ -1,8 +1,8 @@
 /**
- * assistant_trajectories 管理端（设置页「助手轨迹」）：GET 分页列表 + DELETE 软删。
- * 挂载于 /api/assistant/trajectories，router.ts 处 requireManager 保护。
- * 与 memoriesRoute 的差异：无 global 档；可见性条件下推 SQL 后再分页（R1 终审教训：
- * 先 limit 后过滤会在全库超限时把本组织旧行静默挤出窗口）。
+ * assistant_trajectories admin surface (settings page "助手轨迹"): GET paged list + DELETE soft delete.
+ * Mounted at /api/assistant/trajectories, protected by requireManager in router.ts.
+ * Difference from memoriesRoute: no global tier; visibility conditions are pushed down into SQL before paging (R1 final-review lesson:
+ * limit-then-filter silently squeezes this organization's old rows out of the window when the DB-wide cap is exceeded).
  */
 import { Router } from 'express';
 import { and, count, desc, eq, inArray, type SQL } from 'drizzle-orm';
@@ -20,7 +20,7 @@ trajectoriesRoute.get('/', async (req, res) => {
   const q = req.query;
   const { page, limit } = parsePaging(q as Record<string, unknown>);
   const visible = await visibleProductLineIds(user);
-  // inArray 不吃空数组 → 无可见线时直接回空页（不能退化成「不加可见性条件」）
+  // inArray rejects empty arrays → with no visible lines, return an empty page directly (must not degrade to "drop the visibility condition")
   if (visible.length === 0) {
     res.json({ items: [], total: 0, page, limit });
     return;
@@ -50,7 +50,7 @@ trajectoriesRoute.get('/', async (req, res) => {
       .from(assistantTrajectories)
       .leftJoin(productLines, eq(assistantTrajectories.productLineId, productLines.id))
       .where(where)
-      // updatedAt 非唯一 → 追加 id 作 tiebreaker，否则跨页会重复/漏行
+      // updatedAt isn't unique → append id as tiebreaker, otherwise paging repeats/skips rows
       .orderBy(desc(assistantTrajectories.updatedAt), desc(assistantTrajectories.id))
       .limit(limit)
       .offset((page - 1) * limit),
@@ -64,7 +64,7 @@ trajectoriesRoute.delete('/:id', async (req, res) => {
   const existing = (await db.select().from(assistantTrajectories).where(eq(assistantTrajectories.id, req.params.id)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', '轨迹不存在');
   await assertProductLineVisible(existing.productLineId, user);
-  // 软删保审计；注入与检索只取 active → 删除即从助手侧消失
+  // Soft delete preserves audit; injection and retrieval only take active → deletion makes it vanish from the assistant side
   await db.update(assistantTrajectories)
     .set({ status: 'deleted', updatedAt: new Date() })
     .where(eq(assistantTrajectories.id, req.params.id));

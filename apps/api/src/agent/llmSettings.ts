@@ -9,14 +9,14 @@ import {
   type LLMResult,
 } from './llm-client.js';
 
-/** 多渠道 settings 键（旧版 5 个单键已由 db/migrateLlmChannels.ts 迁移后删除）。 */
+/** Multi-channel settings keys (the 5 legacy single keys were migrated by db/migrateLlmChannels.ts and then removed). */
 export const CHANNEL_KEYS = {
   channels: 'llm_channels',
   defaultChannel: 'llm_default_channel',
   visionChannel: 'llm_vision_channel',
 } as const;
 
-/** 一个 LLM 渠道（settings 键 llm_channels 数组元素）。 */
+/** One LLM channel (an element of the settings key llm_channels array). */
 export interface LlmChannel {
   id: string;
   name: string;
@@ -34,13 +34,13 @@ export interface ResolvedLLM {
 
 const VALID_PROVIDERS: readonly LLMProvider[] = ['openai', 'anthropic', 'google'];
 
-/** maxTokens 唯一解析口径：数字或字符串数字，正整数才生效，否则 undefined（client 用默认）。 */
+/** The single parsing convention for maxTokens: number or numeric string; only positive integers take effect, otherwise undefined (client uses its default). */
 export function parseMaxTokens(v: unknown): number | undefined {
   const n = Number(String(v ?? '').trim());
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-/** 解析 llm_channels 存储值；非数组或元素畸形（缺 id/provider 非法）逐个过滤。 */
+/** Parse the stored llm_channels value; filter out non-arrays and malformed elements one by one (missing id / invalid provider). */
 export function parseChannels(v: unknown): LlmChannel[] {
   if (!Array.isArray(v)) return [];
   const out: LlmChannel[] = [];
@@ -64,7 +64,7 @@ export function parseChannels(v: unknown): LlmChannel[] {
   return out;
 }
 
-/** API Key 掩码：>8 位留首尾各 4 位，否则全掩。 */
+/** API key masking: for >8 chars keep the first and last 4, otherwise mask everything. */
 export function maskApiKey(key: string): string {
   if (!key) return '';
   return key.length > 8 ? `${key.slice(0, 4)}****${key.slice(-4)}` : '****';
@@ -80,16 +80,16 @@ function channelToConfig(c: LlmChannel): LLMConfig {
   };
 }
 
-/** 请求是否含图：单图字段或多轮 history 任一 image block。 */
+/** Whether the request contains images: the single-image field or any image block in the multi-turn history. */
 function requestHasImages(req: LLMRequest): boolean {
   if (req.image != null) return true;
   return req.messages?.some((m) => m.content.some((b) => b.type === 'image')) ?? false;
 }
 
 /**
- * 视觉路由 client：含图请求走视觉渠道，纯文本走默认渠道。
- * LLMResult 从被路由 client 原样透传（model/usage 反映实际执行的渠道）。
- * 挂在 client 边界而非调用点——同一 client 变量常既做纯文本前置检查又传给含图的 runAiTask。
+ * Vision routing client: image-bearing requests go to the vision channel, plain text goes to the default channel.
+ * LLMResult is passed through unchanged from the routed client (model/usage reflect the channel actually executed).
+ * Attached at the client boundary rather than call sites — the same client variable often does both plain-text prechecks and image-bearing runAiTask calls.
  */
 export class VisionRoutingClient implements LLMClient {
   constructor(
@@ -104,9 +104,9 @@ export class VisionRoutingClient implements LLMClient {
   }
 }
 
-/** 从 settings 表读取 LLM 配置。旧版单渠道已迁移为 llm_channels 数组，此处只认新结构：
- *  未配置任何渠道 → 抛错（LLM 功能需先在设置中新增渠道）。
- *  配置了视觉渠道时返回 VisionRoutingClient（含图请求自动路由到视觉渠道），调用点无感。 */
+/** Read LLM config from the settings table. The legacy single channel has been migrated to the llm_channels array; only the new structure is recognized here:
+ *  no channels configured → throw (LLM features require adding a channel in settings first).
+ *  When a vision channel is configured, returns VisionRoutingClient (image-bearing requests auto-route to the vision channel), transparent to call sites. */
 export async function resolveLlmClient(): Promise<ResolvedLLM> {
   if (injectedClient) return injectedClient;
   const rows = await db.select().from(settings);
@@ -136,7 +136,7 @@ export async function resolveLlmClient(): Promise<ResolvedLLM> {
   return { config, client: mainClient };
 }
 
-/** 单元测试可注入客户端；非空时所有 resolveLlmClient() 调用直接返回它，绕过 settings 表。 */
+/** Client injectable for unit tests; when non-null, all resolveLlmClient() calls return it directly, bypassing the settings table. */
 let injectedClient: ResolvedLLM | null = null;
 export function __setLlmClientForTest(c: ResolvedLLM | null): void {
   injectedClient = c;

@@ -3,9 +3,9 @@ import type { LLMClient, LLMCompleteResult, LLMConfig, LLMMessage, LLMRequest, L
 import { tryParseJson } from './llm-client.js';
 import { langDirective } from './langDirective.js';
 
-/** 滚动缓存断点：system 与最后一条消息各打一个。缓存按前缀匹配，断点只打在
- *  system 上时，多轮累积的前缀从第 2 轮起全部 miss（2026-10-14 网关实测 2%）；
- *  打在最后一条消息上后命中率 86~94%。低于 1024 token 的前缀会被忽略，不报错。 */
+/** Rolling cache breakpoints: one on system and one on the last message. Caching matches by prefix; with breakpoints only
+ *  on system, the multi-turn accumulated prefix misses entirely from turn 2 onward (2026-10-14 gateway-measured 2%);
+ *  after placing one on the last message, hit rate is 86~94%. Prefixes under 1024 tokens are ignored without error. */
 const EPHEMERAL = { type: 'ephemeral' } as const;
 
 function buildMessages(req: LLMRequest): Anthropic.MessageParam[] {
@@ -22,8 +22,8 @@ function buildMessages(req: LLMRequest): Anthropic.MessageParam[] {
   return msgs.map((m, i) => ({
     role: m.role,
     content: m.content.map((b, bi) => {
-      // 滚动断点：打在最后一条消息的最后一个 block 上（system 上的那个断点
-      // 只覆盖 system，不覆盖逐轮增长的历史）。
+      // Rolling breakpoint: placed on the last block of the last message (the breakpoint on system
+      // only covers system, not the per-turn growing history).
       const cc = i === last && bi === m.content.length - 1 ? { cache_control: EPHEMERAL } : {};
       return b.type === 'image'
         ? { type: 'image' as const, source: { type: 'base64' as const, media_type: b.mime, data: b.base64 }, ...cc }
@@ -44,16 +44,16 @@ export class AnthropicClient implements LLMClient {
     const t0 = Date.now();
     const resp = await this.client.messages.create({
       model,
-      // Anthropic API 必填且思考内容也计入该预算：网关别名路由到 thinking 模型时
-      // 4096 会被思考整段吃光 → text 空、JSON 解析必失败（2026-11-01 prod 实测）。
-      // 设置页 llm_max_tokens 可调大（如 16384）；缺省保持 4096。
+      // Required by the Anthropic API, and thinking content also counts against this budget: when the gateway alias routes to a thinking model,
+      // 4096 gets consumed entirely by thinking → empty text, JSON parsing always fails (2026-11-01 prod-measured).
+      // llm_max_tokens on the settings page can raise it (e.g. 16384); default stays 4096.
       max_tokens: this.cfg.maxTokens ?? 4096,
       system: [{ type: 'text', text: systemPrompt || 'You are a helpful assistant. Reply with JSON only.', cache_control: EPHEMERAL }],
       messages: buildMessages(req),
     });
     const durationMs = Date.now() - t0;
-    // 网关安全策略静默拦截时可能返回 200 但无 content（output_tokens 0、无 stop_reason）。
-    // 不防守会让下面 .filter 抛裸 TypeError，且被 failureClassifier 的 SlowLoad 兜底吞掉。
+    // The gateway security policy may silently intercept and return 200 with no content (output_tokens 0, no stop_reason).
+    // Without guarding, the .filter below throws a bare TypeError, and it gets swallowed by failureClassifier's SlowLoad fallback.
     if (!Array.isArray(resp.content)) {
       const err = new Error(
         `LLM 网关返回空响应(无 content,可能被安全策略静默拦截):provider=${this.provider},model=${model},output_tokens=${resp.usage?.output_tokens ?? 0},input_tokens=${resp.usage?.input_tokens ?? 0},durationMs=${durationMs}`,
@@ -64,8 +64,8 @@ export class AnthropicClient implements LLMClient {
     const text = resp.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
     const json = tryParseJson(text);
     const base: LLMCompleteResult = json ? { kind: 'json', value: json } : { kind: 'text', value: text };
-    // promptTokens 只含本次新计算的 token；命中缓存的部分单列在 cacheReadTokens，
-    // 两者相加才是真实计费量（报告据此展示缓存命中，避免"token 变少"被误读为省了 prompt）。
+    // promptTokens only contains tokens newly computed this call; the cache-hit part is listed separately in cacheReadTokens,
+    // and the two added together are the real billed amount (the report uses this to show cache hits, avoiding "fewer tokens" being misread as prompt savings).
     const usage = {
       promptTokens: resp.usage?.input_tokens ?? 0,
       completionTokens: resp.usage?.output_tokens ?? 0,

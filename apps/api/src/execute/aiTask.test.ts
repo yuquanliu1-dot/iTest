@@ -70,9 +70,9 @@ describe('assembleSystemPrompt - 凭据段门控', () => {
     const p = assembleSystemPrompt({ credEnabled: false, manifest: '' });
     expect(p).toContain('目标已达成即完成');
     expect(p).toContain('零动作');
-    // 完成判据规则对零动作完成显式豁免——否则模型不敢零动作 done，空转到轮数耗尽
+    // The completion-criteria rule explicitly exempts zero-action done — otherwise the model wouldn't dare zero-action done and would idle until turns run out
     expect(/完成判据要执行证据[\s\S]*?零动作完成（上一条）/.test(p)).toBe(true);
-    // mobile 提示词同步（移动端确认式步骤同样存在）
+    // mobile prompt sync (mobile confirmation-style steps have the same requirement)
     const m = assembleSystemPrompt({ mobile: true, credEnabled: true, manifest: '' });
     expect(m).toContain('目标已达成即完成');
   });
@@ -229,7 +229,7 @@ describe('scopeViolationReason / originOf - 探索范围闸（2026-11-10 prod �
   it('空白名单 = 全拒（起点 origin 不可解析时的保守口径）', () => {
     expect(scopeViolationReason('http://127.0.0.1:56100/defect.html', [])).toContain('越界');
     expect(scopeViolationReason('http://127.0.0.1:56100/defect.html', [])).toContain('http://127.0.0.1:56100');
-    // URL 不可解析 → 原因点名「不可解析」（不静默放行）
+    // Unparseable URL → the reason names it 「不可解析」 (no silent pass-through)
     expect(scopeViolationReason('not a url', ['https://sut.example'])).toContain('不可解析');
   });
 
@@ -266,7 +266,7 @@ describe('renderSqlProbeRows - 取证结果回灌渲染（四级封顶，防撑�
 
   it('单行超 160 字符截断加省略号', () => {
     const out = renderSqlProbeRows([{ a: 'x'.repeat(200) }], 1, false);
-    // 单元格自身已截到 60，行长 = "- a=" + 60 + 1 → 未超 160；换多列触发行截断
+    // The cell itself is already capped at 60; row length = "- a=" + 60 + 1 → under 160; multi-column triggers the row-level truncation
     const wide = renderSqlProbeRows(
       [Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`c${i}`, 'x'.repeat(60)]))],
       1,
@@ -274,7 +274,7 @@ describe('renderSqlProbeRows - 取证结果回灌渲染（四级封顶，防撑�
     );
     expect(wide.split('\n')[0]!.length).toBe(161);
     expect(wide.split('\n')[0]!.endsWith('…')).toBe(true);
-    // 单列 200 字符：先被单元格 60 封顶截断，行本身未超 160
+    // Single column of 200 chars: first capped by the cell's 60-char truncation, so the row itself stays under 160
     expect(out).toContain('a=');
   });
 

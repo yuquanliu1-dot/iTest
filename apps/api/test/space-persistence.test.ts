@@ -1,17 +1,17 @@
 /**
- * AI 助手会话文件持久化（pi JSONL 落盘）验收用例。
- * 必须走真实会话工厂——stub 工厂不碰磁盘，测不出持久化与重启恢复。
- * 隔离口径：
- *  - 动态 import session.js 之前先把 PI_DATA_DIR 指到 mkdtemp 临时目录（repo.ts 的 DATA_DIR
- *    在模块加载时读 env），测试产物不落开发者真实的 .data，afterAll 整目录删除；
- *  - llm_base_url 指向本地 400 桩服务：400 不命中 pi 的可重试错误模式（pi-ai
- *    utils/retry.js 的 RETRYABLE_PROVIDER_ERROR_PATTERN 只认连接类/429/5xx 文案），
- *    prompt 立即失败；若用死端口，连接错误会触发助手级重试 3 次指数退避（2s+4s+8s ≈ 14s/条）。
- *    key 是假的（sk-test），桩服务绑端口 0 由内核分配，永不出网也永不撞端口。
- * 断言口径：
- *  - pi 在 persist=true 时立即分配 sessionFile 路径，落盘被 _hasConversation() 门延后；
- *  - 用户消息在联系模型之前就 flush 进 JSONL，所以模型调不通文件也照样在；
- *  - resetSpaceSessions() 只丢内存 record，DB 行与磁盘文件都还在。
+ * Acceptance tests for AI assistant session-file persistence (pi JSONL on disk).
+ * Must go through the real session factory — the stub factory never touches disk, so it cannot test persistence or restart recovery.
+ * Isolation approach:
+ *  - Before dynamically importing session.js, point PI_DATA_DIR at an mkdtemp temp dir (repo.ts's DATA_DIR
+ *    reads env at module load), so test artifacts never land in the developer's real .data; afterAll removes the whole directory;
+ *  - llm_base_url points at a local 400 stub service: 400 does not match pi's retryable error pattern (pi-ai
+ *    utils/retry.js's RETRYABLE_PROVIDER_ERROR_PATTERN only recognizes connection-class/429/5xx wording),
+ *    so prompt fails immediately; with a dead port, connection errors would trigger the assistant-level retry of 3 attempts with exponential backoff (2s+4s+8s ≈ 14s per message).
+ *    The key is fake (sk-test); the stub binds port 0 assigned by the kernel — never leaves the machine and never collides on a port.
+ * Assertion approach:
+ *  - pi assigns the sessionFile path immediately when persist=true; flushing to disk is delayed behind the _hasConversation() gate;
+ *  - the user message is flushed into the JSONL before contacting the model, so the file exists even when the model call fails;
+ *  - resetSpaceSessions() only drops the in-memory record; the DB row and the disk file both remain.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -25,9 +25,9 @@ import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedLlmChannel, seedProject } from './helpers/db.js';
 
 let pool: Pool;
-/** 隔离的 .data 根：必须在任何动态 import session.js（连带 repo.ts 的模块级 DATA_DIR/SESSIONS_ROOT）之前设好。 */
+/** Isolated .data root: must be set before any dynamic import of session.js (which transitively loads repo.ts's module-level DATA_DIR/SESSIONS_ROOT). */
 let tmpDataDir: string;
-/** 400 桩服务：任何请求都立即回 HTTP 400，让 prompt 走不可重试分支快速失败。 */
+/** 400 stub service: every request immediately gets HTTP 400, so prompt takes the non-retryable branch and fails fast. */
 let stubServer: http.Server;
 
 beforeAll(async () => {
@@ -39,17 +39,17 @@ beforeAll(async () => {
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
 
-  // 任何请求一律回 HTTP 400（非可重试错误）：pi 拿到 400 立即失败，不退避重试。
+  // Every request gets HTTP 400 (a non-retryable error): pi fails immediately on 400, no backoff retry.
   stubServer = http.createServer((_req, res) => {
     res.writeHead(400, { 'content-type': 'application/json' });
     res.end('{"error":{"message":"itest test stub rejected the request","type":"invalid_request_error"}}');
   });
   await new Promise<void>((resolve) => stubServer.listen(0, '127.0.0.1', resolve));
   const port = (stubServer.address() as AddressInfo).port;
-  // 真实工厂要求 readLlmConfig 非空。key 是假的(sk-test)，baseUrl 指向 400 桩服务：
-  // 合成模型联系桩即拿到 400（非可重试错误，无退避重试，prompt 快速失败）。
-  // 失败不影响本文件断言——用户消息在联系 provider 之前就已 flush 进 JSONL，"文件落盘"正是要钉的那个点。
-  // 桩的 400 文案刻意避开 pi 的重试/溢出正则关键词（server/internal/timeout/limit/exceeds…）。
+  // The real factory requires a non-empty readLlmConfig. The key is fake (sk-test); baseUrl points at the 400 stub:
+  // the synthesized model gets a 400 the moment it contacts the stub (non-retryable, no backoff retry, prompt fails fast).
+  // The failure does not affect this file's assertions — the user message is flushed into the JSONL before contacting the provider; "file lands on disk" is exactly the point being pinned.
+  // The stub's 400 wording deliberately avoids pi's retry/overflow regex keywords (server/internal/timeout/limit/exceeds…).
   await seedLlmChannel(pool, {
     provider: 'openai',
     apiKey: 'sk-test',
@@ -75,7 +75,7 @@ beforeEach(async () => {
   await pool.query(`TRUNCATE ai_threads RESTART IDENTITY CASCADE`);
 });
 
-/** 建一条 pi_thread_id 为空的 version 线程行（与 POST /threads 落库形状一致）。 */
+/** Create a version thread row with an empty pi_thread_id (same DB shape as POST /threads). */
 async function insertThread(versionId: string): Promise<string> {
   const id = randomUUID();
   await pool.query(`INSERT INTO ai_threads(id, kind, version_id, pi_thread_id) VALUES ($1,'version',$2,'')`, [id, versionId]);
@@ -94,16 +94,16 @@ describe('会话文件持久化(真实工厂,JSONL 落盘)', () => {
     const { ensureSpaceRecord, sendSpaceUserMessage, SESSIONS_ROOT } = await import('../src/pi/space/session.js');
 
     await ensureSpaceRecord(threadId);
-    // pi persist=true 时立即分配 sessionFile 绝对路径并回写 DB，但还没写盘
+    // With pi persist=true the sessionFile absolute path is assigned and written back to the DB immediately, but not yet flushed
     const file = await sessionFileOf(threadId);
     expect(file).not.toBe('');
     expect(file.startsWith(SESSIONS_ROOT)).toBe(true);
     await expect(fs.access(file)).rejects.toThrow();
 
-    // 模型调不通（假 key + 400 桩）会在联系 provider 时立即失败；吞掉它——本例断言的是"文件落盘"，不是"模型有回话"
+    // The model call will fail immediately when contacting the provider (fake key + 400 stub); swallow it — this case asserts "file lands on disk", not "the model replied"
     await sendSpaceUserMessage(threadId, '你好').catch(() => undefined);
     await expect(fs.access(file)).resolves.toBeUndefined();
-    // 不止要文件存在，还要用户消息真的写进去了（空文件/只有头行都算挂）
+    // Not just existence: the user message must really be inside (an empty file or header-only file counts as a failure)
     expect(await fs.readFile(file, 'utf8')).toContain('你好');
   });
 
@@ -118,13 +118,13 @@ describe('会话文件持久化(真实工厂,JSONL 落盘)', () => {
     expect((await snapshotOfThread(threadId))!.metadata.messageCount).toBeGreaterThan(0);
     const file = await sessionFileOf(threadId);
 
-    // 模拟进程重启：只丢内存 record，DB 行与磁盘文件都该还在
+    // Simulate a process restart: only the in-memory record is dropped; the DB row and disk file should both remain
     resetSpaceSessions();
     expect(await snapshotOfThread(threadId)).toBeNull();
     expect(await sessionFileOf(threadId)).toBe(file);
     await expect(fs.access(file)).resolves.toBeUndefined();
 
-    // 重新 ensure → 走 SessionManager.open(piThreadId, ...) 恢复历史
+    // ensure again → goes through SessionManager.open(piThreadId, ...) to restore history
     await ensureSpaceRecord(threadId);
     expect((await snapshotOfThread(threadId))!.metadata.messageCount).toBeGreaterThan(0);
   });
@@ -140,16 +140,16 @@ describe('会话文件持久化(真实工厂,JSONL 落盘)', () => {
       await fs.writeFile(corrupt, 'this is not json\n');
       await pool.query(`UPDATE ai_threads SET pi_thread_id=$2 WHERE id=$1`, [threadId, corrupt]);
 
-      // 一条坏文件不能把列表/快照接口带崩：open 抛错时工厂降级 create，只记 warn
+      // One bad file must not take down the list/snapshot APIs: when open throws, the factory degrades to create and only logs a warn
       await expect(ensureSpaceRecord(threadId)).resolves.toBeTruthy();
-      // 确认确实走了降级分支（而非碰巧 resolve）：路径已换到 SESSIONS_ROOT 下的新会话文件
+      // Confirm the degraded branch really ran (rather than a coincidental resolve): the path has moved to a new session file under SESSIONS_ROOT
       const after = await sessionFileOf(threadId);
       expect(after).not.toBe(corrupt);
       expect(after.startsWith(SESSIONS_ROOT)).toBe(true);
-      // 坏文件不补写、不改写，保持原样
+      // The bad file is not appended to or rewritten; it stays untouched
       expect(await fs.readFile(corrupt, 'utf8')).toBe('this is not json\n');
     } finally {
-      // 断言中途挂也不能把坏文件留在磁盘上
+      // Even a mid-assertion failure must not leave the bad file on disk
       await fs.rm(corrupt, { force: true }).catch(() => undefined);
     }
   });

@@ -1,4 +1,4 @@
-/** 固化管线路由：scan 202/409 防重入/批次与提案查询/approve/reject/权限门。 */
+/** Solidification pipeline routes: scan 202/409 re-entry guard / batch and proposal queries / approve / reject / permission gate. */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,8 +9,8 @@ import type { Express } from 'express';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
-// auth helpers 不能静态 import：auth.service → db/client 在模块加载期即固化
-// DATABASE_URL，会把应用 db 指到 beforeAll 设 env 之前的库（space-skills 同款坑）。
+// auth helpers cannot be statically imported: auth.service → db/client freezes
+// DATABASE_URL at module-load time, which would point the app db at the pre-beforeAll env database (same gotcha as space-skills).
 let managerUserOf: typeof import('./helpers/auth.js').managerUserOf;
 let memberUserOf: typeof import('./helpers/auth.js').memberUserOf;
 
@@ -39,8 +39,8 @@ beforeAll(async () => {
   const express = (await import('express')).default;
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
   mount = async (role) => {
-    // manager 用 seedOrg 落库的真实 userId：scan/approve 写 created_by/reviewed_by 有 FK 约束；
-    // member 只走 403（requireManager 拒在 handler 前），随机 id 无插入、不触 FK。
+    // manager uses the real userId seeded by seedOrg: scan/approve write created_by/reviewed_by which carry FK constraints;
+    // member only hits 403 (requireManager rejects before the handler), a random id inserts nothing and never touches the FK.
     const user = role === 'manager'
       ? managerUserOf(orgUserId, orgUsername, orgId, orgPath)
       : memberUserOf(crypto.randomUUID(), 'mem', orgId, orgPath);
@@ -82,8 +82,8 @@ describe('solidify 路由', () => {
     const app = await mount('manager');
     const res = await request(app).post('/api/assistant/solidify/scan').expect(202);
     expect(res.body.id).toBeTruthy();
-    // 未配置 LLM 时 fire-and-forget 蒸馏毫秒级把批次置 failed（running 窗口一闪而过）。
-    // 等它收场后置回 running，确定性验证 409 防重入（直插 running 的用例见下一条）。
+    // Without an LLM configured, the fire-and-forget distillation flips the batch to failed in milliseconds (the running window flashes by).
+    // Wait for it to settle, then set it back to running, to deterministically verify the 409 re-entry guard (see the next case for a direct-insert running row).
     for (let i = 0; i < 50; i++) {
       const b = await pool.query(`SELECT status FROM assistant_solidify_batches WHERE id=$1`, [res.body.id]);
       if (b.rows[0].status !== 'running') break;
@@ -109,7 +109,7 @@ describe('solidify 路由', () => {
     expect(res.body.page).toBe(1);
     expect(res.body.limit).toBe(20);
 
-    // 分页：3 条 running → limit=2 时 page1 两页、page2 一条，跨页不重不漏
+    // Pagination: 3 running rows → with limit=2, page1 has two, page2 has one, no duplicates or omissions across pages
     for (let i = 0; i < 3; i++) {
       await pool.query(`INSERT INTO assistant_solidify_batches (status, input_summary) VALUES ('running', '{}')`);
     }
@@ -121,7 +121,7 @@ describe('solidify 路由', () => {
     const p3 = await request(app).get('/api/assistant/solidify/batches?page=3&limit=2').expect(200);
     expect(p3.body.items).toHaveLength(0);
 
-    // status 过滤（前端「扫描中」检测走这个）
+    // status filter (the frontend "scanning" detection uses this)
     const running = await request(app).get('/api/assistant/solidify/batches?status=running&limit=1').expect(200);
     expect(running.body.total).toBe(3);
     expect(running.body.items).toHaveLength(1);
@@ -146,7 +146,7 @@ describe('solidify 路由', () => {
 
   it('GET /proposals：分页 + 待审优先排序（pending 排在已审之前）', async () => {
     const app = await mount('manager');
-    // 造 3 条：1 条已驳回 + 2 条待审（待审更早创建，仍须排在前面）
+    // Seed 3 rows: 1 rejected + 2 pending (the pending ones were created earlier but must still sort first)
     const batchId = (await pool.query(`INSERT INTO assistant_solidify_batches (status) VALUES ('done') RETURNING id`)).rows[0]!.id as string;
     const insert = async (title: string, status: string) => {
       await pool.query(
@@ -176,12 +176,12 @@ describe('solidify 路由', () => {
     let m = (await pool.query(`SELECT status FROM assistant_memories WHERE id=$1`, [memoryId])).rows[0]!;
     expect(m.status).toBe('active');
 
-    // 再造一条 pending 提案验证带退役的批准
+    // Seed another pending proposal to verify approval with retirement
     const p2 = await seedPendingProposal();
     await request(app).post(`/api/assistant/solidify/proposals/${p2.id}/approve`).send({ retireIds: [p2.memoryId] }).expect(200);
     m = (await pool.query(`SELECT status FROM assistant_memories WHERE id=$1`, [p2.memoryId])).rows[0]!;
     expect(m.status).toBe('retired_solidified');
-    // 重复批 → 409
+    // Approve again → 409
     await request(app).post(`/api/assistant/solidify/proposals/${p2.id}/approve`).send({ retireIds: [] }).expect(409);
   });
 

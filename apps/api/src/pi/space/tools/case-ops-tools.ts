@@ -1,18 +1,18 @@
 /**
- * stage_case_op：对「已有用例/步骤」的修改统一走暂存 → StagePanel 勾选 → 落库。
- * 替换原 manage_cases.update/delete/move_group 的实时落库 + ConfirmCard，与 aiStep/solveCaptcha 旧 kind 同方向的清理。
+ * stage_case_op: all modifications of "existing cases/steps" go uniformly through staging → StagePanel check-off → persistence.
+ * Replaces manage_cases.update/delete/move_group's real-time persistence + ConfirmCard; cleanup in the same direction as the old aiStep/solveCaptcha kinds.
  *
- * 单工具多 action（与 manage_cases.action 字段先例一致，省一个工具 schema 多轮）：
- *   - update_case   {caseId, patch: UpdateCasePatch}     → 走 svc.updateCase
- *   - delete_case   {caseId}                            → 走 svc.deleteCase（落库时执行，前端在 StagePanel 已勾选）
- *   - move_case     {caseId, targetGroupId}              → 走 svc.updateCase({groupId})
- *   - update_step   {stepId, instruction?, compiled?}    → 走 svc.updateCaseStep
- *   - insert_step   {caseId, instruction, afterOrder?, compiled?} → 走 svc.insertCaseStep
- *   - delete_step   {stepId}                            → 删 + 后续步骤 order 紧凑化
- *   - move_step     {caseId, stepIds}                   → 1..n 重排（照 routes/steps.ts:117-130）
+ * One tool, many actions (consistent with the manage_cases.action field precedent; saves one tool schema across rounds):
+ *   - update_case   {caseId, patch: UpdateCasePatch}     → svc.updateCase
+ *   - delete_case   {caseId}                            → svc.deleteCase (executed at persistence time; the user has checked it in StagePanel)
+ *   - move_case     {caseId, targetGroupId}              → svc.updateCase({groupId})
+ *   - update_step   {stepId, instruction?, compiled?}    → svc.updateCaseStep
+ *   - insert_step   {caseId, instruction, afterOrder?, compiled?} → svc.insertCaseStep
+ *   - delete_step   {stepId}                            → delete + compact the order of subsequent steps
+ *   - move_step     {caseId, stepIds}                   → reorder to 1..n (per routes/steps.ts:117-130)
  *
- * compiled 防御校验复用 normalizeCompiledStep（pi/tools.ts）+ z.array(StepAction).min(1)。
- * 归属：detail.versionId === ctx.versionId。
+ * compiled defensive validation reuses normalizeCompiledStep (pi/tools.ts) + z.array(StepAction).min(1).
+ * Ownership: detail.versionId === ctx.versionId.
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
@@ -35,7 +35,7 @@ import type { StageKind } from './stage-tools.js';
 export type { SpaceToolsContext } from './context.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 类型 + zod 校验
+// Types + zod validation
 // ─────────────────────────────────────────────────────────────────────────────
 
 const StepActionShape = z.object({
@@ -46,7 +46,7 @@ const CompiledNullableArray = z
   .preprocess((v) => {
     if (v === null) return null;
     if (!Array.isArray(v)) return v;
-    if (v.length === 0) return null; // 空数组 == 放弃
+    if (v.length === 0) return null; // empty array == give up
     return v.map(normalizeCompiledStep);
   }, z.array(StepAction).min(1).nullable());
 
@@ -59,7 +59,7 @@ const UpdateCasePatchShape = z.object({
   expectedOutcome: z.string().max(4000).nullable().optional(),
   defaultEnvId: z.string().uuid().nullable().optional(),
   datasetId: z.string().uuid().nullable().optional(),
-  /** 数据集行选择：启用行下标数组（0 基，剔除禁用行后重新编号）。[] = 所有启用行。 */
+  /** Dataset row selection: array of enabled-row indexes (0-based, renumbered after disabled rows are removed). [] = all enabled rows. */
   datasetRowIndexes: z.array(z.number().int().min(0)).max(500).nullable().optional(),
 });
 
@@ -92,7 +92,7 @@ const StageCaseOpInput = z.discriminatedUnion('action', [
 export type StageCaseOpInput = z.infer<typeof StageCaseOpInput>;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 工具集：暂存 → aiStageCaseOps 表 + 广播 stage 事件
+// Tool set: staging → aiStageCaseOps table + broadcast the stage event
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const STAGE_CASE_OP_GUIDELINES = [
@@ -173,8 +173,8 @@ function summaryFor(input: StageCaseOpInput, before: Awaited<ReturnType<typeof s
   }
 }
 
-/** 步骤写 op 的前瞻变量体检：按 op 虚拟应用后的全量 compiled 动作计算（含绑定数据集列作为初始变量），
- *  以文本附在暂存响应里给 AI 自校验 —— 写完 {{var}} 立刻知道有没有写错，而不是回放才发现。 */
+/** Prospective variable check for step-write ops: computed over the full compiled actions after virtually applying the op (including bound dataset columns as initial variables),
+ *  appended as text to the staging response so the AI can self-check — errors in a written {{var}} surface immediately, not at replay time. */
 async function prospectiveVarNote(
   before: Awaited<ReturnType<typeof svc.getCaseDetail>> | null,
   v: Extract<StageCaseOpInput, { action: 'insert_step' | 'update_step' }>,
@@ -185,7 +185,7 @@ async function prospectiveVarNote(
     const i = steps.findIndex((s) => s.id === v.stepId);
     if (i >= 0) steps[i] = { ...steps[i]!, compiled: v.compiled === undefined ? steps[i]!.compiled : v.compiled } as (typeof steps)[number];
   } else {
-    // 与真实 insertCaseStep 对齐：afterOrder 之后插入；越界（>= maxOrder）时落到末尾而非队首。
+    // Aligned with the real insertCaseStep: insert after afterOrder; out of range (>= maxOrder) lands at the tail, not the head.
     const ord = v.afterOrder;
     const at = ord !== undefined ? steps.filter((s) => s.order <= ord).length : steps.length;
     const maxOrder = steps.reduce((m, s) => Math.max(m, s.order), 0);
@@ -210,9 +210,9 @@ async function prospectiveVarNote(
   return notes.length > 0 ? `变量体检:${notes.join(';')}` : '变量体检:通过';
 }
 
-/** expectedOutcome 自洽体检：update_case 改预期时，按该用例现有步骤判定「造不造得出被断言的
- *  业务状态」（只提示不判死，与 stage_case 同源）。单工具单 action，本次 op 不含步骤改动，
- *  故直接用落库前步骤即可，无需虚拟叠加。 */
+/** expectedOutcome self-consistency check: when update_case changes the expectation, judge from the case's existing steps whether
+ *  "the asserted business state can actually be produced" (advisory only, never a hard kill; same source as stage_case). One tool,
+ *  one action, and this op contains no step changes, so the pre-persistence steps suffice — no virtual overlay needed. */
 function outcomeNoteAfterOp(
   before: Awaited<ReturnType<typeof svc.getCaseDetail>> | null,
   v: Extract<StageCaseOpInput, { action: 'update_case' }>,
@@ -294,7 +294,7 @@ export function buildCaseOpsTools(ctx: SpaceToolsContext): ToolExecutor[] {
           return { ok: false, error: `参数不合法:${parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')}` };
         }
         const v = parsed.data;
-        // 字段级必填校验（避免遗漏 id 后必填字段）
+        // Field-level required validation (catches required fields that slip through when an id is missing)
         if ((v.action === 'update_case' || v.action === 'delete_case' || v.action === 'move_case' || v.action === 'insert_step' || v.action === 'move_step') && !v.caseId) {
           return { ok: false, error: `${v.action} 需要 caseId` };
         }
@@ -309,7 +309,7 @@ export function buildCaseOpsTools(ctx: SpaceToolsContext): ToolExecutor[] {
         }
 
         const before = await loadCaseOrThrow(ctx, v.caseId ?? '').catch((e) => {
-          // 不抛错 —— 暂存是为了用户预览，落库时再校验归属
+          // Don't throw — staging exists for user preview; ownership is validated again at persistence time
           if (e instanceof HttpError && (e.code === 'not_found' || e.code === 'cross_project_move')) return null;
           throw e;
         });
@@ -349,17 +349,17 @@ export function buildCaseOpsTools(ctx: SpaceToolsContext): ToolExecutor[] {
   ];
 }
 
-/** 给 stageRoute.s / 落库时复用：按 ai_stage_case_ops 行执行真实写。op 与 buildCaseOpsTools 一一对应。 */
+/** Reused by stageRoute.s / at persistence time: performs the real write for an ai_stage_case_ops row. Ops correspond one-to-one with buildCaseOpsTools. */
 export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsContext): Promise<void> {
-  // 载荷形状非法 → 可读 HttpError（不是裸 ZodError：ZodError 会落成 400 validation_failed，
-  // 响应体无 message，前端只能显示「参数校验失败，请检查输入」——prod228 2026-11-11 实测）。
+  // Invalid payload shape → a readable HttpError (not a bare ZodError: ZodError lands as 400 validation_failed
+  // with no message in the body, so the frontend can only show "参数校验失败，请检查输入" — measured on prod228 2026-11-11).
   const parsed = StageCaseOpInput.safeParse(payload);
   if (!parsed.success) {
     throw new HttpError(400, 'staged_op_invalid', `暂存修改参数不合法：${parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'} ${i.message}`).join('；')}`);
   }
   const v = parsed.data;
   const caseId = v.caseId;
-  // 二次校验：落库前再确认归属（与创建时一致）
+  // Second validation: re-confirm ownership right before persisting (consistent with creation)
   const before = await loadCaseOrThrow(ctx, caseId);
   switch (v.action) {
     case 'update_case':
@@ -395,7 +395,7 @@ export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsC
     case 'delete_step': {
       const step = before.steps.find((s) => s.id === v.stepId);
       if (!step) throw new HttpError(404, 'not_found', `step ${v.stepId} not in case ${caseId}`);
-      // 单 case 内步骤操作包 transaction：删 + 后续 order 紧凑化（routes/steps.ts:151-153 写法）
+      // Step ops within one case wrapped in a transaction: delete + compact subsequent order (routes/steps.ts:151-153 style)
       await db.transaction(async (tx) => {
         await tx.delete(testSteps).where(eq(testSteps.id, v.stepId));
         const remaining = await tx
@@ -407,12 +407,12 @@ export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsC
           await tx.update(testSteps).set({ order: i + 1 }).where(eq(testSteps.id, remaining[i]!.id));
         }
       });
-      // 直写 db 不经 cases.service,列表缓存(固化进度列)需手动失效
+      // Direct db writes bypass cases.service; the list cache (solidify-progress column) must be invalidated manually
       await svc.invalidateCasesCache(ctx.projectId);
       return;
     }
     case 'move_step': {
-      // 全列重排为 1..n；stepIds 必须覆盖全部步骤（routes/steps.ts:117-130 写法）
+      // Reorder the whole list to 1..n; stepIds must cover all steps (routes/steps.ts:117-130 style)
       const all = await db.select({ id: testSteps.id }).from(testSteps).where(eq(testSteps.caseId, caseId)).orderBy(asc(testSteps.order));
       const incoming = new Set(v.stepIds);
       if (all.length !== v.stepIds.length || !all.every((r) => incoming.has(r.id))) {
@@ -430,13 +430,13 @@ export async function applyCaseOp(op: string, payload: unknown, ctx: SpaceToolsC
   throw new HttpError(500, 'invariant', `unknown op ${op}`);
 }
 
-/** 落库前预检：勾选的 op 先整批过一遍「形状 + 引用存在性」，全过才允许写。
+/** Pre-flight check before persistence: the checked ops first pass through "shape + reference existence" as a whole batch; only when all pass is writing allowed.
  *
- *  为什么必须先预检（prod228 2026-11-11 实测）：op 是逐条应用的，非法 op 排在批次中段时，
- *  前面的 insert_step 已经落库、stage 行又不删（失败不回滚）→ 用户重试 → 同一条步骤被重复
- *  插入（实测重复 3 次）。预检把「必然失败」的 op 拦在第一次写入之前。
+ *  Why the pre-flight is mandatory (measured on prod228 2026-11-11): ops are applied one by one; when an invalid op sits in the middle of
+ *  the batch, the earlier insert_step has already been persisted and the stage row isn't deleted (failure doesn't roll back) → the user
+ *  retries → the same step is inserted repeatedly (3 duplicates observed). The pre-flight stops "guaranteed to fail" ops before the first write.
  *
- *  只读：预检只查 DB，不写任何行。 */
+ *  Read-only: the pre-flight only queries the DB and writes nothing. */
 export async function preflightCaseOps(
   rows: Array<{ localId: string; op: string; payload: unknown; summary?: string | null }>,
   ctx: SpaceToolsContext,
@@ -470,8 +470,8 @@ export async function preflightCaseOps(
         throw new HttpError(400, 'staged_op_invalid', `暂存修改「${row.summary ?? row.localId}」引用的步骤不存在（${v.stepId}）——它可能已被删除，或属于另一条还没保存的暂存插入。请在暂存区取消这条修改后重试。`);
       }
     }
-    // move_step 必须恰好覆盖全部步骤（applyCaseOp 同款判定）——不覆盖必然在落库中段失败，
-    // 提前拦下可避免同批次里排在它前面的 op 已经写进库（重复插入那一类脏数据）。
+    // move_step must cover exactly all steps (same judgment as applyCaseOp) — a non-covering set is guaranteed to fail mid-persistence,
+    // and stopping it early avoids ops ahead of it in the same batch already having been written (the duplicated-insert class of dirty data).
     if (v.action === 'move_step') {
       const ids = await loadStepIds(v.caseId);
       const incoming = new Set(v.stepIds);
@@ -483,11 +483,11 @@ export async function preflightCaseOps(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 虚拟应用（不落库）：把暂存的 caseOps 叠加到 DB 用例上,供 verify_case 基于暂存继续验证。
-// 语义与 applyCaseOp 对齐,但只计算生效后的 steps / casePatch,不做任何写。
+// Virtual application (no persistence): overlay the staged caseOps onto the DB case, so verify_case can keep verifying from the staged state.
+// Semantics aligned with applyCaseOp, but it only computes the effective steps / casePatch and writes nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** 与 testSteps 行结构对齐的"生效步骤"（虚拟插入的步骤无密文字段）。 */
+/** "Effective steps" aligned with the testSteps row shape (virtually inserted steps carry no secret fields). */
 export interface EffectiveStep {
   id: string;
   order: number;
@@ -502,28 +502,28 @@ export interface EffectiveStep {
 }
 
 export interface CaseOverlay {
-  /** update_case 补丁里影响执行的部分（其余元数据与验证无关）。 */
+  /** The execution-affecting part of the update_case patch (the remaining metadata is irrelevant to verification). */
   url?: string | null;
   defaultEnvId?: string | null;
-  /** 有步骤级 op 时为叠加后的全量步骤；否则 null 表示沿用 DB 步骤。 */
+  /** With step-level ops, the full overlaid steps; null otherwise means keep using the DB steps. */
   steps: EffectiveStep[] | null;
-  /** 暂存了 delete_case：用例待删除,不应再验证。 */
+  /** delete_case staged: the case is pending deletion and should not be verified again. */
   deleteStaged: boolean;
-  /** 成功叠加的 op 数（含 move_case 等不影响执行的计数,供 UI 展示）。 */
+  /** Number of ops successfully overlaid (including non-execution-affecting counts like move_case, shown in the UI). */
   opsApplied: number;
 }
 
-/** overlay 里「暂存已插入、但还没落库」的步骤的合成 id 前缀。真实 step id 是 uuid，不会撞。 */
+/** Synthetic-id prefix for steps in the overlay that are "staged-inserted but not yet persisted". Real step ids are uuids, so no collision. */
 export const OVERLAY_STEP_PREFIX = 'staged:';
 
-/** 叠加态插入步的合成 id = staged:<插入 op 的 localId>。
- *  用 localId 而非数组下标：固化要把机械 compiled 写回那一条 insert 暂存行，
- *  下标会随「勾了哪些 op / 排序」漂移，localId 才是那行的稳定身份。 */
+/** Synthetic id of an overlaid insert step = staged:<the insert op's localId>.
+ *  localId rather than an array index: solidification needs to write the mechanical compiled back to that one insert stage row;
+ *  an index drifts with "which ops got checked / their order" — localId is that row's stable identity. */
 export function overlayStepId(insertLocalId: string | undefined, idx: number): string {
   return `${OVERLAY_STEP_PREFIX}${insertLocalId ?? idx}`;
 }
 
-/** 合成 id → 它对应的 insert op localId；不是叠加态步骤返回 null。 */
+/** Synthetic id → its insert op's localId; null when the id is not an overlaid step. */
 export function overlayInsertLocalId(stepId: string): string | null {
   return stepId.startsWith(OVERLAY_STEP_PREFIX) ? stepId.slice(OVERLAY_STEP_PREFIX.length) : null;
 }
@@ -574,11 +574,11 @@ export function computeCaseOverlay(
           secretIv: null,
           secretTag: null,
         };
-        // 与 insertCaseStep 对齐：afterOrder 是落库 0-based order 值,新步排在「当前 list 中
-        // 数组 index==afterOrder 的步」之后。move/delete 后 list 顺序 == 落库当前 DB 顺序,
-        // 故 afterOrder 直接对应 list 的 0-based 数组 index,+1 落该步之后。
-        // (insertCaseStep:targetOrder = afterOrder+1,原 order>=targetOrder 的步后移;
-        //  list 的数组 index 即当前 0-based order,等价。)
+        // Aligned with insertCaseStep: afterOrder is the persisted 0-based order value; the new step lands after the step
+        // at "array index==afterOrder in the current list". After move/delete the list order == the current persisted DB order,
+        // so afterOrder maps directly onto the list's 0-based array index, +1 places it after that step.
+        // (insertCaseStep:targetOrder = afterOrder+1; steps with original order>=targetOrder shift later;
+        //  the list's array index is the current 0-based order — equivalent.)
         const at = v.afterOrder !== undefined ? Math.min(v.afterOrder + 1, list.length) : list.length;
         list.splice(at, 0, st);
         normalize();
@@ -608,7 +608,7 @@ export function computeCaseOverlay(
         break;
       }
       case 'move_case':
-        // 分组移动不影响执行,仅计数
+        // Group moves don't affect execution; count only
         overlay.opsApplied++;
         break;
     }

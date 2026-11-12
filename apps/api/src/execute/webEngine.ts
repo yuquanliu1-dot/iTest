@@ -6,7 +6,7 @@ export class WebEngine implements Engine {
   readonly platform = 'web' as const;
 
   async prepare(_input: EngineInput): Promise<void> {
-    // no-op: WebEngine 不持有长生命周期资源（每次 execute 启停 browser）
+    // no-op: WebEngine holds no long-lived resources (browser started/stopped per execute)
   }
 
   async release(_input: EngineInput): Promise<void> {

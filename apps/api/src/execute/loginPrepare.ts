@@ -10,8 +10,8 @@ const DEFAULT_KEYWORDS = ['请先登录', '未登录', '未授权', '登录后']
 
 const URL_LOGIN_HINTS = /(?:^|\/)(login|signin|sign-in|auth|unauthorized)(?:\/|$|\?)/i;
 
-// 常见错误页签名：命中则不能据此判定「已登录」（排除式探测对错误页天然假阳性，
-// prod228 实录：Whitelabel 404 被当 no login signals → 登录用例静默跳过）。
+// Common error-page signatures: on a hit, this must not be judged as "logged in" (exclusion-style probing is inherently false-positive-prone on error pages;
+// prod228 record: a Whitelabel 404 was treated as no login signals → the login case was silently skipped).
 const ERROR_PAGE_SIGNATURE = /whitelabel error page|http status \d{3}|\b404 not found\b|\b502 bad gateway\b|\b503 service unavailable\b/i;
 
 export interface LoginPrepareConfig {
@@ -20,7 +20,7 @@ export interface LoginPrepareConfig {
   detectionUrl?: string | null;
   successSelector?: string | null;
   unauthorizedKeywords?: string[] | null;
-  /** 计划中第一个业务用例，提供 fallback detectionUrl。 */
+  /** The plan's first business case, providing the fallback detectionUrl. */
   firstCaseId?: string | null;
 }
 
@@ -76,7 +76,7 @@ async function detectLoginState(page: Page, c: LoginPrepareConfig, status?: numb
     const found = await page.locator(c.successSelector).first().count().catch(() => 0);
     if (found > 0) return { alreadyLoggedIn: true, reason: 'selector hit' };
   }
-  // 探测页本身是错误响应（4xx/5xx）时不能证明有可用会话：按未登录处理，走登录用例/autoLogin。
+  // The detection page itself returning an error response (4xx/5xx) proves no usable session: treat as not logged in and go through the login case/autoLogin.
   if (status != null && status >= 400) {
     return { alreadyLoggedIn: false, reason: `detection page error (HTTP ${status})` };
   }
@@ -98,9 +98,9 @@ async function detectLoginState(page: Page, c: LoginPrepareConfig, status?: numb
 }
 
 /**
- * 环境凭据自动填表登录：定位密码框，取其文档序之前最后一个可见文本类输入框填用户名，
- * 提交（表单 submit 按钮 → 页面 submit → 密码框 Enter 三级兜底）后复检登录态。
- * 全程不截图、错误文案不含凭据值。
+ * Environment-credential auto-form-fill login: locate the password box, take the last visible text-type input before it in document order for the username,
+ * submit (three-tier fallback: form submit button → page submit → Enter in the password box), then re-check the login state.
+ * No screenshots throughout, and error text never contains credential values.
  */
 async function autoFillLogin(
   ctx: BrowserContext,
@@ -110,7 +110,7 @@ async function autoFillLogin(
   defaultWebOrigin: string | null,
 ): Promise<LoginPrepareResult> {
   try {
-    // 检测页未被重定向到登录页时，先去配置的登录页（相对 loginUrl 拼环境默认 web 服务 origin）
+    // When the detection page wasn't redirected to a login page, go to the configured login page first (a relative loginUrl joined with the environment's default web origin)
     if (cred.loginUrl && !URL_LOGIN_HINTS.test(page.url())) {
       const loginTarget = cred.loginUrl.startsWith('/')
         ? `${defaultWebOrigin ?? ''}${cred.loginUrl}`
@@ -121,8 +121,8 @@ async function autoFillLogin(
       await page.goto(loginTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
     const inputs = page.locator('input');
-    // IIFE 字符串表达式（tsx/esbuild 会给函数形式回调注入 __name 助手致页面炸；且 evaluateAll
-    // 的字符串形式在本版本静默返回 undefined，只有 page.evaluate + IIFE 实测可用）
+    // IIFE string expression (tsx/esbuild inject a __name helper into function-form callbacks, crashing the page; and evaluateAll's
+    // string form silently returns undefined in this version — only page.evaluate + IIFE is measured to work)
     const usernameIdx = await page.evaluate<number>(`(() => {
       const els = Array.from(document.querySelectorAll('input'));
       const visible = (el) => el.offsetParent !== null || el.getClientRects().length > 0;
@@ -170,29 +170,29 @@ async function autoFillLogin(
 }
 
 /**
- * 登录准备入口：在调用方提供的 browser context 中探测；如已登录返回 skipped；
- * 否则优先执行登录用例（loginCaseRunner），未配登录用例且提供环境凭据（autoLogin）时自动填表登录。
+ * Login-preparation entry point: probes within the browser context provided by the caller; returns skipped if already logged in;
+ * otherwise prefers running the login case (loginCaseRunner), or auto-form-fill login when no login case is configured and environment credentials are provided (autoLogin).
  *
- * loginCaseRunner 拿到 caller 持有的 `browser` + `ctx`：登录用例直接在同一 ctx 跑步骤，
- * 跑完后从同一 ctx 导出真实 storageState。当 callback 返回 `takeOwnership: true` 时，
- * 本函数不再关闭 browser，由 caller（runPlan 业务循环）负责关闭——这样后续业务用例
- * 可以复用同一 chromium 进程，避免每次 newContext 重复消耗。
+ * loginCaseRunner receives the caller-held `browser` + `ctx`: the login case runs its steps directly in the same ctx,
+ * and afterwards the real storageState is exported from that same ctx. When the callback returns `takeOwnership: true`,
+ * this function no longer closes the browser — the caller (runPlan's business loop) is responsible for closing it — so subsequent business cases
+ * can reuse the same chromium process instead of paying for a newContext each time.
  */
 export async function loginPrepare(
   cfg: LoginPrepareConfig,
   opts: {
-    /** 启动新 chromium；返回 browser + 是否已登录 + storageState。
-     *  takeOwnership=true 时本函数不关闭 browser，由 caller 负责。 */
+    /** Launch a new chromium; return the browser + whether already logged in + storageState.
+     *  With takeOwnership=true this function doesn't close the browser — the caller is responsible. */
     loginCaseRunner: (
       caseId: string,
       ctx: BrowserContext,
       browser: Browser,
     ) => Promise<{ passed: boolean; storageState?: unknown; takeOwnership?: boolean }>;
-    /** 环境登录凭据：未配登录用例（cfg.caseId 为空）时的自动填表登录。 */
+    /** Environment login credentials: auto-form-fill login when no login case is configured (cfg.caseId empty). */
     autoLogin?: LoginCtx;
-    /** 环境默认 web 服务 origin：loginUrl 为相对路径时拼接用。 */
+    /** Environment's default web service origin: joined when loginUrl is a relative path. */
     defaultWebOrigin?: string | null;
-    /** playground 实时画面源：探测页/自动登录页也纳入画面（自动填表登录过程可见）。 */
+    /** playground live view source: the detection page/auto-login page also enters the feed (the auto-form-fill login process is visible). */
     liveView?: { setPage(p: Page): void };
   },
 ): Promise<LoginPrepareResult> {
@@ -211,7 +211,7 @@ export async function loginPrepare(
     const opened = await openDetectionPage(ctx, url);
     if (!opened) return { status: 'failed', reason: 'detection page navigation failed' };
     const page = opened.page;
-    // 探测/自动登录页纳入实时画面（loginCaseRunner 路径随后由 runCase 的 newPage 接管切换）
+    // Detection/auto-login page enters the live feed (on the loginCaseRunner path, runCase's newPage takes over switching shortly after)
     opts.liveView?.setPage(page);
 
     const detect = await detectLoginState(page, cfg, opened.status);
@@ -232,7 +232,7 @@ export async function loginPrepare(
     if (!loginRun.passed) {
       return { status: 'failed', reason: 'login case failed' };
     }
-    // caller take ownership 时不再关 browser；否则保持原有「跑完就关」行为（自动填表/单测场景）。
+    // When the caller takes ownership, don't close the browser; otherwise keep the original "close after run" behavior (auto-fill/unit-test scenarios).
     takeOwnership = loginRun.takeOwnership === true;
     return { status: 'passed', reason: 'login case executed', storageState: loginRun.storageState };
   } finally {

@@ -26,7 +26,7 @@ const SaveBody = z.object({
   renames: z.record(z.string()).optional(),
 });
 
-/** 数据集属指定项目（projectId 匹配 + 项目可见），否则 404。 */
+/** The dataset belongs to the given project (projectId match + project visible), otherwise 404. */
 async function assertDsInProject(dsId: string, projectId: string, user: AuthUser): Promise<void> {
   const row = (await db
     .select({ pid: datasets.projectId })
@@ -48,7 +48,7 @@ datasetsRoute.post('/projects/:projectId/datasets', async (req, res) => {
   res.json(await createDataset(req.params.projectId!, body, req.user!.userId));
 });
 
-// 必须注册在 GET /:dsId 之前：Express 按序匹配，否则 template 会被当 dsId。
+// Must be registered before GET /:dsId: Express matches in order, otherwise template would be treated as a dsId.
 datasetsRoute.get('/projects/:projectId/datasets/template', async (req, res) => {
   await assertProjectVisible(req.params.projectId!, req.user!);
   const raw = typeof req.query.columns === 'string' ? req.query.columns : '';

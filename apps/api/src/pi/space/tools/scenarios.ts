@@ -1,4 +1,4 @@
-/** manage_scenarios:场景列表/创建/改名删述/删除。场景从属需求(requirementId 必填,归属经需求解析)。 */
+/** manage_scenarios: scenario list/create/rename+re-describe/delete. Scenarios belong to a requirement (requirementId required; ownership resolved through the requirement). */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
 import * as svc from '../../../services/scenarios.service.js';
@@ -19,7 +19,7 @@ const Actions = z.object({
   description: z.string().max(4000).nullable().optional(),
 });
 
-/** 需求正文的上下文预算:超长需求文档截断(与 query_stats 的 1000 字口径一致)。 */
+/** Context budget for requirement content: over-long requirement docs get truncated (same 1000-char convention as query_stats). */
 function clipContent(s: string, max = 1000): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
@@ -89,7 +89,7 @@ export function buildScenariosTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (v.description !== undefined) patch.description = v.description;
               if (Object.keys(patch).length === 0) return { ok: false, error: 'update 未提供任何要修改的字段(title/description)' };
               const before = await svc.getScenario(v.scenarioId);
-              // 挂起前预计算 diff(旧值 vs 合成新值),确认卡与实际执行共用一份数据
+              // Precompute the diff before the confirmation gate (old values vs synthesized new values); the confirmation card and the actual execution share one copy of the data
               const diff = diffText(before ?? {}, { ...(before ?? {}), ...patch });
               if (diff !== undefined) {
                 const approved = await requestConfirmation(

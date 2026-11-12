@@ -13,8 +13,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // 本文件经 modelBridge.js 间接持有 db/client.js 的单例池，先关掉再停容器，
-  // 否则容器停止会打断残留连接报 57P01（与 pi-tools.test.ts / pi-workspace.test.ts 同款处理）。
+  // This file indirectly holds db/client.js's singleton pool via modelBridge.js — close it before stopping the container,
+  // otherwise stopping the container breaks leftover connections with 57P01 (same handling as pi-tools.test.ts / pi-workspace.test.ts).
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();

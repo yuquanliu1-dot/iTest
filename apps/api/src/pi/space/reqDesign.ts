@@ -1,13 +1,14 @@
 /**
- * 需求 → 用例设计方法论，注入空间助手 system prompt（buildSpaceSystemPrompt 的「需求→用例设计」段）。
+ * Requirement → case design methodology, injected into the space assistant system prompt (the "requirement → case design" section of buildSpaceSystemPrompt).
  *
- * 动机：助手已经很会写「可执行的步骤」，但不会系统性地想「该测什么」——典型产出是
- * 一两条正常流就收工，异常/边界/状态流转/权限维度系统性缺失；断言又常常是那种
- * 对任何页面都成立的摆设。步骤能力再强，补不上设计这一层也测不出真问题。
+ * Motivation: the assistant is already good at writing "executable steps", but not at thinking systematically
+ * about "what to test" — typical output wraps up after one or two happy paths, with missing coverage across
+ * exception/boundary/state-transition/permission dimensions; assertions are often decorative and would pass on any page.
+ * No matter how strong the step capability is, without the design layer it cannot surface real problems.
  *
- * 放 api 而非 packages/shared：只有 api 组装 LLM prompt，web 不消费。
- * 放这里而非 STAGE_PROMPT_GUIDELINES：那段是「这个工具怎么调」，这段是「先想清楚再动手」，
- * 两者混在一起会让工具用法被方法论淹没。
+ * Placed in api rather than packages/shared: only api assembles the LLM prompt, web does not consume it.
+ * Placed here rather than STAGE_PROMPT_GUIDELINES: that section covers "how to call this tool", this one covers
+ * "think it through before acting"; mixing the two would drown the tool usage guidance in methodology.
  */
 export const REQ_DESIGN_METHOD = `## 需求→用例设计方法
 
@@ -57,8 +58,8 @@ export const REQ_DESIGN_METHOD = `## 需求→用例设计方法
 
 **缺页面事实自己取证,不抛给用户**:草稿需要某个页面事实才能落笔(哪些字段必填、下拉有哪些选项、校验提示文案、按钮确切文案等)而手里没有实测证据时,按「最快且足够权威」自选渠道查证:读前端代码(repo_grep/repo_read 搜表单 rules/required/placeholder,秒级)、inspect_page 抓目标页(自动注入登录态)、查配置与数据库(manage_environments/manage_datasets),或实测试探一条提交步看真实校验反馈;多渠道结论冲突以实测为准。**求助用户只限两类**:①产品决策(预期行为、覆盖取舍、需求歧义)——这是用户的领域,该问就问;②所有渠道都查不到且实测也拿不到时,说明已查过哪些渠道再问。事实类问题不要问用户。`;
 
-/** 平台能力边界（S1 seed 用，lang=any）。防「iTest 支不支持 X」类问题凭通用测试平台知识编造支持性回答。
- *  热可更新：高频误答清单由运营 PATCH 本行 body 追加，无需发版。 */
+/** Platform capability boundary (for the S1 seed, lang=any). Prevents fabricated affirmative answers to "does iTest support X" questions based on generic testing-platform knowledge.
+ *  Hot-updatable: operations append high-frequency wrong-answer entries to this row's body via PATCH, no release needed. */
 export const CAPABILITY_BOUNDARY = `## 平台能力边界（回答「iTest 支不支持 X」）
 
 用户问「平台是否支持某功能」时，判断依据只有两个：**你当前可用的工具清单**与**本空间指南**。两者都没有对应能力，就明确回答「当前版本不支持」，并给出平台内最接近的替代做法或建议提需求。
@@ -71,7 +72,7 @@ export const CAPABILITY_BOUNDARY = `## 平台能力边界（回答「iTest 支�
 - 性能/压力测试（无压测步骤类型与负载工具）。
 - 外部缺陷管理系统（Jira 等）双向同步（无对应集成工具）。`;
 
-/** 用例创建流程指引（S1 seed 用，zh）。自 session.ts 迁来：改为 DB 常驻 → 热生效 + 可运营。 */
+/** Case authoring workflow guide (for the S1 seed, zh). Migrated from session.ts: now DB-resident → hot-effective and operations-friendly. */
 export const CASE_AUTHORING_FLOW_ZH = `## 用例创建流程
 拿到需求先确认用户要的工作方式,两个入口：**A 建立步骤**——用户要你设计/推荐用例步骤,按下面 1-6 走；**B 边操作边讨论确定步骤**——用户明确表示「不用先写步骤,直接在页面上跑 / 边操作边讨论」时,跳到文末「边跑边讨论」,不要生成推荐步骤草稿。
 
@@ -94,7 +95,7 @@ export const CASE_AUTHORING_FLOW_ZH = `## 用例创建流程
 - 跑完即把该步结果（成功/失败与原因、页面变化）回报给用户再继续讨论——**回报要简洁:结论先行、两三行说清,不复述页面结构、不贴元素清单原文**;提议下一步时只能引用本轮 page/failure.page 元素清单里真实存在的控件,清单里没有的筛选项/按钮不提。某步失败**先回报失败详情与归因,再与用户讨论调整指令**;归因拿不准时自主取证(抓页面/读代码)定位,带着结论回报——查到即回,不要闷头连续考古不回报（见上方证据自取纪律）,改完重新 stage_case+verify_case（前缀未变的步骤不会重跑）。
 - 讨论收敛、每条指令都跑通后,这些指令**就是**用例步骤,草稿已就位、无需重新暂存：直接从上面第 4 步继续（solidify_case 固化,最后一轮实测的轨迹可零执行复用 → verify_case(mode='mechanical') 机械验收 → 第 6 步引导保存）。**不要再跑 verify_case(mode='full') 全量重测**——每一步刚实测通过,再跑一遍纯属重复。`;
 
-/** 用例创建流程指引（S1 seed 用，en）。 */
+/** Case authoring workflow guide (for the S1 seed, en). */
 export const CASE_AUTHORING_FLOW_EN = `## Case authoring workflow
 First identify the working mode the user wants — two entry points: **A Build steps** — the user asks you to design/recommend case steps; follow steps 1-6 below. **B Operate and discuss** — the user explicitly says "no need to write steps first, just run it on the page / let's settle the steps by operating and discussing"; jump to "Run and discuss" at the end and do NOT produce a recommended-steps draft.
 

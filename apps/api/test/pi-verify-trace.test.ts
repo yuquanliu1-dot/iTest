@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { AiAction } from '../src/execute/aiTask.js';
 import type { EffectiveStep } from '../src/pi/space/tools/case-ops-tools.js';
 
-// 轨迹缓存纯单测（无 DB/浏览器）：新鲜度矩阵 + TTL + 容量淘汰 + 哈希确定性。
-// takeFreshTrace 的过期副作用（删条目）也在矩阵内断言。各用例用不同 key 隔离模块级 Map。
+// Pure unit tests for the trail cache (no DB/browser): freshness matrix + TTL + capacity eviction + hash determinism.
+// takeFreshTrace's expiry side effect (deleting the entry) is asserted within the matrix too. Each case uses a different key to isolate the module-level Map.
 describe('verifyTrace', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
@@ -37,7 +37,7 @@ describe('verifyTrace', () => {
     const got = m.takeFreshTrace('k1', stepsHash, 'meta', ['s1']);
     expect(got).not.toBeNull();
     expect(got!.get('s1')!.length).toBe(1);
-    // required 缺 s1（缓存里没有）→ 判过期并删条目
+    // required missing s1 (not in the cache) → judged expired and the entry deleted
     expect(m.takeFreshTrace('k1', stepsHash, 'meta', ['s1', 's2'])).toBeNull();
     expect(m.getVerifiedTrace('k1')).toBeNull();
   });
@@ -47,14 +47,14 @@ describe('verifyTrace', () => {
     const trace = new Map<string, AiAction[]>([['s1', []]]);
     m.saveVerifiedTrace('k2', ['h1', 'h2'], 'meta', trace);
     expect(m.takeFreshTrace('k2', ['h1', 'hX'], 'meta', ['s1'])).toBeNull();
-    // 已被上一行删除
+    // Already deleted by the line above
     expect(m.takeFreshTrace('k2', ['h1', 'h2'], 'meta', ['s1'])).toBeNull();
 
     m.saveVerifiedTrace('k3', ['h1'], 'meta', new Map([['s1', []]]));
-    expect(m.takeFreshTrace('k3', ['h1', 'h2'], 'meta', ['s1'])).toBeNull(); // 长度不等
+    expect(m.takeFreshTrace('k3', ['h1', 'h2'], 'meta', ['s1'])).toBeNull(); // Length mismatch
 
     m.saveVerifiedTrace('k4', ['h1'], 'meta', new Map([['s1', []]]));
-    expect(m.takeFreshTrace('k4', ['h1'], 'meta2', ['s1'])).toBeNull(); // meta 变 = 换被测对象
+    expect(m.takeFreshTrace('k4', ['h1'], 'meta2', ['s1'])).toBeNull(); // meta changed = different SUT
   });
 
   it('TTL 30 分钟：29 分钟命中，31 分钟过期删除', async () => {
@@ -72,10 +72,10 @@ describe('verifyTrace', () => {
     const m = await mod();
     for (let i = 0; i < 64; i++) {
       m.saveVerifiedTrace(`k-${i}`, [`h${i}`], 'meta', new Map());
-      vi.advanceTimersByTime(1000); // savedAt 拉开差距
+      vi.advanceTimersByTime(1000); // Spread out savedAt
     }
     expect(m.getVerifiedTrace('k-0')).not.toBeNull();
-    m.saveVerifiedTrace('k-64', ['h64'], 'meta', new Map()); // 触发淘汰 k-0
+    m.saveVerifiedTrace('k-64', ['h64'], 'meta', new Map()); // Triggers eviction of k-0
     expect(m.getVerifiedTrace('k-0')).toBeNull();
     expect(m.getVerifiedTrace('k-1')).not.toBeNull();
     expect(m.getVerifiedTrace('k-64')).not.toBeNull();

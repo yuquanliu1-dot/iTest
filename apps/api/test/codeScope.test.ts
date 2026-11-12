@@ -7,15 +7,15 @@ import { randomUUID } from 'node:crypto';
 import type { LLMClient } from '../src/agent/llm-client.js';
 import { resolveCodeScope, parseIntentValue, extractHintUrls } from '../src/execute/codeScope.js';
 
-// LLM 桩：每次 completeJson 调用都返回同一个意图 JSON（显式 sha 区间/单提交路径不需要消歧，
-// 桩被多次调用也无害）。抛错桩走 resolveCodeScope 的软失败路径。
+// LLM stub: every completeJson call returns the same intent JSON (explicit sha-range/single-commit paths need no disambiguation,
+// and the stub being called repeatedly is harmless). The throwing stub exercises resolveCodeScope's soft-failure path.
 const llmStub = (intent: Record<string, unknown>): LLMClient =>
   ({ complete: async () => ({ kind: 'json' as const, value: intent }) }) as unknown as LLMClient;
 const llmBoom = (): LLMClient =>
   ({ complete: async () => { throw new Error('网关 503'); } }) as unknown as LLMClient;
 
 const DAY = 86_400_000;
-/** 与 codeScope.ts toGitTs 同格式：git 作者/提交者日期按本地时区显式时间戳（避免裸日期边界歧义）。 */
+/** Same format as codeScope.ts toGitTs: git author/committer dates as explicit local-timezone timestamps (avoids bare-date boundary ambiguity). */
 const gitDate = (daysAgo: number): string => {
   const d = new Date(Date.now() - daysAgo * DAY);
   const p = (n: number): string => String(n).padStart(2, '0');
@@ -45,15 +45,15 @@ beforeAll(async () => {
   await fs.writeFile(path.join(root, 'app.ts'), 'const a = 1;\nexport default a;\n');
   await fs.mkdir(path.join(root, 'src'));
   await fs.writeFile(path.join(root, 'src', 'routes.ts'), "path:'/asset/list'\npath:'/login'\n");
-  gitAt(40, 'git add -A'); // c1：窗口（30 天）外
+  gitAt(40, 'git add -A'); // c1: outside the (30-day) window
   gitAt(40, "git commit -q -m 'c1 初始路由'");
   sha1 = execSync('git rev-parse HEAD', { cwd: root }).toString().trim();
   await fs.writeFile(path.join(root, 'src', 'routes.ts'), "path:'/asset/list'\npath:'/login'\npath:'/asset/detail'\n");
-  gitAt(10, 'git add -A'); // c2：窗口内
+  gitAt(10, 'git add -A'); // c2: inside the window
   gitAt(10, "git commit -q -m 'c2 资产详情路由'");
   sha2 = execSync('git rev-parse HEAD', { cwd: root }).toString().trim();
   await fs.writeFile(path.join(root, 'app.ts'), 'const a = 2;\nexport default a;\n');
-  gitAt(2, 'git add -A'); // c3：窗口内
+  gitAt(2, 'git add -A'); // c3: inside the window
   gitAt(2, "git commit -q -m 'c3 调整应用入口'");
   sha3 = execSync('git rev-parse HEAD', { cwd: root }).toString().trim();
 });
@@ -62,7 +62,7 @@ afterAll(async () => {
   await fs.rm(parent, { recursive: true, force: true });
 });
 
-// sessionId 用随机 uuid：落库是 best-effort（测试环境 DB 无此行，UPDATE 0 行不报错）
+// sessionId is a random uuid: persisting is best-effort (the test DB has no such row; a 0-row UPDATE doesn't error)
 const run = (charter: string, llm: LLMClient, repoDir: string = root) =>
   resolveCodeScope({ sessionId: randomUUID(), charter, versionId: '00000000-0000-0000-0000-000000000000' }, {
     repoDir,
@@ -82,9 +82,9 @@ describe('resolveCodeScope', () => {
     expect(r.status).toBe('resolved');
     const s = r.scope!;
     expect(s.kind).toBe('time_window');
-    expect(s.fromSha).toBe(sha1); // 基线 = 窗口前最后一个提交
+    expect(s.fromSha).toBe(sha1); // baseline = last commit before the window
     expect(s.toSha).toBe(sha3);
-    expect(s.commits.map((c) => c.subject)).toEqual(['c3 调整应用入口', 'c2 资产详情路由']); // git log 新→旧
+    expect(s.commits.map((c) => c.subject)).toEqual(['c3 调整应用入口', 'c2 资产详情路由']); // git log newest -> oldest
     expect(s.files.map((f) => f.path).sort()).toEqual(['app.ts', 'src/routes.ts']);
     expect(s.hintUrls).toContain('/asset/detail');
     expect(s.label).toBe('最近 30 天');
@@ -166,7 +166,7 @@ describe('resolveCodeScope', () => {
     expect(parseIntentValue({ kind: '时间窗口', sinceDate: '2026-01-01', untilDate: '2026-01-31' }).kind).toBe('time_window');
     expect(parseIntentValue({ mode: 'commit_range', from: 'abc123', to: 'def456' })).toMatchObject({ kind: 'commit_range', fromHint: 'abc123', toHint: 'def456' });
     expect(parseIntentValue({ intent: 'single_commit', sha: 'feed000' })).toMatchObject({ kind: 'single_commit', commitHint: 'feed000' });
-    expect(parseIntentValue({ intent: '莫名其妙' }).kind).toBe('none'); // 未知值不猜
+    expect(parseIntentValue({ intent: '莫名其妙' }).kind).toBe('none'); // unknown values are not guessed
   });
 
   it('extractHintUrls：抽路由字面量、滤静态资源与系统路径', () => {

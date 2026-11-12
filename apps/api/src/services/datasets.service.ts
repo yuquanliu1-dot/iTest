@@ -1,7 +1,7 @@
 /**
- * 数据集领域服务：项目级测试数据集 CRUD + 回放数据装载。
- * 敏感列单元格以 AES-256-GCM {c,i,t} 加密存 rows jsonb；出参一律 {__masked:true} 占位。
- * 列名即变量名（回放时注入 {{列名}}），须过 validateVariableName。
+ * Dataset domain service: project-level test dataset CRUD + replay data loading.
+ * Sensitive-column cells are stored AES-256-GCM encrypted as {c,i,t} in the rows jsonb; outputs always use {__masked:true} placeholders.
+ * Column names are variable names (injected as {{<column name>}} at replay) and must pass validateVariableName.
  */
 import { asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -17,7 +17,7 @@ export type DatasetMaskedCell = { __masked: true };
 const MAX_COLUMNS = 30;
 const MAX_ROWS = 500;
 
-/** 回放数据集配置错误（无启用行/列名非法等）。执行入口映射 400；计划内映射该用例 failed。 */
+/** Replay dataset configuration error (no enabled rows / illegal column names etc.). The execution entry maps it to 400; inside a plan it maps the case to failed. */
 export class DatasetConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -30,7 +30,7 @@ export interface DatasetSaveBody {
   description?: string | null;
   columns: Array<{ name: string; sensitive?: boolean }>;
   rows: Array<{ disabled?: boolean; cells: Record<string, unknown> }>;
-  /** 列改名声明（旧列名 → 新列名）：__masked 占位按行对齐时把旧密文 re-key 到新列名，否则改名会静默清空密文。 */
+  /** Column rename declarations (old name → new name): when __masked placeholders align by row, the old ciphertext is re-keyed to the new name; otherwise a rename would silently wipe the ciphertext. */
   renames?: Record<string, string>;
 }
 
@@ -58,8 +58,8 @@ function decryptCell(cell: DatasetEncCell): string {
   });
 }
 
-/** 保存前校验 + 归一。prev 行按索引对齐：__masked 占位按行下标沿用旧密文
- *  （前端语义：没改过的敏感格原样回传；改行顺序时应同步改值，不做跨行追踪）。 */
+/** Pre-save validation + normalization. prev rows align by index: __masked placeholders keep the old ciphertext per row index
+ *  (frontend semantics: untouched sensitive cells come back as-is; when row order changes, values must change with it — no cross-row tracking). */
 function normalizeDataset(
   input: DatasetSaveBody,
   prev?: { columns: DatasetColumn[]; rows: DatasetRow[] },
@@ -81,7 +81,7 @@ function normalizeDataset(
   if (columns.length > MAX_COLUMNS) throw new HttpError(400, 'bad_request', `列数超上限（最多 ${MAX_COLUMNS} 列）`);
   if ((input.rows ?? []).length > MAX_ROWS) throw new HttpError(400, 'bad_request', `行数超上限（最多 ${MAX_ROWS} 行）`);
 
-  // 改名声明校验：目标列必须出现在本次列集里，且多个旧名不能挤向同一个新名（列名本身已去重）。
+  // Rename declaration validation: target columns must appear in this save's column set, and multiple old names can't collapse into one new name (column names are already deduped).
   const renames = input.renames ?? {};
   const renameEntries = Object.entries(renames);
   if (renameEntries.length > 0) {
@@ -92,7 +92,7 @@ function normalizeDataset(
       targets.add(newName);
     }
   }
-  // 旧密文按行对齐前先 re-key 到新列名（构建全新对象，a↔b 互换也能对上）。
+  // Re-key the old ciphertext to the new names before row alignment (builds a fresh object, so an a↔b swap still lines up).
   const prevRows = (prev?.rows ?? []).map((row) => {
     if (renameEntries.length === 0) return row;
     const cells: DatasetRow['cells'] = {};
@@ -109,9 +109,9 @@ function normalizeDataset(
         if (typeof v === 'string') {
           cells[k] = v.length > 0 ? encryptCell(v) : '';
         } else if (isMaskedCell(v)) {
-          // 密码框语义：未改动占位符回传 → 沿用旧密文（renames 已把旧密文 re-key 到新列名）。
-          // 找不到对应旧密文（改名未声明 renames / 陈旧客户端）→ 显式 400，绝不静默清空：
-          // 用户看不到明文，静默置空等于不可逆丢失。
+          // Password-field semantics: an unmodified placeholder sent back → keep the old ciphertext (renames has re-keyed it to the new column name).
+          // No matching old ciphertext (rename without declared renames / stale client) → explicit 400, never silently cleared:
+          // the user can't see plaintext, so silently emptying it equals irreversible loss.
           if (!isEncCell(prevCell)) {
             throw new HttpError(400, 'bad_request', `第 ${i + 1} 行列 ${k} 回传了敏感占位符但没有对应旧密文（列可能被重命名但未声明 renames），请刷新后重试`);
           }
@@ -123,7 +123,7 @@ function normalizeDataset(
         if (typeof v === 'string') {
           cells[k] = v;
         } else if (isMaskedCell(v)) {
-          // 刚从敏感切成非敏感：把旧密文解回明文（用户要求去敏）；密文损坏显式 400 而非 500
+          // Just switched from sensitive to non-sensitive: decrypt the old ciphertext back to plaintext (the user asked to de-sensitize); broken ciphertext gets an explicit 400 rather than a 500
           if (isEncCell(prevCell)) {
             try {
               cells[k] = decryptCell(prevCell);
@@ -147,19 +147,19 @@ function isUniqueViolation(e: unknown): boolean {
   return typeof e === 'object' && e !== null && (e as { code?: string }).code === '23505';
 }
 
-/** 启用行数组（唯一口径）：剔除 disabled 行后的行序即「行下标空间」（0 基重新编号）。
- *  计数（countEnabledRows）与回放装载（loadDatasetForRun）必须同源，否则 UI 给的下标会被执行器判越界。 */
+/** Enabled-row array (the single source of truth): the row order after removing disabled rows is the "row index space" (renumbered 0-based).
+ *  Counting (countEnabledRows) and replay loading (loadDatasetForRun) must share this source, otherwise the executor judges the UI's indexes out of range. */
 export function enabledRows<T extends { disabled?: boolean }>(rows: T[] | null | undefined): T[] {
   return (rows ?? []).filter((r) => !r.disabled);
 }
 
-/** 启用行计数（唯一口径）：datasets.rows 里未禁用的行数。行下标空间按启用行重新编号（0 基）。
- *  TS 侧与 SQL 侧（计划详情回带）必须共用此规则，否则 UI 给的下标会被执行器判越界。 */
+/** Enabled-row count (the single source of truth): the number of non-disabled rows in datasets.rows. The row index space is renumbered over enabled rows (0-based).
+ *  The TS side and the SQL side (plan-detail backfill) must share this rule, otherwise the executor judges the UI's indexes out of range. */
 export function countEnabledRows(rows: { disabled?: boolean }[] | null | undefined): number {
   return enabledRows(rows).length;
 }
 
-/** 列表出参：不带 rows 明细，带行数统计。 */
+/** List output: no rows detail, but row-count stats included. */
 export async function listDatasets(projectId: string) {
   const rows = await db.select().from(datasets).where(eq(datasets.projectId, projectId)).orderBy(asc(datasets.createdAt));
   return attachCreators(rows.map((d) => ({
@@ -176,7 +176,7 @@ export async function listDatasets(projectId: string) {
   })));
 }
 
-/** 出参归一：敏感格密文 → {__masked:true} 占位。 */
+/** Output normalization: sensitive-cell ciphertext → {__masked:true} placeholder. */
 function maskDatasetRows(columns: DatasetColumn[], rows: DatasetRow[]) {
   const sensitive = new Set(columns.filter((c) => c.sensitive).map((c) => c.name));
   return rows.map((r) => ({
@@ -187,14 +187,14 @@ function maskDatasetRows(columns: DatasetColumn[], rows: DatasetRow[]) {
   }));
 }
 
-/** 详情出参：敏感格密文 → {__masked:true} 占位，其余明文。 */
+/** Detail output: sensitive-cell ciphertext → {__masked:true} placeholder, everything else plaintext. */
 export async function getDataset(datasetId: string) {
   const d = (await db.select().from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
   if (!d) return null;
   return attachCreator({ ...d, rows: maskDatasetRows(d.columns, d.rows) });
 }
 
-/** 归属解析(AI 工具闸门用):数据集所属项目 id,不存在为 null。 */
+/** Ownership resolution (for the AI tools' gate): the dataset's owning project id, null when missing. */
 export async function datasetProjectId(datasetId: string): Promise<string | null> {
   const row = (await db.select({ projectId: datasets.projectId }).from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
   return row?.projectId ?? null;
@@ -228,7 +228,7 @@ export async function updateDataset(datasetId: string, input: DatasetSaveBody) {
   }
 }
 
-/** 删除前引用计数（绑定该数据集的用例数；删除后 FK 置空自动解绑）。 */
+/** Reference count before delete (cases bound to this dataset; the FK is nulled on delete, unbinding automatically). */
 export async function datasetUsage(datasetId: string): Promise<{ caseCount: number }> {
   const rows = await db.select({ id: testCases.id }).from(testCases).where(eq(testCases.datasetId, datasetId));
   return { caseCount: rows.length };
@@ -237,30 +237,30 @@ export async function datasetUsage(datasetId: string): Promise<{ caseCount: numb
 export async function deleteDataset(datasetId: string): Promise<void> {
   const existing = (await db.select({ id: datasets.id }).from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
   if (!existing) throw new HttpError(404, 'not_found', 'dataset not found');
-  // FK 只把 dataset_id 置 null；行选择也得清（不变量：未绑定数据集 ⟹ 选择为空）。
-  // 必须在 delete 之前清 —— delete 触发 FK 后 dataset_id 已是 null，where 就匹配不到了。
+  // The FK only nulls dataset_id; the row selection must be cleared too (invariant: no dataset bound ⟹ empty selection).
+  // Must be cleared before the delete — once the delete triggers the FK, dataset_id is already null and the where matches nothing.
   await db.update(testCases).set({ datasetRowIndexes: [] }).where(eq(testCases.datasetId, datasetId));
-  // 计划级行覆盖一并清空（置 null = 跟随用例级）：下标空间属于被删数据集，留下即垃圾值。
-  // 须在 db.delete(datasets) 之前执行：删除后 FK 置空 test_cases.dataset_id，子查询将匹配 0 行（静默 no-op）。
+  // Plan-level row overrides are cleared together (null = follow case level): the index space belongs to the deleted dataset; leftovers are garbage values.
+  // Must run before db.delete(datasets): after the delete the FK nulls test_cases.dataset_id and the subquery would match 0 rows (silent no-op).
   await db.update(planCases).set({ datasetRowIndexes: null }).where(
     inArray(planCases.caseId, db.select({ id: testCases.id }).from(testCases).where(eq(testCases.datasetId, datasetId))),
   );
-  // 登录用例行覆盖同口径清理（组配置引用该数据集的登录用例）：同样必须在 delete 之前。
+  // Login-case row overrides cleared by the same criteria (group configs referencing this dataset's login case): equally must run before the delete.
   await db.update(planCaseGroups).set({ loginDatasetRowIndexes: null }).where(
     inArray(planCaseGroups.loginCaseId, db.select({ id: testCases.id }).from(testCases).where(eq(testCases.datasetId, datasetId))),
   );
   await db.delete(datasets).where(eq(datasets.id, datasetId));
 }
 
-/** 启用行数（用例行选择的下标上界）。数据集不存在返回 0。 */
+/** Enabled-row count (the index upper bound for case row selection). Returns 0 when the dataset is missing. */
 export async function enabledRowCount(datasetId: string): Promise<number> {
   const d = (await db.select({ rows: datasets.rows }).from(datasets).where(eq(datasets.id, datasetId)).limit(1))[0];
   return d ? countEnabledRows(d.rows) : 0;
 }
 
-/** 行选择共用校验（用例级 cases.service / 计划级 plans.service 同一口径）：
- *  空数组放行（[]=全部行）；非空要求 ≤500 个非负整数下标、已绑数据集、落在启用行范围内。
- *  null（清覆盖）由调用方自行放行，不进本函数。 */
+/** Shared row-selection validation (one criteria for case level in cases.service and plan level in plans.service):
+ *  an empty array passes ([] = all rows); non-empty requires ≤500 non-negative integer indexes, a bound dataset, and values within the enabled-row range.
+ *  null (clear the override) is let through by the caller itself and never reaches this function. */
 export async function assertDatasetRowIndexes(datasetId: string | null | undefined, rowIndexes: number[]): Promise<void> {
   if (rowIndexes.length === 0) return;
   if (rowIndexes.length > MAX_ROWS) throw new HttpError(400, 'bad_request', `数据行选择最多 ${MAX_ROWS} 行`);
@@ -276,7 +276,7 @@ export async function assertDatasetRowIndexes(datasetId: string | null | undefin
   }
 }
 
-/** 单行回放上下文：vars=解密后初始变量（仅执行期内存）；snapshot=落报告的行快照（敏感值固定 ******）。 */
+/** Single-row replay context: vars = decrypted initial variables (execution-time memory only); snapshot = the row snapshot written to the report (sensitive values fixed to ******). */
 export interface DatasetRowExec {
   rowIndex: number;
   totalRows: number;
@@ -285,12 +285,12 @@ export interface DatasetRowExec {
   snapshot: { rowIndex: number; totalRows: number; values: Record<string, string> };
 }
 
-/** 回放装载：过滤 disabled 行、按用例的行选择过滤、解密敏感格、产出每行初始 vars 与快照。配置错误抛 DatasetConfigError。
+/** Replay loading: filters disabled rows, filters by the case's row selection, decrypts sensitive cells, and produces each row's initial vars + snapshot. Configuration errors throw DatasetConfigError.
  *
- *  rowIndexes：启用行下标数组（0 基，剔除 disabled 行后重新编号）。
- *  空/未指定 = 全部启用行（旧行为）；非空 = 只跑这些行。
- *  rowIndex 取值 = 该行在 enabled 数组里的下标（不是 selected 数组内的位置），
- *  这样报告里的 dataset_row_index 在不同选择下指向同一物理行，跨批次稳定。 */
+ *  rowIndexes: enabled-row index array (0-based, renumbered after removing disabled rows).
+ *  Empty/unspecified = all enabled rows (legacy behavior); non-empty = run only these rows.
+ *  rowIndex = the row's index in the enabled array (not its position in the selected array),
+ *  so the report's dataset_row_index points at the same physical row across different selections, stable across batches. */
 export async function loadDatasetForRun(datasetId: string, opts?: { rowIndexes?: number[] | null }): Promise<{
   datasetId: string;
   columns: DatasetColumn[];
@@ -312,7 +312,7 @@ export async function loadDatasetForRun(datasetId: string, opts?: { rowIndexes?:
       `用例选择的数据行 ${outOfRange.map((i) => i + 1).join('、')} 超出该数据集的启用行范围（共 ${enabled.length} 行）`,
     );
   }
-  // 升序：执行顺序 = 数据集行序。rowIndex = 启用空间下标。
+  // Ascending: execution order = dataset row order. rowIndex = enabled-space index.
   const selectedIdx = wanted.length === 0
     ? enabled.map((_, i) => i)
     : [...wanted].sort((a, b) => a - b);
@@ -337,7 +337,7 @@ export async function loadDatasetForRun(datasetId: string, opts?: { rowIndexes?:
     }
     return {
       rowIndex,
-      // totalRows = 本批次实际执行行数（分母口径），不是数据集启用行总数。
+      // totalRows = the rows actually executed in this batch (the denominator), not the dataset's total enabled rows.
       totalRows: selectedIdx.length,
       vars,
       sensitiveVarKeys,

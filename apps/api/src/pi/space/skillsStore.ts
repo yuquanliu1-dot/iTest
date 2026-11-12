@@ -1,17 +1,17 @@
 /**
- * AI 助手 Skills 全局共享存储（系统设置页管理；所有 space 线程加载全量启用 skills）。
+ * AI assistant Skills globally-shared storage (managed by the system settings page; every space thread loads all enabled skills).
  *
- *  **文件系统是真源**：技能正文与全部目录树在 SKILLS_ROOT/<slug>/ 下（.data/skills），
- *  DB（assistant_skills）只存 name/description/enabled 三项元数据。2026-10-19 存储翻转：
- *  旧模型把正文与脚本扁平化存 body/scripts 两列，agents/ references/ assets/ eval-viewer/
- *  这类目录全部丢弃，且脚本只能是平级的 scripts/<filename>——官方 skill-creator 的包式
- *  python import 因此无法工作。
+ *  **The file system is the source of truth**: skill bodies and the full directory tree live under SKILLS_ROOT/<slug>/ (.data/skills);
+ *  the DB (assistant_skills) stores only three metadata items: name/description/enabled. 2026-10-19 storage flip:
+ *  the old model flattened the body and scripts into the body/scripts columns, dropping directories like agents/ references/ assets/ eval-viewer/
+ *  entirely, and scripts could only be flat scripts/<filename> — the official skill-creator's packaged
+ *  python imports therefore could not work.
  *
- *  .data 是 docker 卷（docker-compose.yml 挂 itest-data:/repo/apps/api/.data），所有 api 副本
- *  共见同一份文件——旧注释「多副本无共享文件系统」是错的，纠正至此。**代价**：该卷是宿主本地
- *  的，将来多机部署会让技能库静默割裂，迁移前需换成对象存储。
+ *  .data is a docker volume (docker-compose.yml mounts itest-data:/repo/apps/api/.data); all api replicas
+ *  see the same files — the old comment "no shared file system across replicas" was wrong, corrected here. **The cost**: that volume is
+ *  host-local, so a future multi-machine deployment would silently split the skill library; before that migration it must be swapped for object storage.
  *
- *  任何时候不得整体 rm SKILLS_ROOT——那是唯一的技能正文。
+ *  Never rm SKILLS_ROOT as a whole — it is the only copy of the skill bodies.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,16 +20,16 @@ import { db } from '../../db/client.js';
 import { assistantSkills } from '../../db/schema.js';
 import { WORKSPACES_ROOT } from '../repo.js';
 
-/** 脚本允许的 runtime（与系统执行器对映；容器镜像装了 node/python3/bash/sh）。 */
+/** Runtimes allowed for scripts (mirrors the system executor; the container image ships node/python3/bash/sh). */
 export const SCRIPT_RUNTIMES = ['node', 'python3', 'bash', 'sh'] as const;
 export type ScriptRuntime = (typeof SCRIPT_RUNTIMES)[number];
 
-/** 全局 skills 根：.data/skills（WORKSPACES_ROOT=.data/workspaces 的兄弟目录）。 */
+/** Global skills root: .data/skills (sibling of WORKSPACES_ROOT=.data/workspaces). */
 export const SKILLS_ROOT = path.join(path.dirname(WORKSPACES_ROOT), 'skills');
 
-/** skill 名称（slug）守卫：与 pi-coding-agent loadSkills validateName 同源（名称=目录名 +
- *  read_skill/run_skill_script 入参，必须能被 skills loader 装进 catalog）。
- *  仅小写 a-z/数字/连字符；不以 - 开头/结尾，无连续 --，≤64。 */
+/** Skill name (slug) guard: same source as pi-coding-agent loadSkills validateName (the name = directory name +
+ *  the argument of read_skill/run_skill_script, so it must be installable into the catalog by the skills loader).
+ *  Lowercase a-z/digits/hyphens only; no leading/trailing -, no consecutive --, ≤64. */
 export function isSafeSkillName(name: string): boolean {
   return (
     /^[a-z0-9-]+$/.test(name)
@@ -44,14 +44,14 @@ export function isScriptRuntime(r: string): r is ScriptRuntime {
   return (SCRIPT_RUNTIMES as readonly string[]).includes(r);
 }
 
-/** 单个技能目录的绝对路径（name 必须是已过 isSafeSkillName 的 DB slug）。 */
+/** Absolute path of a single skill directory (name must be a DB slug that passed isSafeSkillName). */
 export function skillDirOf(name: string): string {
   return path.join(SKILLS_ROOT, name);
 }
 
-/** enabled=true 的技能目录绝对路径数组，直接喂 pi loader。
- *  传逐技能目录而非 SKILLS_ROOT：pi 的 loadSkillsFromDirInternal 见到 SKILL.md 即停，不再下钻，
- *  故停用技能与孤儿目录天然不可见。 */
+/** Array of absolute directory paths for enabled=true skills, fed directly to the pi loader.
+ *  Per-skill directories are passed instead of SKILLS_ROOT: pi's loadSkillsFromDirInternal stops as soon as it sees a SKILL.md and doesn't descend further,
+ *  so disabled skills and orphan directories are naturally invisible. */
 export async function loadEnabledSkillDirs(): Promise<string[]> {
   const rows = await db.select({ name: assistantSkills.name })
     .from(assistantSkills)
@@ -60,7 +60,7 @@ export async function loadEnabledSkillDirs(): Promise<string[]> {
   return rows.map((r) => skillDirOf(r.name));
 }
 
-/** read_skill / run_skill_script 的准入闸门：技能必须存在且 DB enabled=true，否则不可达。 */
+/** Admission gate for read_skill / run_skill_script: the skill must exist and be DB enabled=true, otherwise unreachable. */
 export async function assertSkillEnabled(name: string): Promise<string | null> {
   const row = (await db.select({ enabled: assistantSkills.enabled })
     .from(assistantSkills)
@@ -72,7 +72,7 @@ export async function assertSkillEnabled(name: string): Promise<string | null> {
 }
 
 export interface SkillTreeNode {
-  /** 相对技能根的 posix 路径。 */
+  /** posix path relative to the skill root. */
   path: string;
   kind: 'file' | 'dir';
   size: number;
@@ -83,18 +83,18 @@ const MAX_TREE_ENTRIES = 200;
 const MAX_TREE_DEPTH = 8;
 
 /**
- * 列树时跳过的目录名。
+ * Directory names skipped when listing the tree.
  *
- * node_modules：依赖目录，不是技能内容。
- * __pycache__：Python 跑一次脚本就自动生成的字节码缓存。技能脚本被
- *   run_skill_script 执行时，Python 会在脚本所在目录写 .pyc——这让「文件树」
- *   在跑过一次之后凭空多出几个二进制条目（实测 skill-creator 18 文件 → 24），
- *   模型看到的是一堆与技能语义无关的噪声。内容是真源，字节码不是。
+ * node_modules: dependency directory, not skill content.
+ * __pycache__: bytecode cache auto-generated the first time Python runs a script. When a skill script is
+ *   executed via run_skill_script, Python writes .pyc files into the script's directory — this makes the "file tree"
+ *   sprout several binary entries out of nowhere after one run (measured: skill-creator 18 files → 24);
+ *   what the model sees becomes a pile of noise unrelated to the skill's semantics. Content is the source of truth; bytecode is not.
  */
 const SKIP_DIR_NAMES = new Set(['node_modules', '__pycache__']);
 
-/** 递归列树。.git/node_modules/隐藏文件/软链一律跳过；超量或超深则截断。
- *  列表页每轮都要调，故必须只 readdir/stat、不读内容。 */
+/** Recursively list the tree. .git/node_modules/hidden files/symlinks are always skipped; truncated on overflow of count or depth.
+ *  The list page calls this every round, so it must only readdir/stat and never read content. */
 export function listSkillTree(skillDir: string): SkillTreeNode[] {
   const out: SkillTreeNode[] = [];
   const state = { truncated: false };
@@ -113,7 +113,7 @@ export function listSkillTree(skillDir: string): SkillTreeNode[] {
       let isDir = e.isDirectory();
       let isFile = e.isFile();
       if (e.isSymbolicLink()) {
-        // 软链不进树：即便指向树内也会在文件树与实际读取间产生两套视图，且易成逃逸面。
+        // Symlinks don't enter the tree: even pointing inside the tree, they create two divergent views between the file tree and actual reads, and easily become an escape surface.
         continue;
       }
       if (isDir) {
@@ -121,7 +121,7 @@ export function listSkillTree(skillDir: string): SkillTreeNode[] {
         walk(childAbs, childRel, depth + 1);
       } else if (isFile) {
         let size = 0;
-        try { size = fs.statSync(childAbs).size; } catch { /* 忽略取不到大小的 */ }
+        try { size = fs.statSync(childAbs).size; } catch { /* ignore when size is unavailable */ }
         out.push({ path: childRel, kind: 'file', size, runtime: runtimeOfPath(childRel) });
       }
       if (out.length >= MAX_TREE_ENTRIES) { state.truncated = true; return; }
@@ -129,7 +129,7 @@ export function listSkillTree(skillDir: string): SkillTreeNode[] {
   }
 }
 
-/** runtime 只给可执行扩展名，不给 assets/*.html 之类误标 node。 */
+/** runtime is only given to executable extensions, never mislabeling assets/*.html etc. as node. */
 function runtimeOfPath(rel: string): string | undefined {
   if (/\.py$/i.test(rel)) return 'python3';
   if (/\.sh$/i.test(rel)) return 'bash';
@@ -137,7 +137,7 @@ function runtimeOfPath(rel: string): string | undefined {
   return undefined;
 }
 
-/** 列表页统计：只数数量与字节，不读内容。 */
+/** List page stats: count only numbers and bytes, never read content. */
 export function countSkillFiles(skillDir: string): { fileCount: number; totalBytes: number } {
   let fileCount = 0;
   let totalBytes = 0;
@@ -147,7 +147,7 @@ export function countSkillFiles(skillDir: string): { fileCount: number; totalByt
   return { fileCount, totalBytes };
 }
 
-/** 磁盘上存在但 DB 无登记行的孤儿目录名（设置页展示为「未登记」，绝不入 catalog、不自动收养）。 */
+/** Orphan directory names that exist on disk but have no registered DB row (shown as "unregistered" in the settings page; never enter the catalog, never auto-adopted). */
 export function listOrphanSkillDirs(registeredNames: string[]): string[] {
   const known = new Set(registeredNames);
   try {

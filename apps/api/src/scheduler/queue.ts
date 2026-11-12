@@ -1,11 +1,11 @@
 /**
- * BullMQ 队列基础设施。
+ * BullMQ queue infrastructure.
  *
- * 关键约束：
- * - BullMQ 5 强制 worker 连接 `maxRetriesPerRequest: null`（失败阻塞 GET 模式）。
- * - Queue/Worker/Events 各自用独立 ioredis 连接（BullMQ 推荐）。
- * - 若 REDIS_URL 未设置或连接失败，scheduler 优雅降级到「无调度」模式
- *   （手动一键执行路径仍然能用）。与 cache.ts 的 fail-open 行为一致。
+ * Key constraints:
+ * - BullMQ 5 forces worker connections to `maxRetriesPerRequest: null` (fail-blocking GET mode).
+ * - Queue/Worker/Events each use their own ioredis connection (BullMQ recommendation).
+ * - If REDIS_URL is unset or the connection fails, the scheduler degrades gracefully to "no scheduling" mode
+ *   (the manual one-click run path still works). Consistent with cache.ts's fail-open behavior.
  */
 import IORedis, { type Redis } from 'ioredis';
 import { Queue, Worker } from 'bullmq';
@@ -23,8 +23,8 @@ export function isSchedulerReady(): boolean {
 export function getRedis(): Redis {
   if (!_redis) {
     const url = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
-    // enableOfflineQueue:false → redis 断开时 add() 立即 reject,让调用方走 inline 回落
-    //（而非把任务无限缓冲在 offline 队列,留下永远 running 的 plan_run/report）。
+    // enableOfflineQueue:false → when redis disconnects, add() rejects immediately, letting callers fall back inline
+    //(instead of buffering jobs endlessly in the offline queue, leaving plan_run/report stuck running forever).
     _redis = new IORedis(url, { maxRetriesPerRequest: null, enableOfflineQueue: false });
     _redis.on('error', (err) => logger.debug({ err: err.message }, 'scheduler redis error'));
   }
@@ -38,12 +38,12 @@ export function getQueue(): Queue<{ scheduleId: string }> {
   return _queue;
 }
 
-/** 构造一个 worker（由 scheduler/index.ts 在 startScheduler 时调用）。 */
+/** Build a worker (called by scheduler/index.ts in startScheduler). */
 export function buildWorker(
   processor: (scheduleId: string) => Promise<void>,
 ): Worker<{ scheduleId: string }> {
-  // Worker 走顶部静态 import。此处曾是 require('bullmq')——api 是纯 ESM,require 未定义,
-  // startScheduler 首次上 3 副本即崩(exec worker 的 require 崩溃同款坑,勿再走 require)。
+  // Worker uses the top-level static import. This used to be require('bullmq') — api is pure ESM, require is undefined,
+  // and startScheduler crashed on the very first 3-replica rollout (same gotcha as the exec worker's require crash; never use require again).
   return new Worker<{ scheduleId: string }>(
     PLAN_SCHEDULE_QUEUE_NAME,
     async (job) => processor(job.data.scheduleId),
@@ -51,7 +51,7 @@ export function buildWorker(
   );
 }
 
-/** 仅供测试/teardown：断开连接、清空单例。 */
+/** For tests/teardown only: disconnect and clear the singletons. */
 export async function __closeForTests(): Promise<void> {
   if (_queue) {
     await _queue.close();

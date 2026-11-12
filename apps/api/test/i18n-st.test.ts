@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { st, type StKey } from '../src/i18n.js';
 
-/** 全量 zh 键的字节一致冻结：dict 里的 zh 文案必须与迁移前的中文字面量逐字相同。
- *  曾回归过一次（insert_step 空格漂移），用表驱动钉死全部键，防再犯。 */
+/** Byte-identical freeze of the full zh key set: zh strings in the dict must match the pre-migration Chinese literals verbatim.
+ *  This regressed once (insert_step whitespace drift); the table-driven form pins every key to prevent recurrence. */
 const ZH_BYTE_IDENTITY: Array<[StKey, Record<string, string | number | boolean>, string]> = [
   ['case.updated', { title: '登录', keys: 'instruction' }, '更新「登录」(instruction)'],
   ['case.deleted', { title: 'T' }, '删除「T」'],

@@ -1,8 +1,8 @@
 /**
- * manage_datasets:项目数据集读取(含脱敏行值)/修改(全量替换,阻塞确认)/删除(阻塞确认)。
- * 敏感格出参 {__masked:true};update 沿用 web PUT 语义——没改过的敏感格必须原样回传该占位
- * (按行下标沿用旧密文),列改名必须带 renames 声明,否则密文静默清空或 400。
- * 新建数据集仍走 stage_dataset(草稿区预览→勾选落库);本工具只管已落库数据集。
+ * manage_datasets: project dataset read (masked row values included) / modify (full replacement, blocking confirmation) / delete (blocking confirmation).
+ * Sensitive cells go out as {__masked:true}; update follows the web PUT semantics — untouched sensitive cells must be passed back with that placeholder
+ * as-is (old ciphertext retained by row index), column renames must declare renames, or the ciphertext is silently cleared or a 400 results.
+ * Creating a new dataset still goes through stage_dataset (draft-area preview → check-off → persistence); this tool only manages persisted datasets.
  */
 import { Type } from '@earendil-works/pi-ai';
 import { z } from 'zod';
@@ -22,16 +22,16 @@ const Actions = z.object({
   description: z.string().max(2000).nullable().optional(),
   columns: z.array(z.object({ name: z.string(), sensitive: z.boolean().optional() })).optional(),
   rows: z.array(z.object({ disabled: z.boolean().optional(), cells: z.record(z.unknown()) })).optional(),
-  /** 列改名声明(旧列名 → 新列名):敏感列改名时必须带,否则旧密文对不上新列名。 */
+  /** Column rename declaration (old name → new name): required when renaming sensitive columns, or the old ciphertext won't match the new name. */
   renames: z.record(z.string()).optional(),
 });
 
-/** 单元格/行值的上下文预算:字符串超 1000 字截断({__masked:true} 占位原样保留)。 */
+/** Context budget for cells/row values: strings over 1000 chars are truncated ({__masked:true} placeholders kept as-is). */
 function clipCell(v: unknown): unknown {
   return typeof v === 'string' && v.length > 1000 ? `${v.slice(0, 1000)}…` : v;
 }
 
-/** 行值整形:get 只回前 10 行(超限标 truncated),单元格字符串截断;敏感格保持 {__masked:true} 占位。 */
+/** Row-value shaping: get returns only the first 10 rows (truncated is flagged beyond that), cell strings are clipped; sensitive cells keep the {__masked:true} placeholder. */
 function shapeRows(rows: Array<{ disabled?: boolean; cells: Record<string, unknown> }>) {
   const over = rows.length > 10;
   const shaped = rows.slice(0, 10).map((r) => ({
@@ -106,7 +106,7 @@ export function buildDatasetsTools(ctx: SpaceToolsContext): ToolExecutor[] {
               if (pid !== ctx.projectId) return { ok: false, error: '数据集不存在或不属于当前项目' };
               const before = await svc.getDataset(v.datasetId);
               if (!before) return { ok: false, error: '数据集不存在或不属于当前项目' };
-              // 结构摘要 diff(不逐行):列增删/改名/敏感标记变化 + 行数差
+              // Structure-summary diff (not row-by-row): column add/remove/rename/sensitive-flag changes + row-count delta
               const beforeCols = before.columns.map((c) => `${c.name}${c.sensitive ? '(敏感)' : ''}`);
               const afterCols = v.columns.map((c) => `${c.name}${c.sensitive ? '(敏感)' : ''}`);
               const diffLines = [

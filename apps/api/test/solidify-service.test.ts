@@ -1,4 +1,4 @@
-/** 固化盘点管线：防重入/LLM 未配置/空输入/蒸馏入库/单条丢弃/超时/无落点；R3.6 会话信号接线。 */
+/** Solidification inventory pipeline: re-entry guard / LLM unconfigured / empty input / distill-to-DB / per-item drop / timeout / no landing key; R3.6 session signal wiring. */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCHEMA_SQL, seedLlmChannel, seedProject } from './helpers/db.js';
 
-// 仅被「内部建 client」用例触达（其余用例全部 DI 注入 stub，不碰真 SDK）。
+// Only reached by the "internally constructed client" cases (all other cases get a DI-injected stub and never touch the real SDK).
 const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
 vi.mock('@anthropic-ai/sdk', () => {
   class Anthropic {
@@ -35,11 +35,11 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // RESTART IDENTITY：R3.5 用例硬编码 rollback#2/refId '2'，bigserial 须每例从 1 重来。
+  // RESTART IDENTITY: R3.5 cases hardcode rollback#2 / refId '2', so bigserial must restart from 1 for every case.
   await pool.query(`TRUNCATE assistant_solidify_proposals, assistant_solidify_batches, assistant_memories, assistant_trajectories, assistant_skills, assistant_failure_signals, assistant_failure_lessons, assistant_prompt_module_versions, settings, ai_threads RESTART IDENTITY`);
 });
 
-/** stub LLM client：completeJson 首轮 kind:'json' 即透传 value/model（trajectory-worker.test 同款）。 */
+/** stub LLM client: completeJson passes value/model straight through on the first call with kind:'json' (same style as trajectory-worker.test). */
 function stubClient(value: unknown) {
   return {
     provider: 'openai' as const,
@@ -47,8 +47,8 @@ function stubClient(value: unknown) {
   };
 }
 
-/** 顺序计数 stub：call#1=教训蒸馏、call#2=资产蒸馏，按次序回放；记录入参（JSON.stringify 断言）。
- *  函数值支持 async（教训行在 call#1 处理期间才入库，call#2 回调须查库取教训 id）。 */
+/** Sequential-counting stub: call#1 = lesson distillation, call#2 = asset distillation, replayed in order; records inputs (asserted via JSON.stringify).
+ *  Function values support async (the lesson row is only inserted during call#1 processing, so the call#2 callback must query the DB for the lesson id). */
 function sequentialStub(values: Array<unknown | ((prevReq: unknown) => unknown)>) {
   let i = 0;
   const calls: unknown[] = [];
@@ -65,7 +65,7 @@ function sequentialStub(values: Array<unknown | ((prevReq: unknown) => unknown)>
   };
 }
 
-/** seed 一轮「人工回滚 + 恢复默认」版本链（S1 信号源）：seq 2=rollback，seq 4=restore_default。 */
+/** Seed one round of the "manual rollback + restore default" version chain (S1 signal source): seq 2 = rollback, seq 4 = restore_default. */
 async function seedRollbackSignal(): Promise<void> {
   await pool.query(
     `INSERT INTO assistant_prompt_module_versions (module_key, value, source) VALUES
@@ -111,7 +111,7 @@ describe('runSolidifyScan', () => {
   it('LLM 未配置 → 批次 failed + error 说明', async () => {
     const { runSolidifyScan } = await import('../src/pi/space/solidifyService.js');
     const id = await newBatchId();
-    await runSolidifyScan(id); // 测试库 settings 空 → readLlmConfig null
+    await runSolidifyScan(id); // test DB settings empty → readLlmConfig null
     const b = await batchRow(id);
     expect(b.status).toBe('failed');
     expect(b.error).toContain('LLM 未配置');
@@ -202,12 +202,12 @@ describe('runSolidifyScan', () => {
     await runSolidifyScan(id, { client: stubClient({
       proposals: [
         { kind: 'prompt_amendment', target: 'space.style.zh', title: '好', body: 'b', rationale: 'r', sources: [memoryId] },
-        { kind: 'prompt_amendment', target: 'space.style.zh', /* 缺 body */ title: '坏', rationale: 'r', sources: [memoryId] },
+        { kind: 'prompt_amendment', target: 'space.style.zh', /* body missing */ title: '坏', rationale: 'r', sources: [memoryId] },
       ],
       notes: [],
     }) });
     const b = await batchRow(id);
-    expect(b.status).toBe('done'); // 不 failed
+    expect(b.status).toBe('done'); // not failed
     const n = (await pool.query(`SELECT count(*)::int n FROM assistant_solidify_proposals`)).rows[0]!;
     expect(n.n).toBe(1);
   });
@@ -242,8 +242,8 @@ describe('runSolidifyScan：R3.5 失败教训', () => {
     const id = await newBatchId();
     await runSolidifyScan(id, { client: stub as never });
     expect(stub.calls).toHaveLength(1);
-    // 系统提示词本身含「【失败教训】」指令文案；红线锚定的是输入节标志——零信号时
-    // 【失败教训】节（节头 + [L1] 条目）不出现。
+    // The system prompt itself contains the "【失败教训】" directive copy; the red line anchors on the input section marker — with zero signals
+    // the 【失败教训】 section (section header + [L1] entries) must not appear.
     expect(JSON.stringify(stub.calls[0])).not.toContain('（prompt_correction 的证据来源');
     expect(JSON.stringify(stub.calls[0])).not.toContain('[L1]');
     const b = await batchRow(id);
@@ -357,18 +357,18 @@ describe('runSolidifyScan：R3.5 失败教训', () => {
       },
     ]);
     await runSolidifyScan(await newBatchId(), { client: first as never });
-    // 补一条资产：否则第二次扫描信号已消费+资产为空 → 早退，连 call#2 都不会发生
+    // Seed one more asset: otherwise the second scan has consumed signals + empty assets → early exit, and even call#2 would never happen
     await seedSources();
     const second = sequentialStub([{ lessons: [], notes: [] }, { proposals: [], notes: [] }]);
     await runSolidifyScan(await newBatchId(), { client: second as never });
-    // 第二次扫描信号已消费 → 阶段 1 跳过 → 资产蒸馏是最后一次调用
+    // Second scan's signals already consumed → phase 1 skipped → asset distillation is the last call
     expect(JSON.stringify(second.calls[second.calls.length - 1])).not.toContain('教训A');
   });
 });
 
-// ── R3.6 会话信号 ──
+// ── R3.6 session signals ──
 
-/** 可疑会话 JSONL（failure-lessons.test 同款：verify 死循环 3 连 + 31min 时长 → 嫌疑分 7）。 */
+/** Suspicious-session JSONL (same style as failure-lessons.test: 3 consecutive verify loops + 31min duration → suspicion score 7). */
 function suspiciousJsonl(firstUserText = '首条需求：核查SOC事件列表'): string {
   const t0 = Date.parse('2026-11-01T10:00:00Z');
   const at = (min: number) => new Date(t0 + min * 60_000).toISOString();
@@ -382,9 +382,9 @@ function suspiciousJsonl(firstUserText = '首条需求：核查SOC事件列表')
   return lines.join('\n');
 }
 
-/** 插 chat 线程 + 写 JSONL。pi_thread_id 用裸 uuid（非绝对路径）——逼 findSessionFile 走
- *  readdir 兜底，使 SolidifyRunDeps.sessionsRoot 的 DI 成为测试载荷（绝对路径会绕过 DI 直探）。
- *  updated_at 用 UTC 墙钟串（drizzle 写路径同款语义），返回测试自持 Date 做真值。 */
+/** Insert a chat thread + write JSONL. pi_thread_id uses a bare uuid (not an absolute path) — forcing findSessionFile down the
+ *  readdir fallback, making SolidifyRunDeps.sessionsRoot's DI part of the test payload (an absolute path would bypass DI and probe directly).
+ *  updated_at uses a UTC wall-clock string (same semantics as the drizzle write path); returns the test-held Date as the source of truth. */
 async function seedChatThread(firstUserText?: string): Promise<{ id: string; updatedAt: Date }> {
   const uuid = randomUUID();
   await writeFile(join(sessionsRoot, `sess_${uuid}.jsonl`), suspiciousJsonl(firstUserText));
@@ -402,7 +402,7 @@ describe('runSolidifyScan：R3.6 会话信号', () => {
     const stub = sequentialStub([{ lessons: [], notes: [] }, { proposals: [], notes: [] }]);
     const id = await newBatchId();
     await runSolidifyScan(id, { client: stub as never, sessionsRoot });
-    expect(stub.calls).toHaveLength(2); // 有信号不早退，蒸馏两连调
+    expect(stub.calls).toHaveLength(2); // signals present → no early exit, distillation called twice
     expect(JSON.stringify(stub.calls[0])).toContain('type=session');
     expect(JSON.stringify(stub.calls[0])).toContain('首条需求：核查SOC事件列表');
     const summary = JSON.parse((await batchRow(id)).input_summary as string);
@@ -448,12 +448,12 @@ describe('runSolidifyScan：R3.6 会话信号', () => {
 
   it('采集器 note（>8MB 跳过）并入批次 summary.notes（早退路径除外）', async () => {
     const { runSolidifyScan } = await import('../src/pi/space/solidifyService.js');
-    await seedSources(); // 资产池非空防早退
+    await seedSources(); // non-empty asset pool prevents early exit
     const uuid = randomUUID();
-    await writeFile(join(sessionsRoot, `sess_${uuid}.jsonl`), 'x'.repeat(9 * 1024 * 1024)); // 内容无所谓——按尺寸先跳过
+    await writeFile(join(sessionsRoot, `sess_${uuid}.jsonl`), 'x'.repeat(9 * 1024 * 1024)); // content irrelevant — skipped by size first
     await pool.query(`INSERT INTO ai_threads (pi_thread_id, purpose, updated_at, created_at) VALUES ($1, 'chat', $2, $2)`,
       [uuid, '2026-11-01 12:00:00']);
-    const stub = sequentialStub([{ proposals: [], notes: [] }]); // 0 信号 → 无阶段 1，只有资产蒸馏一次调用
+    const stub = sequentialStub([{ proposals: [], notes: [] }]); // 0 signals → no phase 1, only one asset distillation call
     const id = await newBatchId();
     await runSolidifyScan(id, { client: stub as never, sessionsRoot });
     const summary = JSON.parse((await batchRow(id)).input_summary as string);
@@ -461,10 +461,11 @@ describe('runSolidifyScan：R3.6 会话信号', () => {
   });
 });
 
-// ── 渠道 maxTokens 接线（2026-11-01 prod228 实测回归锚）──
-// 生产 bug：内部建 client 手搓字段丢掉 cfg.maxTokens → 网关思考模型在默认 4096 里烧光
-// 预算 → 空文本，蒸馏必败；设置页配 16384 也不生效。锚定：不注入 deps.client、走
-// readLlmConfig → getLlmClient 的真实路径，请求体必须透传配置的 max_tokens。
+// ── Channel maxTokens wiring (2026-11-01 prod228 field-verified regression anchor) ──
+// Production bug: the internally constructed client hand-rolled its fields and dropped cfg.maxTokens → the gateway
+// thinking model burned its entire budget in the default 4096 → empty text, distillation always failed; setting 16384
+// on the settings page had no effect either. Anchor: do not inject deps.client; take the real
+// readLlmConfig → getLlmClient path, and the request body must pass through the configured max_tokens.
 describe('runSolidifyScan：内部建 client 透传渠道 maxTokens', () => {
   it('渠道配 maxTokens=16384 → Anthropic 请求体 max_tokens=16384（而非默认 4096）', async () => {
     await seedLlmChannel(pool, { provider: 'anthropic', apiKey: 'sk-test', model: 'm', maxTokens: 16384 });
@@ -474,9 +475,9 @@ describe('runSolidifyScan：内部建 client 透传渠道 maxTokens', () => {
       usage: { input_tokens: 10, output_tokens: 5 },
     });
     const { runSolidifyScan } = await import('../src/pi/space/solidifyService.js');
-    await seedSources(); // 资产池非空防早退（0 信号 → 无阶段 1，只有资产蒸馏一次调用）
+    await seedSources(); // non-empty asset pool prevents early exit (0 signals → no phase 1, only one asset distillation call)
     const id = await newBatchId();
-    await runSolidifyScan(id, { sessionsRoot }); // 不注入 client → 内部 readLlmConfig 建 client
+    await runSolidifyScan(id, { sessionsRoot }); // no client injected → internal readLlmConfig builds the client
     const b = await batchRow(id);
     expect(b.status).toBe('done');
     expect(createMock).toHaveBeenCalledTimes(1);

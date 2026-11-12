@@ -5,13 +5,13 @@ import os from 'node:os';
 import type { ToolExecutor } from '../src/pi/tools.js';
 import type { SpaceToolsContext } from '../src/pi/space/tools/context.js';
 
-/** 用动态 import + PI_DATA_DIR 指向临时目录，让 SKILLS_ROOT 落在可控路径（模块级常量在导入时解析）。 */
+/** Uses dynamic import + PI_DATA_DIR pointing at a temp dir so SKILLS_ROOT lands on a controlled path (module-level constants resolve at import time). */
 let buildTool: (ctx: SpaceToolsContext) => ToolExecutor;
 let skillsRoot: string;
 let root: string;
-/** registerPersistentArtifact 调用记录（mock 掉 DB 落库，本文件不连 PG）。 */
+/** registerPersistentArtifact call records (DB persistence mocked out; this file does not connect to PG). */
 const regCalls: Array<{ buffer: Buffer; meta: unknown; scope: unknown }> = [];
-/** ctx.emit 捕获的 artifact 事件。 */
+/** artifact events captured from ctx.emit. */
 const emitted: Record<string, unknown>[] = [];
 
 beforeAll(async () => {
@@ -19,12 +19,12 @@ beforeAll(async () => {
   process.env.PI_DATA_DIR = path.join(root, 'pi-data');
   process.env.SKILL_SCRIPT_TIMEOUT_MS = '3000';
   vi.resetModules();
-  // runSkillScript 会调 assertSkillEnabled 查 DB；本文件不连 PG，只 mock 掉这一处。
+  // runSkillScript calls assertSkillEnabled which queries the DB; this file does not connect to PG, so only that one spot is mocked.
   vi.doMock('../src/pi/space/skillsStore.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../src/pi/space/skillsStore.js')>();
     return { ...actual, assertSkillEnabled: async () => null };
   });
-  // 产物落库同样要 DB；这里 mock 成记录调用的假实现（协议/路径校验逻辑照跑真代码）。
+  // Artifact persistence also needs the DB; mocked here as a fake that records calls (protocol/path validation logic still runs the real code).
   vi.doMock('../src/pi/space/artifacts.js', () => ({
     registerPersistentArtifact: async (buffer: Buffer, meta: unknown, scope: unknown) => {
       regCalls.push({ buffer, meta, scope });
@@ -35,7 +35,7 @@ beforeAll(async () => {
   skillsRoot = store.SKILLS_ROOT;
   const mod = await import('../src/pi/space/tools/runSkillScript.js');
   buildTool = mod.buildRunSkillScriptTool;
-  // 种子技能目录（模拟 import 产物：目录树原样保留）
+  // Seeded skill directory (simulating the import artifact: directory tree kept as-is)
   await fs.mkdir(path.join(skillsRoot, 'echo', 'scripts'), { recursive: true });
   await fs.mkdir(path.join(skillsRoot, 'echo', 'eval-viewer'), { recursive: true });
   await fs.writeFile(path.join(skillsRoot, 'echo', 'SKILL.md'), '---\nname: echo\n---\n\nbody');
@@ -45,11 +45,11 @@ beforeAll(async () => {
   await fs.writeFile(path.join(skillsRoot, 'echo', 'scripts', 'big.js'), 'console.log("x".repeat(120000))');
   await fs.writeFile(path.join(skillsRoot, 'echo', 'scripts', 'fail.js'), 'process.exit(3)');
   await fs.writeFile(path.join(skillsRoot, 'echo', 'eval-viewer', 'gen.py'), 'print("from eval-viewer")\n');
-  // 包式 import 场景：scripts/ 是包（上游 skill-creator 就是这个形态）
+  // Package-style import scenario: scripts/ is a package (upstream skill-creator has this shape)
   await fs.writeFile(path.join(skillsRoot, 'echo', 'scripts', '__init__.py'), '');
   await fs.writeFile(path.join(skillsRoot, 'echo', 'scripts', 'util.py'), 'MARKER = 42\n');
   await fs.writeFile(path.join(skillsRoot, 'echo', 'scripts', 'pkgmain.py'), 'from scripts.util import MARKER\nprint("got", MARKER)\n');
-  // 产物协议脚本：写 .out/ + 打印清单（合法 / 清单 JSON 非法 / 路径越界 / 混合成败）
+  // Artifact protocol scripts: write .out/ + print the manifest (valid / invalid manifest JSON / path escape / mixed success-failure)
   await fs.writeFile(
     path.join(skillsRoot, 'echo', 'scripts', 'artifact.js'),
     [
@@ -156,13 +156,13 @@ describe('run_skill_script', () => {
     expect((await tool.execute({ skillName: '/etc', script: 'passwd' })).ok).toBe(false);
     expect((await tool.execute({ skillName: 'echo', script: '../../etc/passwd' })).ok).toBe(false);
     expect((await tool.execute({ skillName: 'echo', script: '/tmp/x' })).ok).toBe(false);
-    expect((await tool.execute({ skillName: 'echo', script: 'x/../../etc/passwd' })).ok).toBe(false); // ../ 越界
+    expect((await tool.execute({ skillName: 'echo', script: 'x/../../etc/passwd' })).ok).toBe(false); // ../ escape
     expect((await tool.execute({ skillName: 'nope', script: 'a.js' })).ok).toBe(false);
     expect((await tool.execute({ skillName: 'echo', script: 'missing.sh' })).ok).toBe(false);
   });
 
   it('包式 import 生效：cwd=技能根 + PYTHONPATH 让 `from scripts.x import` 可用', async () => {
-    // 这是 skill-creator 的 quick_validate.py / package_skill.py 之前跑不起来的那一类
+    // This is the class of script that skill-creator's quick_validate.py / package_skill.py previously could not run as
     const tool = buildTool(makeCtx());
     const r = await tool.execute({ skillName: 'echo', script: 'scripts/pkgmain.py' });
     expect(r.ok).toBe(true);
@@ -192,7 +192,7 @@ describe('run_skill_script', () => {
     expect(data).toContain('report generated');
     expect(data).toContain('已生成 1 个文件');
     expect(data).toContain('「报告.docx」');
-    expect(data).not.toContain('__ITEST_ARTIFACTS__'); // 协议噪声不进模型上下文
+    expect(data).not.toContain('__ITEST_ARTIFACTS__'); // protocol noise never enters model context
     expect(regCalls).toHaveLength(1);
     expect(regCalls[0]!.buffer.toString()).toBe('DOCX-BYTES');
     expect(regCalls[0]!.meta).toMatchObject({ name: '报告.docx', count: 7 });
@@ -215,7 +215,7 @@ describe('run_skill_script', () => {
     regCalls.length = 0; emitted.length = 0;
     const tool = buildTool(makeCtx());
     const r = await tool.execute({ skillName: 'echo', script: 'scripts/artifact-escape.js' });
-    expect(r.ok).toBe(true); // 条目失败不炸整轮调用
+    expect(r.ok).toBe(true); // an entry failing does not blow up the whole call
     expect((r as { data: string }).data).toContain('产物注册失败');
     expect((r as { data: string }).data).toContain('逃逸');
     expect(regCalls).toHaveLength(0);

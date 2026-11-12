@@ -5,7 +5,7 @@ import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject, seedOrg, resetSeedOrgCache } from './helpers/db.js';
 import { parseLsRemoteRefs } from '../src/services/gitProvider.js';
 
-// 只 mock 网络探测两个入口；parseLsRemoteRefs 等纯函数经 importOriginal 保真（下方单测直接复用）。
+// Only mock the two network-probe entry points; pure functions like parseLsRemoteRefs stay real via importOriginal (unit tests below reuse them directly).
 const { listRefsMock, verifyRefMock } = vi.hoisted(() => ({
   listRefsMock: vi.fn(),
   verifyRefMock: vi.fn(),
@@ -56,7 +56,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE projects, project_versions, "groups", test_cases, test_environments, execution_plans, project_assignments, organizations, users CASCADE`);
   resetSeedOrgCache(pool);
-  // 重建缓存的种子组织（TRUNCATE 后 org 被删，注入身份里的 orgId 已无效）
+  // Rebuild the cached seeded org (after TRUNCATE the org is gone, the orgId in the injected identity is stale)
   const org = await seedOrg(pool);
   userId = org.userId;
   username = org.username;
@@ -98,7 +98,7 @@ describe('project versions', () => {
   });
 
   it('删除非空 version 返回 400 version_not_empty + 计数', async () => {
-    // 先建第二个版本，否则只有一个版本会被 last_version 拦截
+    // Create a second version first, otherwise with only one version the delete would be blocked by last_version
     await request(app)
       .post(`/api/projects/${projectId}/versions`)
       .send({ name: 'v1.0' });
@@ -106,8 +106,8 @@ describe('project versions', () => {
       `INSERT INTO test_cases(group_id, version_id, title) VALUES ((SELECT id FROM "groups" WHERE project_id=$1), (SELECT id FROM project_versions WHERE project_id=$1 AND name='v0'), 'x')`,
       [projectId],
     );
-    // 显式删除 v0（此版本的用例计数 ≥1）而非 list.body[0]——GET 列表按 created_at 排序,
-    // v0/v1.0 同毫秒时会乱序,list.body[0] 可能命中空版本导致误断言（时敏 flake）
+    // Delete v0 explicitly (this version's case count ≥ 1) instead of list.body[0] — the GET list is sorted by created_at,
+    // and v0/v1.0 created within the same millisecond can come out of order, so list.body[0] may hit the empty version and mis-assert (timing-sensitive flake)
     const v0 = (await pool.query(`SELECT id FROM project_versions WHERE project_id=$1 AND name='v0'`, [projectId])).rows[0] as { id: string };
     const r = await request(app).delete(`/api/project-versions/${v0.id}`);
     expect(r.status).toBe(400);
@@ -247,7 +247,7 @@ describe('refs 列举与 ref 校验（2026-10-24 gitlab 下拉恒空 + 无测试
   });
 
   it('POST /verify-ref 未配置仓库 → 400 no_repo', async () => {
-    // seedProject 不配 repo_url；refs describe 的 beforeEach 只给外层 projectId 那个项目配了仓库
+    // seedProject sets no repo_url; the refs describe's beforeEach only configured a repo for the outer projectId's project
     const other = await seedProject(pool);
     const r = await request(app).post(`/api/projects/${other.projectId}/verify-ref`).send({ ref: 'main', kind: 'branch' });
     expect(r.status).toBe(400);

@@ -1,4 +1,4 @@
-/** R3.6 会话信号采集器：窗口/消费幂等/rca 排除/候选与选样上限/文件护栏（testcontainers + 临时目录 fixture）。 */
+/** R3.6 session signal collector: window/consumption idempotency/rca exclusion/candidate and sampling caps/file guards (testcontainers + temp-dir fixtures). */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
@@ -10,7 +10,7 @@ import { SCHEMA_SQL } from './helpers/db.js';
 
 let pool: Pool;
 let sessionsRoot: string;
-/** 固定「现在」，窗口/age 计算全以此为基准。 */
+/** Pin "now": all window/age calculations are anchored to this. */
 const NOW = new Date('2026-11-01T12:00:00Z');
 const MIN = 60_000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -33,7 +33,7 @@ beforeEach(async () => {
   await pool.query(`TRUNCATE ai_threads, assistant_failure_signals, ai_assistant_feedback`);
 });
 
-// ── JSONL 造行（行带 ISO timestamp——R3.6 起解析层透传）──
+// ── JSONL line builders (lines carry ISO timestamps — parsed transparently since R3.6) ──
 const userLine = (text: string, ts: string) =>
   JSON.stringify({ type: 'message', timestamp: ts, message: { role: 'user', content: [{ type: 'text', text }] } });
 const toolCallLine = (id: string, name: string, args: unknown, ts: string) =>
@@ -41,7 +41,7 @@ const toolCallLine = (id: string, name: string, args: unknown, ts: string) =>
 const toolResultLine = (id: string, name: string, ts: string, isError = false) =>
   JSON.stringify({ type: 'message', timestamp: ts, message: { role: 'toolResult', content: [{ type: 'text', text: 'r' }], toolCallId: id, toolName: name, isError } });
 
-/** 可疑会话 fixture：verify 死循环 3 连（同参）+ 30min 时长 → 嫌疑分 3+2+2=7。 */
+/** Suspicious session fixture: 3 consecutive verify loops (same args) + 30min duration → suspicion score 3+2+2=7. */
 function suspiciousJsonl(firstUserText = '首条需求：核查SOC事件列表'): string {
   const t0 = Date.parse('2026-11-01T10:00:00Z');
   const at = (min: number) => new Date(t0 + min * MIN).toISOString();
@@ -53,12 +53,12 @@ function suspiciousJsonl(firstUserText = '首条需求：核查SOC事件列表')
   return lines.join('\n');
 }
 
-/** 静默会话 fixture：1 轮无 timestamp → 嫌疑分 0（仍产信号，仅用于灌数量）。 */
+/** Quiet session fixture: 1 turn without a timestamp → suspicion score 0 (still yields a signal; only for padding the count). */
 const quietJsonl = () => userLine('安静会话', new Date(Date.parse('2026-11-01T09:00:00Z')).toISOString());
 
-/** 插线程（piThreadId=绝对 .jsonl 路径直探；jsonl 缺省=指向不存在文件）。
- *  updated_at 以 UTC 墙钟字符串写入（drizzle mapToDriverValue=toISOString 同款语义；
- *  原生 Date 参数会被 pg 序列化成本地偏移串，与 drizzle 读路径（按 UTC 解析）差时区）。 */
+/** Insert a thread (piThreadId=absolute .jsonl path probed directly; jsonl omitted = points at a nonexistent file).
+ *  updated_at is written as a UTC wall-clock string (same semantics as drizzle mapToDriverValue=toISOString;
+ *  a native Date parameter gets serialized by pg into a local-offset string, which differs in timezone from the drizzle read path (parsed as UTC)). */
 async function seedThread(opts: { ageMs?: number; purpose?: string; jsonl?: string }): Promise<{ id: string; updatedAt: Date; piThreadId: string }> {
   const updatedAt = new Date(NOW.getTime() - (opts.ageMs ?? 0));
   const piThreadId = opts.jsonl !== undefined ? join(sessionsRoot, `sess_${randomUUID()}.jsonl`) : `missing-${randomUUID()}`;
@@ -99,11 +99,11 @@ describe('collectSessionSignals', () => {
     expect(first.signals).toHaveLength(1);
     const refId = first.signals[0]!.refId;
     const second = await collect(new Set([refId]));
-    expect(second.signals).toHaveLength(0); // 同 epoch 抑制
+    expect(second.signals).toHaveLength(0); // same epoch suppression
     const newUpdatedAt = new Date(t.updatedAt.getTime() + 5 * MIN);
     await pool.query(`UPDATE ai_threads SET updated_at=$1 WHERE id=$2`, [newUpdatedAt.toISOString().slice(0, 19).replace('T', ' '), t.id]);
     const third = await collect(new Set([refId]));
-    expect(third.signals).toHaveLength(1); // 新 epoch 重喂
+    expect(third.signals).toHaveLength(1); // new epoch refeed
     expect(third.signals[0]!.refId).toBe(`session#${t.id}#${newUpdatedAt.getTime()}`);
   });
 
@@ -117,7 +117,7 @@ describe('collectSessionSignals', () => {
 
   it('坏文件（非 JSONL）跳过不炸批；缺文件静默；>8MB 跳过记 note', async () => {
     await seedThread({ jsonl: 'not json at all\n{broken' });
-    await seedThread({}); // 缺文件
+    await seedThread({}); // file missing
     await seedThread({ jsonl: `${userLine('首条需求：超大会话', NOW.toISOString())}\n${'x'.repeat(9 * 1024 * 1024)}` });
     const { signals, notes } = await collect();
     expect(signals).toHaveLength(0);
@@ -126,9 +126,9 @@ describe('collectSessionSignals', () => {
   });
 
   it('>30 条候选截断：最老的 5 条可疑线程（高嫌疑分）被 limit 30 排除，不进 top12', async () => {
-    // 30 条静默线程（updatedAt 最新，嫌疑分 0）
+    // 30 quiet threads (newest updatedAt, suspicion score 0)
     for (let i = 0; i < 30; i++) await seedThread({ ageMs: i * MIN, jsonl: quietJsonl() });
-    // 5 条最老的可疑线程（6 天前，嫌疑分 7）——若候选 cap 失效它们会霸占 top12
+    // 5 oldest suspicious threads (6 days ago, suspicion score 7) — if the candidate cap failed they would monopolize the top12
     for (let i = 0; i < 5; i++) {
       await seedThread({ ageMs: 6 * DAY + i * MIN, jsonl: suspiciousJsonl(`CAPMARK-marker-${i}`) });
     }

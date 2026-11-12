@@ -11,7 +11,7 @@ import ExcelJS from 'exceljs';
 const exec = promisify(execFile);
 const SCRIPT = path.resolve(process.cwd(), 'scripts/file-to-cases-content/scripts/parse_xlsx.py');
 
-/** archiver 手拼 zip（边角用例要精确控制内部 XML，exceljs 不给这种自由度）。 */
+/** Hand-assembles a zip with archiver (edge cases need precise control over the internal XML; exceljs does not give that freedom). */
 async function buildZip(files: Record<string, string>): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'xlsx-'));
   const out = path.join(dir, 'fixture.xlsx');
@@ -31,7 +31,7 @@ async function buildZip(files: Record<string, string>): Promise<string> {
   return out;
 }
 
-/** exceljs 现造常规结构 xlsx。 */
+/** Builds a conventional-structure xlsx live with exceljs. */
 async function buildXlsx(build: (wb: ExcelJS.Workbook) => void): Promise<string> {
   const wb = new ExcelJS.Workbook();
   build(wb);
@@ -53,7 +53,7 @@ describe('parse_xlsx.py', () => {
       const a = wb.addWorksheet('需求清单');
       a.addRow(['编号', '描述']);
       a.addRow(['REQ-001', '登录成功']);
-      // mergeCells 会清空被合并的 slave cell(exceljs 行为):不能合并表头行,否则 B1 变空
+      // mergeCells clears the merged slave cell (exceljs behavior): cannot merge the header rows, otherwise B1 becomes empty
       a.mergeCells('A2:B2');
       const h = wb.addWorksheet('隐藏配置');
       h.state = 'hidden';
@@ -92,7 +92,7 @@ describe('parse_xlsx.py', () => {
   });
 
   it('乱序 rId：sheet 顺序由 workbook.xml 声明序决定，与 sheetN.xml 文件名无关', async () => {
-    // workbook 声明序 = [Beta(rId7→sheet2.xml), Alpha(rId1→sheet1.xml)]——文件名与顺序完全错开
+    // workbook declaration order = [Beta(rId7→sheet2.xml), Alpha(rId1→sheet1.xml)] — filename and order fully disjoint
     const p = await buildZip({
       'xl/workbook.xml': `<?xml version="1.0"?><s:workbook ${NS}><s:sheets>`
         + '<s:sheet name="Beta" sheetId="2" r:id="r7"/>'
@@ -102,8 +102,8 @@ describe('parse_xlsx.py', () => {
         + '<Relationship Id="r7" Target="worksheets/sheet2.xml"/>'
         + '<Relationship Id="r1" Target="worksheets/sheet1.xml"/>'
         + '</Relationships>',
-      // XML 语义:无前缀子元素不继承带前缀父元素的命名空间——row/c/is/t 必须同样带前缀,
-      // 否则解析器的 iter('{main}row') 找不到任何行(真实 xlsx 用默认 xmlns,这里用前缀等价)。
+      // XML semantics: unprefixed child elements do not inherit the prefixed parent's namespace — row/c/is/t must be prefixed too,
+      // otherwise the parser's iter('{main}row') finds no rows (real xlsx uses a default xmlns; here the prefix form is equivalent).
       'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><s:worksheet ${NS}><s:sheetData>`
         + '<s:row r="1"><s:c r="A1" t="inlineStr"><s:is><s:t>alpha-data</s:t></s:is></s:c></s:row>'
         + '</s:sheetData></s:worksheet>',
@@ -121,7 +121,7 @@ describe('parse_xlsx.py', () => {
     const p = await buildZip({
       'xl/workbook.xml': `<?xml version="1.0"?><s:workbook ${NS}><s:sheets><s:sheet name="T" sheetId="1" r:id="r1"/></s:sheets></s:workbook>`,
       'xl/_rels/workbook.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r1" Target="worksheets/sheet1.xml"/></Relationships>`,
-      // 全元素带 s: 前缀(同上:无前缀子元素不在 main 命名空间,解析器找不到)
+      // All elements carry the s: prefix (same as above: unprefixed child elements are not in the main namespace, the parser finds nothing)
       'xl/sharedStrings.xml': `<?xml version="1.0"?><s:sst xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`
         + '<s:si><s:t>表头甲</s:t></s:si><s:si><s:r><s:t>富</s:t></s:r><s:r><s:t>文本</s:t></s:r></s:si></s:sst>',
       'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><s:worksheet ${NS}><s:sheetData>`
@@ -135,7 +135,7 @@ describe('parse_xlsx.py', () => {
   });
 
   it('relss 缺条目报错；坏 XML 报 ok=false；zip 条目数护栏可环境变量收紧', async () => {
-    // fail() 打印 ok=false JSON 后 sys.exit(1) → execFile reject；错误对象带 stdout，从中取 JSON
+    // fail() prints the ok=false JSON then sys.exit(1) → execFile reject; the error object carries stdout, from which the JSON is taken
     const run = async (args: string[], env?: NodeJS.ProcessEnv) =>
       (await exec('python3', [SCRIPT, ...args], { env: env ? { ...process.env, ...env } : undefined }).catch((e) => e)) as {
         stdout: string;
@@ -156,12 +156,12 @@ describe('parse_xlsx.py', () => {
 
     const p = await buildXlsx((wb) => wb.addWorksheet('S').addRow(['v']));
     const out3 = lastJson((await run([p], { XLSX_MAX_ENTRIES: '1' })).stdout);
-    expect(out3.ok).toBe(false); // 退出码 1：一个普通 xlsx 也有多个 zip 条目，护栏直接触发
+    expect(out3.ok).toBe(false); // exit code 1: even an ordinary xlsx has multiple zip entries, so the guard trips immediately
   });
 
   it('参数校验：--rows 无 --sheet、非法范围、--sheet 越界', async () => {
     const p = await buildXlsx((wb) => wb.addWorksheet('S').addRow(['v']));
-    // 同上：参数校验失败走 fail() → 非零退出 → execFile reject，从 err.stdout 取 JSON
+    // Same as above: validation failure goes through fail() → nonzero exit → execFile reject, take the JSON from err.stdout
     const run = async (args: string[]) => (await exec('python3', [SCRIPT, ...args]).catch((e) => e)) as { stdout: string };
     const e1 = lastJson((await run([p, '--rows', '1:2'])).stdout);
     expect(e1.ok).toBe(false);

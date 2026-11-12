@@ -1,13 +1,15 @@
 /**
- * 探索工具集装配（pi 链路）。
+ * Exploration tool-set assembly (pi chain).
  *
- * ToolDefinition 用 pi 原生 defineTool 形态（content 支持 ImageContent ⇒ 视觉可用），
- * 不复用仓库自有 pi/tools.ts 的 ToolExecutor——后者纯文本、无图像通道、缺 label。
- * 工具经工厂注入依赖，便于测试替换 page 桩。
+ * ToolDefinition uses pi's native defineTool shape (content supports ImageContent ⇒ vision
+ * available); it does not reuse the repo's own pi/tools.ts ToolExecutor — the latter is plain
+ * text, has no image channel, no label.
+ * Tools receive dependencies via factories, so page stubs are easy to swap in tests.
  *
- * 装配清单（15 常驻）：navigate/observe/screenshot/read_text/click/fill/press/select/scroll/
- * back/wait/evaluate/report_finding/note_excluded/finish + 条件挂载 sql_probe（有数据库）/
- * repo_read（有代码范围）/inject_fault（有故障注入授权位）。
+ * Assembly list (15 resident): navigate/observe/screenshot/read_text/click/fill/press/select/
+ * scroll/back/wait/evaluate/report_finding/note_excluded/finish + conditionally mounted
+ * sql_probe (with databases) / repo_read (with code scope) / inject_fault (with the
+ * fault-injection authorization bit).
  */
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { ExplorationStep } from '../../../execute/explorationPrompt.js';
@@ -36,20 +38,21 @@ import type { FindingStore } from '../findings.js';
 
 export type { ToolDeps };
 
-/** 工具集全量依赖（runner 装配时注入）。sql/repo 通道按会话供数条件挂载。 */
+/** Full tool-set dependencies (injected by the runner at assembly). sql/repo channels are mounted per session data availability. */
 export interface ExplorationDeps extends ToolDeps {
   findings: FindingStore;
-  /** 申报排除项 → 实际入账条数（去重/封顶在 runner 侧账本）。 */
+  /** Declare exclusions → number of entries actually recorded (dedup/capping in the runner-side ledger). */
   noteExcluded(items: Array<{ claim: string; evidence?: string }>): number;
-  /** 收尾：总结 + 模型回告的子目标完成情况（无子目标时 goals 为 undefined）。 */
+  /** Wrap-up: summary + subgoal completion reported back by the model (goals is undefined when there are no subgoals). */
   onFinish(summary: string, goals?: Array<{ id: string; done: boolean }>): void;
-  /** dbRefs 非空才装配 sql_probe。 */
+  /** sql_probe is mounted only when dbRefs is non-empty. */
   sql?: { env: SqlProbeEnv; dbRefs: Array<{ label: string; dialect: string }> };
-  /** 有代码提交范围才装配 repo_read。 */
+  /** repo_read is mounted only when a code commit scope exists. */
   repo?: { channel: (req: RepoReadRequest) => Promise<RepoReadResult>; hasDiff: boolean };
   /**
-   * 故障注入控制器（D2）：**只在会话带 allow_fault_injection 显式授权位时装配**——
-   * 未授权 = 工具根本不出现（机械拒，不是靠提示词劝）。
+   * Fault-injection controller (D2): **mounted only when the session carries the explicit
+   * allow_fault_injection authorization bit** — unauthorized = the tool simply does not exist
+   * (mechanical rejection, not prompt persuasion).
    */
   fault?: FaultController;
 }
@@ -79,13 +82,15 @@ export function createExplorationTools(deps: ExplorationDeps): ToolDefinition[] 
 }
 
 /**
- * 工具名 + 入参 → 动作留痕初稿（tool_execution_start 时登记，tool_execution_end 回填 ok/detail）。
- * type 对齐 legacy ExplorationStep 词表（click/fill/navigate/press/wait/sql/repo/screenshot），
- * 升格用例的机械映射（trailToCaseSteps）因此零改动可用；pi 专属动作（observe/read_text/
- * evaluate/report_finding/note_excluded/finish/select/scroll/back）以自身工具名作 type——
- * 详情页按「工具名 + target」渲染，trailToSteps 走 default 分支。
- * 注意：fill 的 value 取模型入参原值（占位符字面量）——替换发生在工具内部，留痕永远不含真实凭据。
- * 形状不符的入参一律 target='-'——留痕是审计辅助，不该因入参漂移抛错。
+ * Tool name + args → action trail draft (registered at tool_execution_start; ok/detail filled in
+ * at tool_execution_end). type aligns with the legacy ExplorationStep vocabulary
+ * (click/fill/navigate/press/wait/sql/repo/screenshot), so the mechanical mapping for promoted
+ * cases (trailToCaseSteps) works unchanged; pi-specific actions (observe/read_text/
+ * evaluate/report_finding/note_excluded/finish/select/scroll/back) use their own tool name as
+ * type — the detail page renders by "tool name + target", and trailToSteps takes the default branch.
+ * Note: fill's value keeps the model's raw input (placeholder literal) — substitution happens
+ * inside the tool, so the trail never contains real credentials.
+ * Malformed args always get target='-' — the trail is an audit aid and must not throw on arg drift.
  */
 export function trailStepOf(toolName: string, args: unknown): ExplorationStep | null {
   const o = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
@@ -121,12 +126,12 @@ export function trailStepOf(toolName: string, args: unknown): ExplorationStep | 
     case 'evaluate':
       return { type: 'evaluate', target: '-', ok: true };
     case 'sql_probe': {
-      // legacy 同口径：归一空白 + 限长 1000（审计要看到"到底查了什么"，但不因超长膨胀）。
+      // Same semantics as legacy: normalize whitespace + cap length 1000 (audit must see "what was actually queried", without bloating on overlength).
       const q = typeof o.query === 'string' ? o.query : '';
       return { type: 'sql', target: q.replace(/\s+/g, ' ').slice(0, 1000), ok: true };
     }
     case 'repo_read': {
-      // legacy 同口径：`${op} ${path ?? pattern ?? ''}`.trim()（ls/diff 无 path → 光杆 op）。
+      // Same semantics as legacy: `${op} ${path ?? pattern ?? ''}`.trim() (ls/diff without path → bare op).
       const op = str('op') === '-' ? 'read' : str('op');
       const arg = str('path') !== '-' ? str('path') : str('pattern') === '-' ? '' : str('pattern');
       return { type: 'repo', target: `${op} ${arg}`.trim(), ok: true };

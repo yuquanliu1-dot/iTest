@@ -1,8 +1,8 @@
 /**
- * R3 固化管线：审批执行（乐观锁 → 应用 → 源退役）与驳回。
- * 幂等三件套：乐观锁（pending→approved 单胜）/ source_ref partial unique（重放单行）/
- * 退役 active 守卫（不复活/不重复改已退役条目）。skill 修订先写文件再记版本行（重放无害）。
- * 部分失败：apply_error 记原因 + status 回 pending 可重试。
+ * R3 solidification pipeline: approval execution (optimistic lock → apply → source retirement) and rejection.
+ * Idempotence triple: optimistic lock (pending→approved single winner) / source_ref partial unique (replay produces a single row) /
+ * retirement active guard (no resurrecting / re-modifying already-retired entries). Skill revisions write the file first, then record the version row (replay is harmless).
+ * Partial failure: apply_error records the reason + status back to pending for retry.
  */
 import { and, eq, inArray } from 'drizzle-orm';
 import { HttpError } from '../../middleware/errorHandler.js';
@@ -27,11 +27,11 @@ async function hasAppliedVersionRow(key: string, proposalId: string): Promise<bo
   return r.length > 0;
 }
 
-/** prompt_amendment：当前无值先落 baseline（钉住代码默认），再追加增量；sourceRef 幂等。 */
+/** prompt_amendment: when there is no current value, first record the baseline (pinning the code default), then append the increment; sourceRef idempotence. */
 async function applyPromptAmendment(prop: ProposalRow, userId: string | null): Promise<void> {
   const def = (await listPromptModuleDefs()).find((d) => d.key === prop.target && d.group !== 'skill');
   if (!def) throw new Error(`target 不在注册表：${prop.target}`);
-  if (await hasAppliedVersionRow(prop.target, prop.id)) return; // 重试重放：已应用过，跳过
+  if (await hasAppliedVersionRow(prop.target, prop.id)) return; // retry replay: already applied, skip
   const current = (await loadPromptModuleOverrides()).get(prop.target);
   if (!current || current.value == null) {
     await insertPromptModuleVersion({
@@ -43,15 +43,15 @@ async function applyPromptAmendment(prop: ProposalRow, userId: string | null): P
     moduleKey: prop.target, value: `${baseText}\n\n${prop.body}`,
     source: 'solidify_apply', sourceRef: prop.id, createdByUserId: userId,
   });
-  if (seq == null) return; // 并发重放被 unique 吞掉——视为已应用
+  if (seq == null) return; // concurrent replay swallowed by unique — treat as already applied
 }
 
-/** skill_revision：首次固化先记 baseline（磁盘现正文）；先写文件（frontmatter 从 DB 重拼）再记版本行。 */
+/** skill_revision: the first solidification records the baseline first (the current on-disk body); the file is written first (frontmatter reassembled from DB), then the version row. */
 async function applySkillRevision(prop: ProposalRow, userId: string | null): Promise<void> {
   const key = `skill.${prop.target}`;
   const meta = await readSkillMeta(prop.target);
   if (!meta) throw new Error(`skill 不存在或未启用：${prop.target}`);
-  if (await hasAppliedVersionRow(key, prop.id)) return; // 重试时若 sourceRef 行已存在则跳过写文件
+  if (await hasAppliedVersionRow(key, prop.id)) return; // on retry, skip writing the file when the sourceRef row already exists
   const hasAny = (await db.select({ seq: assistantPromptModuleVersions.seq }).from(assistantPromptModuleVersions)
     .where(eq(assistantPromptModuleVersions.moduleKey, key)).limit(1)).length > 0;
   if (!hasAny) {
@@ -65,11 +65,11 @@ async function applySkillRevision(prop: ProposalRow, userId: string | null): Pro
   });
 }
 
-/** prompt_correction：全文覆盖语义。baseSeq 复查（盘点后被人工改过 → 拒绝，回 pending 由人工重盘）。 */
+/** prompt_correction: whole-text overwrite semantics. baseSeq recheck (manually edited after the inventory → reject, back to pending for a human re-inventory). */
 async function applyPromptCorrection(prop: ProposalRow, userId: string | null): Promise<void> {
   const def = (await listPromptModuleDefs()).find((d) => d.key === prop.target && d.group !== 'skill');
   if (!def) throw new Error(`target 不在注册表：${prop.target}`);
-  if (await hasAppliedVersionRow(prop.target, prop.id)) return; // 重试重放：已应用过，跳过写值
+  if (await hasAppliedVersionRow(prop.target, prop.id)) return; // retry replay: already applied, skip writing the value
   const currentSeq = (await loadPromptModuleOverrides()).get(prop.target)?.seq ?? null;
   if (currentSeq !== (prop.baseSeq ?? null)) {
     throw new Error('模块已被人工修改，请重新盘点');
@@ -77,10 +77,10 @@ async function applyPromptCorrection(prop: ProposalRow, userId: string | null): 
   const seq = await insertPromptModuleVersion({
     moduleKey: prop.target, value: prop.body, source: 'solidify_apply', sourceRef: prop.id, createdByUserId: userId,
   });
-  if (seq == null) return; // 并发重放被 unique 吞掉——视为已应用
+  if (seq == null) return; // concurrent replay was swallowed by the unique constraint — treat as already applied
 }
 
-/** 源退役：active 守卫防重复退役/复活已删条目；按 type 分表更新。 */
+/** Source retirement: the active guard prevents double retirement / resurrecting deleted entries; updated per-type in separate tables. */
 async function retireSources(prop: ProposalRow, retireIds: string[]): Promise<void> {
   if (retireIds.length === 0) return;
   const sources = prop.sources;
@@ -98,7 +98,7 @@ async function retireSources(prop: ProposalRow, retireIds: string[]): Promise<vo
   }
 }
 
-/** correction 应用后，其 sources 内的 lesson 自动置 resolved（active 守卫，不复活已 retired/resolved）。 */
+/** After a correction is applied, the lessons in its sources are automatically set resolved (active guard; never resurrects already retired/resolved ones). */
 async function resolveLessons(prop: ProposalRow): Promise<void> {
   const lessonIds = prop.sources.filter((s) => s.type === 'lesson').map((s) => s.id);
   if (lessonIds.length === 0) return;
@@ -107,7 +107,7 @@ async function resolveLessons(prop: ProposalRow): Promise<void> {
     .where(and(inArray(assistantFailureLessons.id, lessonIds), eq(assistantFailureLessons.status, 'active')));
 }
 
-/** 批准并应用：乐观锁（0 行→409）→ 应用 → 退役 → appliedAt；失败回 pending + apply_error。 */
+/** Approve and apply: optimistic lock (0 rows → 409) → apply → retire → appliedAt; on failure, back to pending + apply_error. */
 export async function approveProposal(userId: string | null, proposalId: string, retireIds: string[]): Promise<void> {
   const prop = (await db.select().from(assistantSolidifyProposals)
     .where(eq(assistantSolidifyProposals.id, proposalId)).limit(1))[0];
@@ -139,7 +139,7 @@ export async function approveProposal(userId: string | null, proposalId: string,
   }
 }
 
-/** 驳回：同样乐观锁，不碰任何资产。 */
+/** Reject: same optimistic lock, touches no assets. */
 export async function rejectProposal(userId: string | null, proposalId: string): Promise<void> {
   const r = await db.update(assistantSolidifyProposals)
     .set({ status: 'rejected', reviewedBy: userId, reviewedAt: new Date() })

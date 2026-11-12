@@ -13,7 +13,7 @@ beforeAll(async () => {
 afterAll(async () => {
 });
 
-/** spawn `pnpm exec tsx src/db/migrate.ts`，stdout/stderr 汇总到 logs，返回退出码。 */
+/** Spawns `pnpm exec tsx src/db/migrate.ts`, collecting stdout/stderr into logs; returns the exit code. */
 function spawnMigrate(): Promise<{ code: number | null; logs: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn('pnpm', ['exec', 'tsx', 'src/db/migrate.ts'], {
@@ -29,7 +29,7 @@ function spawnMigrate(): Promise<{ code: number | null; logs: string }> {
   });
 }
 
-/** 查询某张 schema 表是否存在（drizzle-kit push 建表后应存在）。 */
+/** Checks whether a schema table exists (should exist after drizzle-kit push creates it). */
 async function tableExists(name: string): Promise<boolean> {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
@@ -56,13 +56,13 @@ describe('migrate.ts advisory lock push', () => {
     expect(a.code).toBe(0);
     expect(b.code).toBe(0);
     const logs = `${a.logs}\n${b.logs}`;
-    // 同一时刻只有一个进程在 push：第二个必然要等锁（pino 输出到 stdout）
+    // Only one process can be pushing at a time: the second necessarily waits for the lock (pino logs to stdout)
     expect(logs).toContain('等待 schema 同步锁');
-    // 串行化后推 dirty schema 时不会互相读到半成品：不应出现 DDL 冲突错误
+    // After serialization, pushing a dirty schema never exposes a half-done state to the other process: no DDL-conflict errors
     for (const re of [/already exists/i, /duplicate key/i, /tuple concurrently updated/i, /deadlock/i]) {
       expect(logs).not.toMatch(re);
     }
-    // 跑完 schema 完好
+    // Schema intact after the run
     expect(await tableExists('projects')).toBe(true);
   });
 });

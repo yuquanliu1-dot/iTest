@@ -13,7 +13,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // 本文件经 db/client.js 持有单例池，先关掉再停容器（与 pi-model-bridge.test.ts 同款处理）。
+  // This file holds a singleton pool via db/client.js — close it before stopping the container (same handling as pi-model-bridge.test.ts).
   const { pool: dbPool } = await import('../src/db/client.js');
   await dbPool.end();
   await pool.end();
@@ -34,7 +34,7 @@ async function readSettings(): Promise<Map<string, unknown>> {
   return new Map(rows.rows.map((r) => [r.key as string, r.value]));
 }
 
-/** 旧版单渠道 5 键（迁移前的样子）。 */
+/** Legacy single-channel 5 keys (what they looked like before migration). */
 const LEGACY = [
   ['llm_provider', 'anthropic'],
   ['llm_api_key', 'sk-legacy-secret'],

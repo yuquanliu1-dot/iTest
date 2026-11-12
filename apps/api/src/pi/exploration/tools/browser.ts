@@ -1,20 +1,23 @@
 /**
- * 浏览器动作类工具（pi 链路）：navigate / click / fill / press / select / scroll / back / wait。
+ * Browser action tools (pi chain): navigate / click / fill / press / select / scroll / back / wait.
  *
- * 闸门移植（语义与 legacy aiTask 逐字一致，实现见 execute/gates.ts）：
- * - 范围闸：navigate origin 白名单 = 起点 origin 唯一，刻意不含环境 loginUrl origin——
- *   2026-11-10 prod 实证把它加进白名单等于重开「导航到真实系统 + 真凭据登录 + 写数据」路径。
- *   起点 origin 不可解析 → 白名单为空数组 = navigate 全拒（保守收口）。
- * - 破坏性闸：click 前按被点元素的可见文本判定（text+placeholder+value+selector 拼接，
- *   元素读不到时 selector 字符串仍参与判定）。默认拒；allow_destructive 显式开关是唯一
- *   授权来源，章程说辞不算授权。二次确认弹窗：Playwright 无 dialog 监听时自动 dismiss——
- *   刻意不注册任何 dialog 监听，保持这个默认（原生 confirm 永远不会被「确认」）。
- * - 凭据替换：fill 的占位符（哨兵/花括号形态）在工具内部替换为真实值；留痕 value 永远是
- *   替换前的字面量（trailStepOf 读工具入参原值）。EnvMissing/SecretMissing 是终止性错误：
- *   工具不 throw（铁律），改走 onFatal 回调让 runner 终止会话——重试只会烧轮次。
- * - 脆弱 selector 闸：XPath/位置链事前拒收（screenshot/read_text 同一口径）。
+ * Gate porting (semantics verbatim-identical to legacy aiTask; implementation in execute/gates.ts):
+ * - Scope gate: the navigate origin whitelist = the start origin only, deliberately excluding the environment
+ *   loginUrl origin — proven on prod 2026-11-10: adding it to the whitelist reopens the "navigate to the real
+ *   system + log in with real credentials + write data" path. Start origin unparseable → whitelist is an empty
+ *   array = all navigate rejected (conservative closure).
+ * - Destructive gate: judged before click by the clicked element's visible text (text+placeholder+value+selector
+ *   concatenated; when the element cannot be read, the selector string still participates). Default reject; the
+ *   allow_destructive explicit switch is the only authorization source — charter wording is not authorization.
+ *   Secondary confirm dialogs: Playwright auto-dismisses when no dialog listener is registered — deliberately
+ *   registering no dialog listener keeps this default (a native confirm can never be "confirmed").
+ * - Credential substitution: fill placeholders (sentinel/brace forms) are replaced with real values inside the
+ *   tool; the action trail's value is always the pre-substitution literal (trailStepOf reads the tool input's
+ *   original value). EnvMissing/SecretMissing are terminal errors: the tool does not throw (iron law) — it goes
+ *   through the onFatal callback so the runner terminates the session; retrying would only burn turns.
+ * - Brittle-selector gate: XPath/positional chains rejected up front (screenshot/read_text follow the same rule).
  *
- * 铁律（pi 工具层通用）：工具永不 throw；全部 executionMode:'sequential'（证据帧竞态防线）。
+ * Iron law (shared across the pi tool layer): tools never throw; all executionMode:'sequential' (evidence-frame race defense).
  */
 import { defineTool } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
@@ -23,13 +26,13 @@ import { brittleSelectorReason, destructiveActionReason, scopeViolationReason } 
 import { toolErr, toolOk } from './result.js';
 import type { ToolDeps } from './index.js';
 
-/** 动作后短暂稳定（与 legacy settleAfterAction 同参）：导航/重渲染落地后再进下一个动作。 */
+/** Brief settle after an action (same params as legacy settleAfterAction): let navigation/re-render land before the next action. */
 async function settleAfterAction(page: ToolDeps['page']): Promise<void> {
   await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => undefined);
   await page.waitForTimeout(150);
 }
 
-/** 脆弱 selector 统一拒收文本（click/fill/screenshot/read_text 同一措辞）。 */
+/** Brittle-selector unified rejection text (click/fill/screenshot/read_text share the same wording). */
 function brittleReject(tool: string, sel: string, reason: string): string {
   return `${tool} ${sel}: error 脆弱 selector 被拒（${reason}）。改用元素清单里给出的 selector。`;
 }
@@ -56,7 +59,7 @@ export function createNavigateTool(deps: ToolDeps) {
       }
       try {
         await deps.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
-        // 与 legacy init-goto 对齐：等 SPA hydrate，长连接页面 5s 兜底不阻塞。
+        // Aligned with legacy init-goto: wait for SPA hydrate; a 5s fallback so long-lived-connection pages do not block.
         await deps.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
         return toolOk(
           `已打开 ${deps.page.url()}`,
@@ -90,8 +93,8 @@ export function createClickTool(deps: ToolDeps) {
       if (brittle) {
         return toolErr(`脆弱 selector 被拒（${brittle}）`, brittleReject('click', target, brittle));
       }
-      // 破坏性闸：可见文本判定（text+placeholder+value+selector 拼接；元素读不到时 selector
-      // 字符串仍参与判定——legacy 同口径）。判定读不到不误伤（放行）。
+      // Destructive gate: visible-text judgment (text+placeholder+value+selector concatenated; when the element
+      // cannot be read, the selector string still participates — same rule as legacy). An unreadable judgment does not misfire (passes).
       let targetText = '';
       try {
         const info = await deps.page
@@ -153,8 +156,9 @@ export function createFillTool(deps: ToolDeps) {
       try {
         realValue = deps.valueSub ? deps.valueSub(rawValue) : rawValue;
       } catch (e) {
-        // 凭据缺失是环境级硬错误（EnvMissing/SecretMissing，可行动的配置指引在 message 里）：
-        // 反馈给模型只会让它换 selector 空转烧轮次——终止会话（onFatal），此处照常回错误行。
+        // Missing credentials is an environment-level hard error (EnvMissing/SecretMissing; actionable configuration
+        // guidance is in the message): feeding it back would only make the model idle-burn turns swapping selectors —
+        // terminate the session (onFatal); the error line is still returned as usual here.
         const err = e instanceof Error ? e : new Error(String(e));
         deps.onFatal?.(err);
         return toolErr(`凭据缺失：${err.message.slice(0, 120)}`, `fill ${target}: error ${err.message}`);
@@ -164,15 +168,15 @@ export function createFillTool(deps: ToolDeps) {
         const loc = deps.page.locator(target).first();
         await loc.fill('', { timeout: 5000 });
         await loc.pressSequentially(realValue, { delay: 20 });
-        // 已展开下拉的过滤输入框不能 blur：blur 会清空查询词、关掉候选面板（远程搜索下拉致命）。
-        // 判定在打字之后——此时面板才可能处于展开态（legacy 同序）。
+        // An expanded dropdown's filter input must not blur: blur clears the query word and closes the candidate
+        // panel (fatal to remote-search dropdowns). Judged after typing — only then may the panel be open (legacy order).
         const keepOpen = await isOpenDropdownFilter(loc);
         if (!keepOpen) {
-          // React 受控表单常在 blur 时才提交 state / 触发校验。
+          // React controlled forms often only commit state / trigger validation on blur.
           await deps.page.keyboard.press('Tab').catch(() => undefined);
           await deps.page.waitForTimeout(80);
         }
-        // 回读确认：DOM value 与目标不一致 → 反馈实际值供下轮修正（替换发生时不回显，防密码泄漏）。
+        // Read-back confirmation: DOM value differs from the target → feed back the actual value for the next round's correction (no echo when substitution happened, preventing password leakage).
         const actual = await loc.inputValue({ timeout: 3000 }).catch(() => '');
         if (actual !== realValue) {
           const tail = substituted
@@ -252,7 +256,7 @@ export function createSelectTool(deps: ToolDeps) {
             `select ${target}: error 目标不是原生 <select>（是 ${tag}）。组件库自绘下拉请用 click 展开、再 click 点选选项。`,
           );
         }
-        // 先按 value 选，失败回落按可见文本选（模型给的多半是界面文案）。
+        // Try selecting by value first; on failure fall back to visible text (what the model gives is usually UI copy).
         try {
           await loc.selectOption(value, { timeout: 3000 });
         } catch {

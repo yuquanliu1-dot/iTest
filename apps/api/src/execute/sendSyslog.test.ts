@@ -75,7 +75,7 @@ describe('buildRfc3164', () => {
   });
 });
 
-/** 随机端口起一个 UDP 接收端。 */
+/** Start a UDP receiver on a random port. */
 async function udpListener(): Promise<{ port: number; recv: Promise<Buffer> }> {
   const socket = dgram.createSocket('udp4');
   await new Promise<void>((res) => socket.bind(0, '127.0.0.1', () => res()));
@@ -83,7 +83,7 @@ async function udpListener(): Promise<{ port: number; recv: Promise<Buffer> }> {
   return { port: socket.address().port, recv };
 }
 
-/** 随机端口起一个 TCP 接收端。 */
+/** Start a TCP receiver on a random port. */
 async function tcpListener(): Promise<{ port: number; recv: Promise<Buffer> }> {
   const server = net.createServer();
   await new Promise<void>((res) => server.listen(0, '127.0.0.1', () => res()));
@@ -124,7 +124,7 @@ describe('runSendSyslog', () => {
   });
 
   it('TCP 端口无人监听抛 SyslogSendError', async () => {
-    // 占一个端口再关掉，保证该端口当前无人监听
+    // Occupy a port then close it, guaranteeing nothing is listening there right now
     const probe = net.createServer();
     await new Promise<void>((res) => probe.listen(0, '127.0.0.1', () => res()));
     const port = (probe.address() as net.AddressInfo).port;
@@ -136,7 +136,7 @@ describe('runSendSyslog', () => {
   });
 
   it('TCP 连接超时抛 SyslogSendTimeout', async () => {
-    // 不可路由地址触发连接超时（timeoutMs 压到 1s 下限）
+    // An unroutable address triggers the connect timeout (timeoutMs pressed to the 1s floor)
     await expect(
       runSendSyslog({ action: action({ protocol: 'tcp', host: '10.255.255.1', timeoutMs: 1000 }), vars: {} }),
     ).rejects.toThrow(SyslogSendTimeout);

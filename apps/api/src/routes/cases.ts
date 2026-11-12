@@ -29,9 +29,9 @@ const CaseBodyBase = z.object({
   windowHeight: z.number().int().min(200).max(10000).optional(),
   incognito: z.boolean().default(false),
   tagIds: z.array(z.string().uuid()).optional(),
-  /** 需求编号（外部编号自由文本，非 requirements FK）。 */
+  /** Requirement number (free-text external number, not a requirements FK). */
   requirementNo: z.string().max(64).nullable().optional(),
-  /** Track 1：用例级预期描述（自然语言）。回放结束后由 vision LLM 拿最终截图判定。 */
+  /** Track 1: case-level expected outcome description (natural language). After replay, the vision LLM judges it using the final screenshot. */
   expectedOutcome: z.string().max(4000).nullable().optional(),
 });
 
@@ -55,21 +55,21 @@ const PatchBody = CaseBodyBase.partial()
   .extend({
     scenarioId: z.string().uuid().nullable().optional(),
     status: CaseStatusEnum.optional(),
-    // 用例描述允许置空；上限对齐 expectedOutcome
+    // Case description may be empty; cap aligned with expectedOutcome
     description: z.string().max(4000).nullable().optional(),
-    // 用例级 init URL 允许置空（清除覆盖，回到分组/项目继承链）。
-    // 接受相对路径：与创建接口(CaseBodyBase)口径一致——执行层会把相对 url 按环境 web 服务拼
-    // origin（spec 2026-10-16），.url() 的「必须带协议」校验会让界面改不了已存的相对路径用例。
+    // Case-level init URL may be empty (clears the override, falls back to the group/project inheritance chain).
+    // Relative paths are accepted: same policy as the create endpoint (CaseBodyBase) — the execution layer joins a
+    // relative url with the environment web service origin (spec 2026-10-16); the .url() "protocol required" check would otherwise make the UI unable to edit saved relative-path cases.
     url: z.string().nullable().optional(),
     webServiceRef: z.string().max(64).nullable().optional(),
-    // 用例默认 environment id；null 表示清空，undefined 表示不动
+    // Case default environment id; null = clear, undefined = leave unchanged
     defaultEnvId: z.string().uuid().nullable().optional(),
-    // 绑定数据集 id；null 表示解绑，undefined 表示不动
+    // Bound dataset id; null = unbind, undefined = leave unchanged
     datasetId: z.string().uuid().nullable().optional(),
-    // 数据集行选择：启用行下标数组。[] = 所有启用行；null = 清空选择。
-    // 跨字段校验（须先绑数据集 / 下标不越界）在 service 层做（PatchBody 末尾已有 superRefine）。
+    // Dataset row selection: array of enabled row indexes. [] = all enabled rows; null = clear the selection.
+    // Cross-field validation (dataset must be bound first / indexes within range) is done in the service layer (superRefine at the end of PatchBody).
     datasetRowIndexes: z.array(z.number().int().min(0)).max(500).nullable().optional(),
-    // 2026-10-07: 移动端支持
+    // 2026-10-07: mobile support
     platform: z.enum(['web', 'mobile']).optional(),
     mobileOs: z.enum(['ios', 'android']).nullable().optional(),
     mobileDeviceTargetId: z.string().uuid().nullable().optional(),
@@ -81,16 +81,16 @@ const PatchBody = CaseBodyBase.partial()
   })
   .superRefine(checkWindowStrategy);
 
-/** 用例列表缓存 TTL:写路径显式失效 + 30s 兜底(标题/版本名/组名等次要漂移源不过期即旧)。 */
+/** Case list cache TTL: explicit invalidation on write paths + 30s fallback (minor drift sources like titles/version names/group names stay stale until expiry). */
 const CASES_LIST_TTL_MS = 30_000;
 
 type RawCaseRow = typeof testCases.$inferSelect;
 
-/** 富化 + 映射:scenarioTitle/versionName/tags/步骤固化进度/项目归属/createdBy。
- *  项目分支的输出整体进缓存(priority/scenarioId/versionIds/solidified 过滤在缓存之后应用,
- *  四者所需字段都保留在映射行上)。 */
+/** Enrichment + mapping: scenarioTitle/versionName/tags/step solidification progress/project ownership/createdBy.
+ *  The project branch's output goes into the cache as a whole (priority/scenarioId/versionIds/solidified filters are
+ *  applied after the cache; the fields all four need are kept on the mapped rows). */
 async function mapCaseRows(rows: RawCaseRow[]) {
-  // 把 scenario title 一起带回去，避免前端为每个 case 再发一次 detail 请求
+  // Bring scenario titles back along so the frontend does not issue a detail request per case
   const sids = [...new Set(rows.map((r) => r.scenarioId).filter((v): v is string => !!v))];
   const sById = new Map<string, { id: string; title: string }>();
   if (sids.length > 0) {
@@ -100,10 +100,10 @@ async function mapCaseRows(rows: RawCaseRow[]) {
       .where(inArray(scenarios.id, sids));
     for (const s of scRows) sById.set(s.id, s);
   }
-  // 同手法：批量回填 tags（避免 N+1）
+  // Same technique: batch-backfill tags (avoids N+1)
   const caseIds = rows.map((r) => r.id);
   const tagsByCase = await tagsForCases(caseIds);
-  // 批量回填步骤固化进度（total / compiled 非空数）：列表「固化」列与 ?solidified=none 筛选共用
+  // Batch-backfill step solidification progress (total / non-null compiled count): shared by the list "solidified" column and the ?solidified=none filter
   const stepsByCase = new Map<string, { total: number; compiled: number }>();
   if (caseIds.length > 0) {
     const agg = await db
@@ -117,7 +117,7 @@ async function mapCaseRows(rows: RawCaseRow[]) {
       .groupBy(testSteps.caseId);
     for (const a of agg) stepsByCase.set(a.caseId, { total: a.total, compiled: a.compiled });
   }
-  // 批量解析版本名：列表按项目拉取会跨版本混排，前端展示需要名字
+  // Batch-resolve version names: project-scoped fetches interleave versions, and the frontend needs names
   const vids = [...new Set(rows.map((r) => r.versionId).filter((v): v is string => !!v))];
   const vById = new Map<string, string>();
   if (vids.length > 0) {
@@ -127,7 +127,7 @@ async function mapCaseRows(rows: RawCaseRow[]) {
       .where(inArray(projectVersions.id, vids));
     for (const v of vRows) vById.set(v.id, v.name);
   }
-  // 批量回填所属项目（产品线维度下列表会跨项目混排，前端要靠它标「跨项目」并按项目筛选）
+  // Batch-backfill owning project (under the product-line dimension the list interleaves projects; the frontend uses it to flag "cross-project" and filter by project)
   const gidsAll = [...new Set(rows.map((r) => r.groupId).filter((v): v is string => !!v))];
   const projectByGroup = new Map<string, { id: string; name: string }>();
   if (gidsAll.length > 0) {
@@ -155,7 +155,7 @@ async function mapCaseRows(rows: RawCaseRow[]) {
   );
 }
 
-/** 项目内全量原始用例行(groups → cases 两段查询)。 */
+/** All raw case rows within a project (two-stage groups → cases query). */
 async function loadProjectCaseRows(projectId: string): Promise<RawCaseRow[]> {
   const gs = await db.select().from(groups).where(eq(groups.projectId, projectId));
   const gids = gs.map((g) => g.id);
@@ -164,15 +164,15 @@ async function loadProjectCaseRows(projectId: string): Promise<RawCaseRow[]> {
 
 casesRoute.get('/', async (req, res) => {
   const { priority, groupId, projectId, scenarioId, productLineId, solidified } = req.query as Record<string, string | undefined>;
-  // versionIds 过滤：逗号分隔或重复参数均可；只在可见项目范围内收窄,无需额外可见性断言
+  // versionIds filter: comma-separated or repeated params both work; narrowed only within visible projects, no extra visibility assertion needed
   const rawVersionIds = (req.query as Record<string, string | string[] | undefined>).versionIds;
   const versionIds = (Array.isArray(rawVersionIds) ? rawVersionIds : rawVersionIds != null ? [rawVersionIds] : [])
     .flatMap((v) => v.split(','))
     .filter((v) => v.length > 0);
   let rows;
   if (productLineId) {
-    // 产品线维度：一次拉齐线内所有项目的用例，供执行计划「添加用例」池使用
-    // （跨项目共享用例的读取口。可见性经产品线→组织→visibleOrgIdsFor 继承，见 assertProductLineVisible）。
+    // Product-line dimension: pull cases of all projects in the line at once, feeding the plan "add case" pool
+    // (the read entry for cross-project shared cases. Visibility inherits product line → org → visibleOrgIdsFor, see assertProductLineVisible).
     await assertProductLineVisible(productLineId, req.user!);
     const pids = (await db
       .select({ id: projects.id })
@@ -187,7 +187,7 @@ casesRoute.get('/', async (req, res) => {
       : []);
   } else if (projectId) {
     await assertProjectVisible(projectId, req.user!);
-    // 读穿透缓存整个富化列表;可见性断言在缓存之外(缓存的是数据不是鉴权结果)
+    // Read-through cache for the whole enriched list; the visibility assertion stays outside the cache (what's cached is data, not authorization results)
     rows = await cache.wrap(casesForProjectKey(projectId), CASES_LIST_TTL_MS, async () =>
       mapCaseRows(await loadProjectCaseRows(projectId)),
     );
@@ -197,7 +197,7 @@ casesRoute.get('/', async (req, res) => {
     await assertProjectVisible(g[0].projectId, req.user!);
     rows = await mapCaseRows(await db.select().from(testCases).where(eq(testCases.groupId, groupId)));
   } else {
-    // 无参分支：按可见项目过滤
+    // No-param branch: filter by visible projects
     const visiblePids = await visibleProjectIds(req.user!);
     const gs = visiblePids.length
       ? await db.select().from(groups).where(inArray(groups.projectId, visiblePids))
@@ -208,7 +208,7 @@ casesRoute.get('/', async (req, res) => {
       : []);
   }
   if (priority) rows = rows.filter((r) => r.priority === priority);
-  // scenarioId 过滤：'none' 命中 scenarioId IS NULL；UUID 命中具体场景
+  // scenarioId filter: 'none' matches scenarioId IS NULL; a UUID matches a concrete scenario
   if (scenarioId) {
     rows = scenarioId === 'none'
       ? rows.filter((r) => r.scenarioId == null)
@@ -218,7 +218,7 @@ casesRoute.get('/', async (req, res) => {
     const vset = new Set(versionIds);
     rows = rows.filter((r) => r.versionId != null && vset.has(r.versionId));
   }
-  // 仅看未固化：有步骤且全部未固化（批量固化入口的口径；无步骤用例不算「未固化」）
+  // Only unsolidified: has steps and none solidified (the batch-solidify entry criterion; cases without steps don't count as "unsolidified")
   if (solidified === 'none') {
     rows = rows.filter((r) => r.stepsTotal > 0 && r.stepsCompiled === 0);
   }
@@ -226,16 +226,18 @@ casesRoute.get('/', async (req, res) => {
 });
 
 /**
- * 在途批量固化批次列表（前端 2s 轮询口）：该用户可见项目范围内、所有「还有 running 行」的批次。
- * 用途 = 分组页顶部进度横幅 + 行内「固化中」徽标：批次只接「全部步骤未固化」的用例，
- * 固化完成后行状态转终态 → 批次自动从本列表消失（横幅消失、徽标变回 n/N）。
- * 纯终态批次不再返回：完成信息由单批次端点（下方）承担。
+ * List of in-flight batch-solidify batches (frontend 2s polling endpoint): within this user's visible
+ * projects, all batches that still have running rows.
+ * Purpose = the group page's top progress banner + the per-row "solidifying" badge: batches only accept
+ * cases whose steps are all unsolidified; once solidification completes the row status turns terminal
+ * → the batch drops out of this list automatically (banner disappears, badge reverts to n/N).
+ * Purely terminal batches are no longer returned: completion info is carried by the single-batch endpoint (below).
  *
- * 注册位置必须在 GET /:id 之前——「/solidify-batches」是单段路径，会被 /:id 抢先匹配。
+ * Must be registered before GET /:id — "/solidify-batches" is a single-segment path and would be matched first by /:id.
  */
 casesRoute.get('/solidify-batches', async (req, res) => {
   const { projectId } = req.query as { projectId?: string };
-  // 可见性：给了 projectId 走断言（不存在与不可见统一 404）；没给则按可见项目集合过滤。
+  // Visibility: with projectId run the assertion (missing and invisible both 404); without it, filter by the set of visible projects.
   let pids: string[];
   if (projectId) {
     await assertProjectVisible(projectId, req.user!);
@@ -247,7 +249,7 @@ casesRoute.get('/solidify-batches', async (req, res) => {
     res.json({ batches: [] });
     return;
   }
-  // 有 running 行的批次（distinct）
+  // Batches with running rows (distinct)
   const runningBatches = await db
     .selectDistinct({ batchId: solidifyBatches.id, projectId: solidifyBatches.projectId, createdAt: solidifyBatches.createdAt })
     .from(solidifyBatches)
@@ -257,7 +259,7 @@ casesRoute.get('/solidify-batches', async (req, res) => {
     res.json({ batches: [] });
     return;
   }
-  // 这些批次的全部行（含终态行，用于算 passed/failed 与展示明细）
+  // All rows of these batches (terminal rows included, for computing passed/failed and showing details)
   const rows = await db
     .select({
       batchId: solidifyBatchCases.batchId,
@@ -287,7 +289,7 @@ casesRoute.post('/', async (req, res) => {
   const pid = await groupProjectId(body.groupId);
   if (!pid) throw new HttpError(404, 'not_found', 'group not found');
   await assertProjectVisible(pid, req.user!);
-  // versionId 必填：前端所有入口都显式带版本，无默认版本回退；传了则必须同 project
+  // versionId is required: every frontend entry passes the version explicitly, there is no default-version fallback; if passed it must belong to the same project
   const versionId = body.versionId;
   if (!versionId) throw new HttpError(400, 'version_required', 'versionId is required');
   const { projectId: vp } = await assertVersionVisible(versionId, req.user!);
@@ -306,7 +308,7 @@ casesRoute.patch('/:id', async (req, res) => {
   const body = PatchBody.parse(req.body);
   await assertCaseVisible(req.params.id!, req.user!);
   if (body.groupId !== undefined) {
-    // 移动目标分组也必须可见
+    // The move target group must be visible too
     const pid = await groupProjectId(body.groupId);
     if (!pid) throw new HttpError(404, 'not_found', 'group not found');
     await assertProjectVisible(pid, req.user!);
@@ -319,8 +321,8 @@ casesRoute.patch('/:id', async (req, res) => {
     const { assertDatasetVisible } = await import('../services/projectAccess.js');
     await assertDatasetVisible(body.datasetId, req.user!);
   }
-  // 2026-10-07: mobile platform 时 mobileOs/mobileDeviceTargetId/appRef 必须齐备（与已有字段合并判定）
-  // platform=web 时清空 mobile 字段
+  // 2026-10-07: on mobile platform, mobileOs/mobileDeviceTargetId/appRef must all be present (merged with existing fields)
+  // platform=web clears the mobile fields
   if (body.platform !== undefined) {
     const existing = await getCaseDetail(req.params.id!);
     if (body.platform === 'mobile') {
@@ -331,7 +333,7 @@ casesRoute.patch('/:id', async (req, res) => {
         throw new HttpError(400, 'mobile_config_required', 'mobile case requires mobileOs, mobileDeviceTargetId, appRef.bundleId');
       }
     } else {
-      // platform=web: 清空 mobile 字段(避免 web case 残留 mobile 配置)
+      // platform=web: clear mobile fields (avoid leaving mobile config on a web case)
       body.mobileOs = null;
       body.mobileDeviceTargetId = null;
       body.appRef = null;
@@ -341,18 +343,18 @@ casesRoute.patch('/:id', async (req, res) => {
     const { assertDeviceTargetVisible } = await import('../services/projectAccess.js');
     await assertDeviceTargetVisible(body.mobileDeviceTargetId, req.user!);
   }
-  // scenario 匹配 / env 归属 / tag 组织校验由 service 兜底
+  // scenario matching / env ownership / tag org checks are enforced by the service as fallback
   res.json(await updateCase(req.params.id!, body));
 });
 
 async function copyOneCase(caseId: string, targetGroupId: string, targetVersionId: string | null, user: NonNullable<Express.Request['user']>): Promise<unknown> {
   const src = (await db.select().from(testCases).where(eq(testCases.id, caseId)))[0];
   if (!src) throw new HttpError(404, 'not_found', 'case not found');
-  // 源 case 与目标分组所在项目都必须可见
+  // Source case and the target group's project must both be visible
   await assertCaseVisible(caseId, user);
   const targetGroup = (await db.select().from(groups).where(eq(groups.id, targetGroupId)))[0];
   if (targetGroup) await assertProjectVisible(targetGroup.projectId, user);
-  // versionId 未传 → 同版本复制；否则校验属于 targetGroup.projectId
+  // targetVersionId omitted → copy within the same version; otherwise it must belong to targetGroup.projectId
   if (targetVersionId) {
     const { projectId: vp } = await assertVersionVisible(targetVersionId, user);
     if (targetGroup && vp !== targetGroup.projectId) throw new HttpError(400, 'version_mismatch', 'version does not belong to target project');
@@ -391,11 +393,11 @@ casesRoute.delete('/:id', async (req, res) => {
 
 casesRoute.post('/batch-delete', async (req, res) => {
   const body = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
-  // 与单删一致：先按可见性逐个校验，违规直接 404
+  // Same as single delete: validate visibility one by one first, violations 404 immediately
   for (const id of body.caseIds) {
     await assertCaseVisible(id, req.user!);
   }
-  // 项目归属在删除前解析(行删后 group 链路断)
+  // Project ownership is resolved before deletion (the group chain breaks after row deletion)
   const owners = await db.select({ groupId: testCases.groupId }).from(testCases).where(inArray(testCases.id, body.caseIds));
   const deleted = await db
     .delete(testCases)
@@ -413,7 +415,7 @@ casesRoute.post('/batch-status', async (req, res) => {
       status: CaseStatusEnum,
     })
     .parse(req.body);
-  // 与 batch-delete 一致：先按可见性逐个校验，违规直接 404
+  // Same as batch-delete: validate visibility one by one first, violations 404 immediately
   for (const id of body.caseIds) {
     await assertCaseVisible(id, req.user!);
   }
@@ -428,13 +430,14 @@ casesRoute.post('/batch-status', async (req, res) => {
 });
 
 /**
- * 批量后端固化：全未固化 web 用例 NL→DSL + 机械验收，后台逐用例执行（job 粒度=单用例
- * solidify+materialize+verify 同 job：loginStateCache 进程内存缓存，跨副本拆分会退化成每步重新登录）。
- * 逐用例资格校验给人读原因；全部被拒 → 422 不建批次；部分被拒 → 200 + rejected 清单由前端提示。
+ * Batch backend solidification: fully-unsolidified web cases NL→DSL + mechanical acceptance, executed in the
+ * background case by case (job granularity = a single case; solidify+materialize+verify share one job because
+ * loginStateCache is an in-process memory cache — splitting across replicas would degrade to re-login on every step).
+ * Per-case eligibility checks give human-readable reasons; all rejected → 422, no batch created; some rejected → 200 + rejected list surfaced by the frontend.
  */
 casesRoute.post('/batch-solidify', async (req, res) => {
   const body = z.object({ caseIds: z.array(z.string().uuid()).min(1) }).parse(req.body);
-  // 与 batch-delete 一致：先按可见性逐个校验，违规直接 404
+  // Same as batch-delete: validate visibility one by one first, violations 404 immediately
   for (const id of body.caseIds) {
     await assertCaseVisible(id, req.user!);
   }
@@ -447,7 +450,7 @@ casesRoute.post('/batch-solidify', async (req, res) => {
       rejected.push({ caseId: id, reason: c.reason });
       continue;
     }
-    // 批次挂单一项目（触发入口为分组页，实际恒同项目）；跨项目混选把异项目用例归入 rejected
+    // The batch is attached to a single project (the trigger entry is the group page, so in practice all same-project); cross-project mixed selections put foreign-project cases into rejected
     if (batchProjectId === null) batchProjectId = c.projectId;
     else if (batchProjectId !== c.projectId) {
       rejected.push({ caseId: id, reason: '与其它用例不在同一项目，请分项目触发' });
@@ -455,8 +458,8 @@ casesRoute.post('/batch-solidify', async (req, res) => {
     }
     accepted.push(id);
   }
-  // 全部被拒也回 200（batchId=null）：api client 对非 2xx 抛 ApiError 会丢掉 rejected 明细，
-  // 前端靠 batchId 判空决定是否轮询（与部分被拒 200 同一契约）
+  // All rejected still returns 200 (batchId=null): the api client throws ApiError on non-2xx and would drop the
+  // rejected details; the frontend decides whether to poll by checking batchId for null (same contract as the partial-reject 200)
   if (accepted.length === 0 || batchProjectId === null) {
     res.json({ batchId: null, accepted: [], rejected });
     return;
@@ -465,7 +468,7 @@ casesRoute.post('/batch-solidify', async (req, res) => {
     await db.insert(solidifyBatches).values({ projectId: batchProjectId, createdByUserId: req.user!.userId }).returning({ id: solidifyBatches.id })
   )[0]!;
   await db.insert(solidifyBatchCases).values(accepted.map((caseId) => ({ batchId: batch.id, caseId })));
-  // 逐用例入队；无 redis（或 add reject）回落 inline，同 execute.ts 模式
+  // Enqueue per case; without redis (or on add reject) fall back to inline, same pattern as execute.ts
   for (const caseId of accepted) {
     if (isExecutionQueueReady()) {
       try {
@@ -482,8 +485,8 @@ casesRoute.post('/batch-solidify', async (req, res) => {
 });
 
 /**
- * 批量固化进度查询（前端 2s 轮询口）。批量状态读时派生：
- * 有 running 行 = running；否则全过 = passed、全败 = failed、混合 = partial。
+ * Batch-solidify progress query (frontend 2s polling endpoint). Batch status is derived at read time:
+ * any running row = running; otherwise all passed = passed, all failed = failed, mixed = partial.
  */
 casesRoute.get('/solidify-batches/:id', async (req, res) => {
   const batch = (await db.select().from(solidifyBatches).where(eq(solidifyBatches.id, req.params.id!)).limit(1))[0];

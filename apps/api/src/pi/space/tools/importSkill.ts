@@ -1,17 +1,17 @@
 /**
- * import_skill：对话式从 GitHub 拉取并（预览/安装）skill。
- * 与 manage_skill 同属管理员面——skill 脚本会在 API 容器执行，仅「有效管理员」线程注册（index.ts
- * 按 ctx.manager 装配），execute 另有 ctx.manager 防御兜底。
+ * import_skill: conversationally fetch and (preview/install) a skill from GitHub.
+ * Same manager-only surface as manage_skill — skill scripts execute inside the API container, so it is registered
+ * only on "valid manager" threads (index.ts assembles by ctx.manager), and execute additionally has a ctx.manager defensive guard.
  *
- * 安全边界（见 ../skillImport.ts）：
- *  - URL 只认 https://github.com/<owner>/<repo>[.git][/tree/<ref>]，其他 host/协议一律拒绝（SSRF 结构性规避）。
- *  - 拉取走 git clone --depth 1，超时 60s；整棵目录树递归收（agents/ references/ assets/ eval-viewer/ scripts/ …），
- *    剔除 .git/node_modules/隐藏文件/软链，单文件 >1MB 或总数 >200 记 skipped 后继续。
- *  - 默认动作 = 预览（只 fetch + 解析，返回 name/description/文件数/文件清单/跳过项，不落盘）；
- *    install:true 才是装上（此后的 promptGuidelines 要求先向用户复述清单并获得确认）。
+ * Security boundaries (see ../skillImport.ts):
+ *  - The URL only accepts https://github.com/<owner>/<repo>[.git][/tree/<ref>]; all other hosts/protocols are rejected (structural SSRF avoidance).
+ *  - Fetching uses git clone --depth 1 with a 60s timeout; the whole directory tree is collected recursively (agents/ references/ assets/ eval-viewer/ scripts/ …),
+ *    with .git/node_modules/hidden files/symlinks stripped; files >1MB or a total >200 are recorded as skipped and the walk continues.
+ *  - The default action = preview (fetch + parse only; returns name/description/file count/file list/skipped items, nothing written to disk);
+ *    install:true is what actually installs (the promptGuidelines below require restating the list to the user and getting confirmation first).
  *
- * 生效口径：技能目录就是磁盘上的 SKILLS_ROOT/<name>/，安装对【新会话】生效——本会话 read_skill /
- * run_skill_script 读不到刚装的 skill，需新开会话。
+ * Effectiveness semantics: the skill directory is SKILLS_ROOT/<name>/ on disk; installation takes effect for [new sessions] —
+ * this session's read_skill / run_skill_script cannot see the freshly installed skill; a new session is required.
  */
 import { Type } from '@earendil-works/pi-ai';
 import type { ToolExecutor } from '../../tools.js';

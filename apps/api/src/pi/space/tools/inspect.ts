@@ -29,9 +29,9 @@ export function buildInspectTool(ctx: SpaceToolsContext): ToolExecutor {
           return { ok: false, error: 'storageState 不是合法 JSON' };
         }
       }
-      // 调用方没显式传 storageState 时，退回登录态缓存（同 verifyCase.ts 的用法）：
-      // 微前端/会话式后台未登录时只渲染出登录页外壳，抓到的「元素」其实全是登录表单——
-      // 模型会误判成「页面没渲染出来」。命中缓存则直接注入，省掉一轮 perform_login。
+      // When the caller doesn't pass storageState explicitly, fall back to the login-state cache (same usage as verifyCase.ts):
+      // micro-frontend/session-based backends render only a login-page shell when not logged in, so the captured "elements" are
+      // actually all login form — the model would misjudge it as "the page didn't render". A cache hit injects directly, saving a perform_login round.
       if (!storageState) {
         let envCtx: Awaited<ReturnType<typeof resolveEnv>> | undefined;
         try {
@@ -39,7 +39,7 @@ export function buildInspectTool(ctx: SpaceToolsContext): ToolExecutor {
           const cached = getLoginState(loginStateKey(envCtx.envId, envCtx.login?.user));
           if (cached) storageState = cached;
         } catch {
-          // 环境不可解析不是致命错误：无登录态照常抓取，模型会看到登录页并自行决定是否 perform_login
+          // An unresolvable environment is not fatal: fetch as usual without a login state; the model will see the login page and decide on its own whether to perform_login
         } finally {
           if (envCtx) await envCtx.close().catch(() => {});
         }

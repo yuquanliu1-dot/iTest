@@ -1,18 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Page, Browser, BrowserContext } from 'playwright-core';
 
-// 复用 playback-integration 思路：mock 整个 playwright-core，让 cdp 跑在受控 stub page 上。
-// 关键点：singleton browser —— 所有 chromium.launch() 返回同一个对象，让跨测试的 spy 计数保持一致。
-// launchCount / closeCount 用 beforeEach 重置。
+// Reuses the playback-integration approach: mock the whole playwright-core so cdp runs on a controlled stub page.
+// Key point: singleton browser — every chromium.launch() returns the same object, keeping spy counts consistent across tests.
+// launchCount / closeCount are reset in beforeEach.
 const mockState = vi.hoisted(() => ({
   locatorCount: 1,
   clickReject: false,
   launchCount: 0,
   closeCount: 0,
-  // 探测页主响应状态（null=无响应对象/200）；body 文本（null=沿用 'val' 默认）
+  // Probe page main-response status (null = no response object / 200); body text (null = keep the 'val' default)
   gotoStatus: null as number | null,
   bodyText: null as string | null,
-  // 单例 browser/context —— 让所有 chromium.launch() 拿到同一个对象，便于断言 close 调用次数
+  // Singleton browser/context — every chromium.launch() gets the same object, so close-call counts are easy to assert
   browser: undefined as unknown as Browser,
   ctx: undefined as unknown as BrowserContext,
   storageState: { cookies: [], origins: [] },
@@ -66,7 +66,7 @@ vi.mock('playwright-core', () => {
     title: vi.fn().mockResolvedValue(''),
   } as unknown as Page);
 
-  // 单例 ctx —— 每次 newContext(opts) 都记录 opts 并返回同一 ctx。
+  // Singleton ctx — every newContext(opts) records opts and returns the same ctx.
   const ctx: BrowserContext = {
     newPage: vi.fn().mockImplementation(async () => {
       const page = makePage();
@@ -115,7 +115,7 @@ vi.mock('playwright-core', () => {
     userAgent: vi.fn().mockReturnValue('mock'),
   } as unknown as Browser;
 
-  // 给单例 browser/context 加一个 stash 入口，方便测试通过 mockState.browser / ctx 拿到同一引用。
+  // Give the singleton browser/context a stash entry so tests can reach the same reference via mockState.browser / ctx.
   Object.defineProperty(mockState, 'browser', { value: browser, writable: true, configurable: true });
   Object.defineProperty(mockState, 'ctx', { value: ctx, writable: true, configurable: true });
 
@@ -139,14 +139,14 @@ const SAMPLE_STEPS = [
 ];
 
 beforeEach(() => {
-  // mock 状态重置
+  // mock state reset
   mockState.launchCount = 0;
   mockState.closeCount = 0;
   mockState.newContextOpts.length = 0;
   mockState.locatorCount = 1;
   mockState.gotoStatus = null;
   mockState.bodyText = null;
-  // mock spy 调用计数清零（保留 mock 引用；mock 函数本身是稳定的）
+  // reset mock spy call counts (keep mock references; the mock functions themselves are stable)
   (mockState.browser as unknown as { close: ReturnType<typeof vi.fn> }).close.mockClear();
   (mockState.ctx as unknown as { newPage: ReturnType<typeof vi.fn> }).newPage.mockClear();
   (mockState.ctx as unknown as { storageState: ReturnType<typeof vi.fn> }).storageState.mockClear();
@@ -154,10 +154,10 @@ beforeEach(() => {
 
 describe('executeCaseInBrowser — shares caller-owned browser+ctx', () => {
   it('does NOT call chromium.launch (browser pre-supplied)', async () => {
-    // 通过 mockState.browser 直接拿单例浏览器引用 —— cdp 路径不应再调 chromium.launch。
+    // Take the singleton browser reference directly via mockState.browser — the cdp path must not call chromium.launch again.
     const browser = mockState.browser;
     const ctx = mockState.ctx;
-    mockState.launchCount = 0; // 重置
+    mockState.launchCount = 0; // reset
     await executeCaseInBrowser(
       '00000000-0000-0000-0000-0000000000a1',
       SAMPLE_STEPS,
@@ -241,7 +241,7 @@ describe('loginPrepare — takeOwnership flow keeps browser alive', () => {
     );
     expect(result.status).toBe('passed');
     expect(result.storageState).toBeDefined();
-    // takeOwnership 路径下 finally 不应 close browser
+    // On the takeOwnership path, finally must not close the browser
     expect((observedBrowser as unknown as { close: ReturnType<typeof vi.fn> }).close).not.toHaveBeenCalled();
     expect(mockState.closeCount).toBe(0);
   });
@@ -258,13 +258,13 @@ describe('loginPrepare — takeOwnership flow keeps browser alive', () => {
       {
         loginCaseRunner: async (_cid, ctx, browser) => {
           observedBrowser = browser;
-          return { passed: true, storageState: await ctx.storageState() }; // 不传 takeOwnership
+          return { passed: true, storageState: await ctx.storageState() }; // takeOwnership not passed
         },
       },
     );
     expect(result.status).toBe('passed');
     expect(result.storageState).toBeDefined();
-    // default 路径 finally 调 browser.close
+    // The default path calls browser.close in finally
     expect((observedBrowser as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalledTimes(1);
     expect(mockState.closeCount).toBe(1);
   });
@@ -310,21 +310,22 @@ describe('loginPrepare — autoFillLogin 相对 loginUrl 拼接', () => {
   });
 });
 
-// prod228 bd6a1cf0（2026-11-03）回归：探测地址落到 Whitelabel 404 错误页——无 URL login
-// 特征、无密码框、无未登录关键词 → 旧排除式判定给出「no login signals 已登录」→ 登录用例
-// 被静默跳过。修复后：HTTP≥400 或错误页签名 → 按未登录处理，走登录用例。
+// prod228 bd6a1cf0 (2026-11-03) regression: the probe URL landed on a Whitelabel 404 error page — no URL login
+// markers, no password field, no unauthorized keywords → the old exclusion-style check produced "no login signals,
+// logged in" → the login case was silently skipped. After the fix: HTTP≥400 or an error-page signature → treated as
+// logged out, so the login case runs.
 describe('loginPrepare — 探测错误页不再判已登录', () => {
   const cfg = {
     enabled: true,
     caseId: '00000000-0000-0000-0000-0000000000c3',
-    // page.url() mock 固定为 https://example.com/（无 login 特征），密码框由 locatorCount 控制
+    // page.url() mock is fixed to https://example.com/ (no login markers); the password field is controlled by locatorCount
     detectionUrl: 'https://app.example.com/',
     unauthorizedKeywords: null,
   };
 
   it('主响应 HTTP 404 → 不判已登录，执行登录用例', async () => {
     mockState.gotoStatus = 404;
-    mockState.locatorCount = 0; // 无密码框：旧逻辑此刻会误判 no login signals
+    mockState.locatorCount = 0; // no password field: the old logic would misjudge "no login signals" here
     const runner = vi.fn(async () => ({ passed: true }));
     const result = await loginPrepare(cfg, { loginCaseRunner: runner });
     expect(result.status).toBe('passed');
@@ -342,7 +343,7 @@ describe('loginPrepare — 探测错误页不再判已登录', () => {
   });
 
   it('HTTP 200 + Whitelabel 错误页签名 body → 走签名分支执行登录用例', async () => {
-    mockState.gotoStatus = null; // 无响应对象（或 200）
+    mockState.gotoStatus = null; // no response object (or 200)
     mockState.locatorCount = 0;
     mockState.bodyText = 'Whitelabel Error Page\nThis application has no explicit mapping for /error\n404 Not Found';
     const runner = vi.fn(async () => ({ passed: true }));

@@ -42,7 +42,7 @@ describe('buildVariableReport × httpRequest', () => {
       { kind: 'extract', locator: [{ strategy: 'css', value: '#q' }], varName: 'later', mode: 'completeValue' },
     ];
     const report = buildVariableReport(steps, ['apiBase', 'token']);
-    // later 前向引用；userId 正常消费
+    // later is a forward reference; userId is consumed normally
     expect(report.forwardRefs.map((f) => f.name)).toEqual(['later']);
     expect(report.undefined).toEqual([]);
     expect(report.duplicates).toEqual([]);
@@ -58,14 +58,14 @@ describe('buildVariableReport × httpRequest', () => {
 });
 
 /**
- * 传输层行为（loopback 真实 server）。
+ * Transport-layer behavior (loopback real server).
  *
- * 核心回归：undici fetch 会静默丢弃受保护头（Host 被换成连接的真实 host），安全测试用例靠
- * `Host: <注入探针>` 触发 SUT 的 4xx，探针送不出去 → 断言恒不命中、假失败
- * （prod228 报告 15dd42d9：期望 400 实际 200）。换 node:http 后受保护头原样送达。
+ * Core regression: undici fetch silently drops protected headers (Host gets replaced by the connection's real host); security test cases rely on
+ * `Host: <injection probe>` to trigger the SUT's 4xx — the probe never goes out → assertion never matches, false failure
+ * (prod228 report 15dd42d9: expected 400, got 200). After switching to node:http, protected headers are delivered verbatim.
  */
 describe('runHttpRequest 传输层（node:http）', () => {
-  /** 记录收到的原始头，供断言「头真的发到了服务端」。 */
+  /** Records the raw headers received, for asserting "the headers really reached the server". */
   let seen: { raw: string[]; method: string; body: string } | null = null;
   let server: http.Server;
   let base: string;
@@ -128,7 +128,7 @@ describe('runHttpRequest 传输层（node:http）', () => {
       page: stubPage,
       vars: {},
     });
-    // 服务端收到的 host 就是注入值，不是 127.0.0.1
+    // The host the server received is the injected value, not 127.0.0.1
     const hostIdx = seen!.raw.findIndex((h) => h.toLowerCase() === 'host');
     expect(seen!.raw[hostIdx + 1]).toBe("' OR '1'='1");
     expect(r.response.status).toBe(200);
@@ -209,7 +209,7 @@ describe('runHttpRequest 传输层（node:http）', () => {
 
   it('超时归为 HttpRequestTimeout', async () => {
     const slow = http.createServer(() => {
-      // 不响应：触发 socket 超时
+      // No response: triggers the socket timeout
     });
     await new Promise<void>((r) => slow.listen(0, '127.0.0.1', r));
     const slowUrl = `http://127.0.0.1:${(slow.address() as AddressInfo).port}/`;
@@ -224,8 +224,8 @@ describe('runHttpRequest 传输层（node:http）', () => {
   });
 
   it('总时长预算：服务端持续慢速吐 body 也会超时（socket 空闲超时不适用）', async () => {
-    // 回归点：req.setTimeout 是「空闲」超时，每个数据块都会重置计时器——
-    // 服务端每 200ms 吐一点就能永远不触发，而原 AbortController 是硬墙。
+    // Regression point: req.setTimeout is an "idle" timeout, reset by every data chunk —
+    // a server dribbling a byte every 200ms would never trigger it, whereas the original AbortController was a hard wall.
     const dribble = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/plain' });
       const t = setInterval(() => res.write('x'), 200);
@@ -262,10 +262,10 @@ describe('runHttpRequest 传输层（node:http）', () => {
   });
 
   /**
-   * 传输层失败（无 HTTP 响应）+ allowTransportFailure:true → 断言命中、步骤通过。
+   * Transport-layer failure (no HTTP response) + allowTransportFailure:true → assertion matches, step passes.
    *
-   * 场景：SUT 在传输层拒绝伪造 Host（直接 RST 断连，curl 报 "Empty reply from server"），
-   * 没有任何 HTTP 响应可断言 —— 缺省时传输失败直接抛错，绕过 assertion 判假失败。
+   * Scenario: the SUT rejects the forged Host at the transport layer (RST disconnect directly; curl reports "Empty reply from server"),
+   * leaving no HTTP response to assert — by default a transport failure throws directly, bypassing the assertion and producing a false failure.
    */
   it('allowTransportFailure：传输层失败时断言命中、不抛错、记录失败原因', async () => {
     const rst = http.createServer((_req, res) => {
@@ -296,14 +296,14 @@ describe('runHttpRequest 传输层（node:http）', () => {
 });
 
 /**
- * 自签证书（https）。
+ * Self-signed certificates (https).
  *
- * 回归点：浏览器路径早已放行自签证书（cdp.ts 建 context 时 ignoreHTTPSErrors: true），
- * node:https 默认校验证书链 → 同一个被测系统浏览器能访问、httpRequest 步骤 100% 假失败
- * （ERR DEPTH_ZERO_SELF_SIGNED_CERT）。内网测试环境自签 https 极普遍。
+ * Regression point: the browser path already allows self-signed certs (cdp.ts sets ignoreHTTPSErrors: true when building the context),
+ * while node:https validates the chain by default → the same SUT is reachable from the browser but httpRequest steps fail 100% of the time
+ * (ERR DEPTH_ZERO_SELF_SIGNED_CERT). Self-signed https is extremely common in intranet test environments.
  */
 describe('runHttpRequest 自签证书（https）', () => {
-  // 固定的自签证书/私钥（CN=127.0.0.1，SAN 含 IP:127.0.0.1）。仅测试用，非任何真实凭据。
+  // Fixed self-signed cert/private key (CN=127.0.0.1, SAN includes IP:127.0.0.1). Test-only; not any real credential.
   const SELF_SIGNED_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDBj5X6FiK0WeKy
 +KdV3X4fePDC/grllza6c74sihbaf5I0ucz2cHfQg3MHftbA6XF9wmOe2f1dxyEn

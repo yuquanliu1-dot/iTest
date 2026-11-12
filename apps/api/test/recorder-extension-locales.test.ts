@@ -1,18 +1,18 @@
 /**
- * 录制扩展包完整性守卫。
+ * Recorder extension package integrity guard.
  *
- * 2026-10-20 prod228 实测踩坑：用户装扩展报
+ * 2026-10-20 field gotcha on prod228: users installing the extension got
  *   "Default locale was specified, but _locales subtree is missing"
- * 根因是 api.Dockerfile 的 COPY 清单没拷 apps/recorder/_locales，镜像里扩展根目录
- * 缺该子树，而 manifest.json 声明了 default_locale:"zh_CN"——Chrome 装载时校验失败，
- * 整个扩展拒绝安装。
+ * The root cause was api.Dockerfile's COPY list not copying apps/recorder/_locales, so the image's extension root
+ * lacked that subtree while manifest.json declared default_locale:"zh_CN" — Chrome failed its load-time validation
+ * and refused to install the entire extension.
  *
- * 这里从两个层面各挡一道：
- *  1. 源码树：manifest.default_locale 指向的 _locales/<locale>/messages.json 必须存在；
- *  2. Dockerfile：api.Dockerfile 的 COPY 清单必须覆盖 _locales，否则镜像里必然缺。
+ * Two layers of defense here:
+ *  1. Source tree: the _locales/<locale>/messages.json that manifest.default_locale points at must exist;
+ *  2. Dockerfile: api.Dockerfile's COPY list must cover _locales, otherwise the image will certainly lack it.
  *
- * 第 2 条是关键：光有第 1 条，源码明明齐全却照样发出版本装不上——回归就发生在
- * 「打包进镜像」这一层。
+ * Item 2 is the critical one: with only item 1, the source is fine yet a released version still fails to install —
+ * the regression happens at the "packaged into the image" layer.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -43,12 +43,12 @@ describe('录制扩展 manifest 与 _locales 契约', () => {
     const locale = manifest.default_locale!;
     const msg = path.join(RECORDER_ROOT, '_locales', locale, 'messages.json');
     expect(fs.existsSync(msg), `缺少 ${msg}——Chrome 会拒绝安装扩展`).toBe(true);
-    // 文件本身得是合法 JSON，否则 Chrome 解析 _locales 时同样报错
+    // The file itself must be valid JSON, otherwise Chrome errors while parsing _locales too
     expect(() => JSON.parse(fs.readFileSync(msg, 'utf8'))).not.toThrow();
   });
 
   it('manifest 用 __MSG_ 占位符的字段在 _locales 里有对应 key', () => {
-    // description 走 __MSG_extDesc__，缺 key 时 Chrome 显示空描述
+    // description goes through __MSG_extDesc__; when the key is missing Chrome shows an empty description
     const locale = manifest.default_locale!;
     const messages = JSON.parse(
       fs.readFileSync(path.join(RECORDER_ROOT, '_locales', locale, 'messages.json'), 'utf8'),

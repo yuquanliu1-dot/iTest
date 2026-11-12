@@ -1,29 +1,30 @@
 import type { Page } from 'playwright-core';
 
 /**
- * 等整页渲染「稳定」后再截图交给 LLM 判定（vision 终态 / 验证码识别）。
+ * Waits for the full-page render to go "stable" before screenshotting for LLM judgment (vision final state / captcha recognition).
  *
- * 动机：此前判定前只用固定 `waitForLoadState('networkidle') + 固定 sleep`——
- * SPA 懒加载 chunk / 骨架屏 / 接口回填晚于 networkidle 完成时，固定 sleep 不足以让渲染落地，
- * 截图仍停在「加载中」帧，LLM 据此把「没加载完」误判为「不符合预期」，用例假失败。
- * 实测 report 4c6d0798 的 final 帧与末步帧逐字节相同（已稳定），但用户多次反馈「页面没加载完
- * 就分析截图」——固定时间不可靠，这里改成**视觉稳定**判定：连拍两帧像素指纹，两帧相同即认为
- * 渲染已静默。指纹用画布采样 hash 而非 PNG 字节（字节会因重编码波动、且整帧比较在动画下永不收敛）；
- * 连拍 N 次相同即收敛。全程 best-effort，超时就按当前帧继续（绝不比旧行为更差）。
+ * Motivation: judgment previously relied only on a fixed `waitForLoadState('networkidle') + fixed sleep` —
+ * when SPA lazy-loaded chunks / skeleton screens / API backfill complete after networkidle, a fixed sleep isn't enough for the render to land,
+ * the screenshot still sits on a "loading" frame, and the LLM misjudges "not loaded yet" as "doesn't match expectations" — a false case failure.
+ * Measured: report 4c6d0798's final frame was byte-identical to the last step's frame (already stable), yet users repeatedly reported
+ * "analyzing the screenshot before the page finished loading" — a fixed duration is unreliable, so this became a **visual stability** verdict:
+ * capture two consecutive pixel fingerprints; two identical frames mean the render has gone quiet.
+ * The fingerprint is a canvas-sampled hash rather than PNG bytes (bytes wobble on re-encoding, and whole-frame comparison never converges under animation);
+ * N identical samples in a row means convergence. Best-effort throughout: on timeout, continue with the current frame (never worse than the old behavior).
  *
- * 只在「截图要交给 LLM 分析」的两处调用（runCaseVisionAssert / solveCaptchaOnce 兜底整页图）；
- * 普通 step 截图只是记录用途，不套这个以免拖慢每步。
+ * Called only at the two places where "the screenshot goes to the LLM for analysis" (runCaseVisionAssert / solveCaptchaOnce's full-page fallback);
+ * ordinary step screenshots are record-only — not wrapped in this, to avoid slowing every step.
  */
 export interface PageSettleOptions {
-  /** 总预算（毫秒）。到点仍未稳定也返回，按当前帧继续。默认 12000。 */
+  /** Total budget (ms). Returns at the deadline even if not yet stable, continuing with the current frame. Default 12000. */
   timeoutMs?: number;
-  /** 每两次连拍之间的间隔（毫秒）。默认 400。 */
+  /** Gap between consecutive fingerprint samples (ms). Default 400. */
   settleMs?: number;
 }
 
-/** 页内采样像素指纹：把 viewport 缩到 160x100 画布，逐行 hash 像素，返回稳定整数值。
- *  与 DPR 无关（固定采样格数），对纯文字/静态布局变化敏感，对持续动画永不收敛。
- *  waitForPageSettled 用它判「渲染已静默」；aiTask 的可观测变化闸用它判「点击是否真的改变了画面」。 */
+/** In-page sampled pixel fingerprint: scales the viewport onto a 160x100 canvas, hashes pixels row by row, returns a stable integer.
+ *  DPR-independent (fixed sampling grid), sensitive to pure-text/static-layout changes, never converges under continuous animation.
+ *  waitForPageSettled uses it to judge "render gone quiet"; aiTask's observable-change gate uses it to judge "did the click really change the picture". */
 export async function pageFingerprint(page: Page): Promise<number> {
   return page.evaluate(() => {
     const canvas = document.createElement('canvas');
@@ -33,7 +34,7 @@ export async function pageFingerprint(page: Page): Promise<number> {
     canvas.height = H;
     const ctx = canvas.getContext('2d');
     if (!ctx) return -1;
-    // documentElement 是 HTMLElement，canvas.drawImage 要求 CanvasImageSource；TS 库不认，此处显式断言。
+    // documentElement is an HTMLElement while canvas.drawImage requires a CanvasImageSource; the TS lib doesn't accept it — explicit assertion here.
     ctx.drawImage(document.documentElement as unknown as HTMLImageElement, 0, 0, W, H);
     const img = ctx.getImageData(0, 0, W, H).data;
     let h = 2166136261;
@@ -48,18 +49,18 @@ export async function pageFingerprint(page: Page): Promise<number> {
 export async function waitForPageSettled(page: Page, opts: PageSettleOptions = {}): Promise<void> {
   const deadline = Date.now() + (opts.timeoutMs ?? 12000);
   const settleMs = opts.settleMs ?? 400;
-  // 先尽力等一次 networkidle（长连接页面等不到就交给视觉稳定兜底，不阻塞）。
+  // Best-effort single wait for networkidle first (long-connection pages may never reach it — hand over to the visual-stability fallback without blocking).
   await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => undefined);
   let prev = -2;
   let stable = 0;
-  // 迭代上限：真实场景下 settleMs≥1 让墙钟随循环推进，Date.now()>=deadline 自然终止；
-  // 单测 mock waitForTimeout 同步 resolve 时墙钟不推进，这个上限兜底防死循环（也防 evaluate 异常时死循环）。
+  // Iteration cap: in real scenarios settleMs≥1 advances wall clock each loop, so Date.now()>=deadline terminates naturally;
+  // when unit-test mocks resolve waitForTimeout synchronously, wall clock doesn't advance — this cap guards against infinite loops (also against loops on evaluate exceptions).
   const maxIters = Math.max(2, Math.ceil((opts.timeoutMs ?? 12000) / Math.max(1, settleMs)) + 5);
   for (let iter = 0; iter < maxIters && Date.now() < deadline; iter++) {
     const cur = await pageFingerprint(page);
     if (cur >= 0 && cur === prev) {
       stable++;
-      if (stable >= 2) return; // 连续三次采样指纹一致 → 渲染已静默
+      if (stable >= 2) return; // three consecutive identical sampled fingerprints → render gone quiet
     } else {
       stable = 0;
     }

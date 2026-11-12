@@ -5,8 +5,8 @@ import { Pool } from 'pg';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 
-// P1-3 落库闸门：/stage/save 对死步骤（无 compiled 且无指令）422 拦截 + 纯 NL 草稿 advisory warnings。
-// 路由级测试（supertest + 真实 stageRoute），与 space-guides.test.ts 同款挂载。
+// P1-3 persistence gate: /stage/save intercepts dead steps (no compiled and no instruction) with 422 + advisory warnings for pure NL drafts.
+// Route-level test (supertest + the real stageRoute), mounted the same way as space-guides.test.ts.
 let pool: Pool;
 let app: import('express').Express;
 
@@ -26,7 +26,7 @@ beforeAll(async () => {
   app.use((req, _res, next) => { req.user = managerUserOf(userId, username, orgId, orgPath); next(); });
   app.use('/api/assistant', spaceRoute);
   app.use(errorHandler);
-  // 动态 import：stageRoute 链上静态引 db/client（DATABASE_URL 在 beforeAll 才指向容器）
+  // Dynamic import: the stageRoute chain statically imports db/client (DATABASE_URL only points at the container inside beforeAll)
   await import('../src/db/client.js');
 }, 60_000);
 
@@ -37,11 +37,11 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // 只清本测试域的表；org/project 行留给 seedOrg/seedProject 复用（org 缓存仍有效）
+  // Only clear this test domain's tables; org/project rows stay for seedOrg/seedProject reuse (the org cache stays valid)
   await pool.query(`TRUNCATE ai_threads, ai_stage_cases, ai_stage_case_ops, test_steps, test_cases RESTART IDENTITY CASCADE`);
 });
 
-/** 造一个版本线程 + 一条暂存用例草稿，返回 threadId/localId/groupId。 */
+/** Create a version thread + one staged case draft, returning threadId/localId/groupId. */
 async function seedDraft(steps: Array<Record<string, unknown>>, title = '草稿用例'): Promise<{ threadId: string; localId: string; groupId: string }> {
   const { versionId, groupId } = await seedProject(pool);
   const threadId = randomUUID();
@@ -54,7 +54,7 @@ async function seedDraft(steps: Array<Record<string, unknown>>, title = '草稿�
   return { threadId, localId, groupId };
 }
 
-/** 造版本线程 + 一个落库用例（含 N 个步骤），返回 threadId/caseId/stepIds/versionId。 */
+/** Create a version thread + one persisted case (with N steps), returning threadId/caseId/stepIds/versionId. */
 async function seedDbCase(stepCount = 2): Promise<{ threadId: string; caseId: string; stepIds: string[]; versionId: string }> {
   const { versionId, groupId } = await seedProject(pool);
   const threadId = randomUUID();
@@ -75,7 +75,7 @@ async function seedDbCase(stepCount = 2): Promise<{ threadId: string; caseId: st
   return { threadId, caseId, stepIds, versionId };
 }
 
-/** 造一条暂存 op 行（staged_at 可控，用来固定批次内的应用顺序）。 */
+/** Create one staged op row (staged_at controllable, to pin the application order within a batch). */
 async function seedCaseOp(
   row: { threadId: string; versionId: string; caseId: string; localId: string; op: string; payload: unknown; summary?: string; at?: number },
 ): Promise<void> {
@@ -94,7 +94,7 @@ describe('POST /threads/:id/stage/save — 死步骤拦截与 NL 草稿告警', 
   it('死步骤（无 compiled 且无指令）→ 422 dead_steps 点名步骤序号，不落库且 stage 行保留', async () => {
     const { threadId, localId, groupId } = await seedDraft([
       { action: '点击登录按钮', compiled: null, assertion: null },
-      { action: '', compiled: null, assertion: null }, // 死步：既无 DSL 也没有指令
+      { action: '', compiled: null, assertion: null }, // dead step: neither DSL nor an instruction
     ], '死步用例');
     const r = await request(app).post(`/api/assistant/threads/${threadId}/stage/save`)
       .send({ cases: [{ localId, groupId }] });
@@ -102,7 +102,7 @@ describe('POST /threads/:id/stage/save — 死步骤拦截与 NL 草稿告警', 
     expect(r.body.error).toBe('dead_steps');
     expect(r.body.message).toContain('死步用例');
     expect(r.body.message).toContain('第 2 步');
-    // 拦截语义：用例没建、暂存行不删（用户可让助手补写后重试）
+    // Interception semantics: the case isn't created and the staged row isn't deleted (the user can have the assistant finish it and retry)
     const caseRows = await pool.query(`SELECT count(*)::int n FROM test_cases`);
     expect(caseRows.rows[0]!.n).toBe(0);
     const stageRows = await pool.query(`SELECT count(*)::int n FROM ai_stage_cases WHERE local_id = $1`, [localId]);
@@ -120,8 +120,8 @@ describe('POST /threads/:id/stage/save — 死步骤拦截与 NL 草稿告警', 
     expect(Array.isArray(r.body.warnings)).toBe(true);
     expect(String(r.body.warnings[0])).toContain('自然语言草稿');
     expect(String(r.body.warnings[0])).toContain('NL草稿用例');
-    // 指令完整落库；字符串断言经 createCaseWithSteps 迁移成 canonical 形态
-    // （{kind:'assertText', target:'page', locator:[]}——正是机械回放会跳过的整页模糊断言，advisory warning 的动机）
+    // Instructions persist in full; string assertions migrate through createCaseWithSteps into canonical form
+    // ({kind:'assertText', target:'page', locator:[]} — exactly the whole-page fuzzy assertion mechanical replay skips, which motivates the advisory warning)
     const row = (await pool.query(
       `SELECT c.title, s.instruction, s.assertion FROM test_cases c JOIN test_steps s ON s.case_id = c.id`,
     )).rows[0]!;
@@ -148,10 +148,10 @@ describe('POST /threads/:id/stage/save — 死步骤拦截与 NL 草稿告警', 
   });
 });
 
-// 回归动机：prod228 2026-11-11——固化把叠加态步骤（stepId 形如 'staged:1'，DB 里还不存在）
-// 暂成 update_step，落库时 stepId 非 uuid → 裸 ZodError → 前端只见「参数校验失败，请检查输入」；
-// 且失败不回滚，用户重试把同一条步骤重复插了 3 份。
-// 修复：①固化不再产出该 op（根因，见 pi-solidify-case.test.ts）；②落库前全量预检，一条都不写。
+// Regression motive: prod228 2026-11-11 — solidification staged an overlaid-state step (stepId shaped like 'staged:1', not yet in the DB)
+// as update_step; at persistence the non-uuid stepId → bare ZodError → the frontend only saw "parameter validation failed, please check input";
+// and the failure didn't roll back, so user retries inserted the same step 3 times.
+// Fix: (1) solidification no longer produces that op (root cause, see pi-solidify-case.test.ts); (2) full pre-validation before persistence, writing nothing.
 describe('POST /threads/:id/stage/save — caseOps 落库前预检', () => {
   it('非法 stepId（非 uuid，如叠加态占位）→ 400 可读报错，一条都不写，暂存行保留', async () => {
     const { threadId, caseId, stepIds, versionId } = await seedDbCase(2);
@@ -166,11 +166,11 @@ describe('POST /threads/:id/stage/save — caseOps 落库前预检', () => {
     expect(r.body.error).toBe('staged_op_invalid');
     expect(String(r.body.message)).toContain('参数不合法');
     expect(String(r.body.message)).toContain('stepId');
-    expect(String(r.body.message)).toContain('第 2 步 固化'); // 点名是哪条 op
-    // 一条都不写：步骤 compiled 保持 NULL
+    expect(String(r.body.message)).toContain('第 2 步 固化'); // names which op it is
+    // Nothing written: the step's compiled stays NULL
     const rows = await pool.query(`SELECT id, compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
     expect(rows.rows.every((r) => r.compiled === null)).toBe(true);
-    // 暂存行保留（用户可取消这条后重试）
+    // Staged row kept (the user can cancel this op and retry)
     const stageRows = await pool.query(`SELECT count(*)::int n FROM ai_stage_case_ops WHERE local_id = 'solidify-staged:1'`);
     expect(stageRows.rows[0]!.n).toBe(1);
     expect(stepIds).toHaveLength(2);
@@ -178,7 +178,7 @@ describe('POST /threads/:id/stage/save — caseOps 落库前预检', () => {
 
   it('批次中段出现非法 op → 排在它前面的合法 op 也不落库（全批原子拦下）', async () => {
     const { threadId, caseId, stepIds, versionId } = await seedDbCase(2);
-    // staged_at 递增 → 合法 op 在前、非法 op 在后（模拟「前一条已写、后一条炸」的中段失败）
+    // staged_at increasing → the legal op first, the illegal op after (simulating a mid-batch failure where "the earlier row was written, the later one blew up")
     await seedCaseOp({
       threadId, versionId, caseId, localId: 'ok-1', op: 'update_step',
       payload: { action: 'update_step', caseId, stepId: stepIds[0], compiled: [{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }] },
@@ -193,7 +193,7 @@ describe('POST /threads/:id/stage/save — caseOps 落库前预检', () => {
       .send({ caseOps: [{ localId: 'ok-1' }, { localId: 'bad-2' }] });
     expect(r.status).toBe(400);
     expect(r.body.error).toBe('staged_op_invalid');
-    // 关键不变式：合法 op 也一条没写（这正是 prod228 重复插入 3 份的成因）
+    // Key invariant: the legal op also wrote nothing (this is exactly what caused prod228's 3 duplicate inserts)
     const rows = await pool.query(`SELECT compiled FROM test_steps WHERE case_id = $1 ORDER BY "order"`, [caseId]);
     expect(rows.rows.every((r) => r.compiled === null)).toBe(true);
   });
@@ -220,7 +220,7 @@ describe('POST /threads/:id/stage/save — caseOps 落库前预检', () => {
     const { threadId, caseId, stepIds, versionId } = await seedDbCase(2);
     await seedCaseOp({
       threadId, versionId, caseId, localId: 'mv-1', op: 'move_step',
-      payload: { action: 'move_step', caseId, stepIds: [stepIds[0]!] }, // 少一条
+      payload: { action: 'move_step', caseId, stepIds: [stepIds[0]!] }, // one missing
       summary: '步骤重排',
     });
     const r = await request(app).post(`/api/assistant/threads/${threadId}/stage/save`)

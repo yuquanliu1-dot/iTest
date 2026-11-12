@@ -41,16 +41,16 @@ import { migrateLegacyLlmChannels } from './db/migrateLlmChannels.js';
 
 const app = express();
 app.use(express.raw({ type: 'application/octet-stream', limit: '60mb' }));
-// 助手消息体带 base64 图片附件(react-pi 把 composer 附件内联进 input.attachments),
-// 全局 2mb 会让一张正常截图直接 413。挂在 /api/assistant 前即可覆盖——body-parser
-// 以 'body' in req 为已解析标记,后到的全局解析器对同一请求跳过,其余路由不受影响。
-// 上限由 ASSISTANT_JSON_BODY_LIMIT 从图片上限与张数算得,不是拍脑袋的常数。
+// Assistant message bodies carry base64 image attachments (react-pi inlines composer attachments into input.attachments);
+// the global 2mb limit would 413 a single normal screenshot. Mounting before /api/assistant is enough to override —
+// body-parser uses 'body' in req as the already-parsed marker, so the later global parser skips the same request and other routes are unaffected.
+// The limit is computed by ASSISTANT_JSON_BODY_LIMIT from the image size cap and image count, not an arbitrary constant.
 app.use('/api/assistant', express.json({ limit: ASSISTANT_JSON_BODY_LIMIT }));
 app.use(express.json({ limit: '2mb' }));
 app.use('/screenshots', express.static(join(process.cwd(), 'screenshots')));
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/auth', authRoute);
-// 毯子登录守卫：/api/auth 的公开端点（login/change-password）在其之前；扩展自鉴权端点在守卫内放行
+// Blanket login guard: /api/auth's public endpoints (login/change-password) sit before it; the extension self-auth endpoint is allowed through inside the guard
 app.use('/api', requireAuth);
 app.use('/api/organizations', organizationsRoute);
 app.use('/api/settings', settingsRoute);
@@ -88,8 +88,8 @@ const port = Number(process.env.API_PORT ?? 54321);
 const host = process.env.API_HOST ?? '127.0.0.1';
 
 async function bootstrap() {
-  // 旧版单渠道（5 个 llm_* 单键）→ 多渠道结构：发版即自动迁移，旧键随后删除。
-  // 失败不阻断启动：LLM 相关调用会各自报「尚未配置 LLM 渠道」，下次启动重试。
+  // Legacy single channel (5 llm_* single keys) → multi-channel structure: migration runs automatically on release, old keys deleted afterwards.
+  // Failure does not block startup: LLM calls each report "no LLM channel configured yet"; retried on the next startup.
   try {
     const r = await migrateLegacyLlmChannels();
     if (r.migrated || r.legacyRemoved) {
@@ -105,7 +105,7 @@ async function bootstrap() {
     void startRcaWorker();
     void startTrajectoryWorker();
     void startScheduler();
-    // 探索会话看门狗：判死「执行器已死但状态还停在 running」的僵死会话
+    // Exploration session watchdog: declares dead the zombied sessions where "the executor is gone but the status is stuck at running"
     void startExplorationSweeper();
   });
   attachRecorderWs(server);

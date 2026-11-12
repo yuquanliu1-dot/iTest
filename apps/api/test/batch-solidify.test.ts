@@ -5,8 +5,8 @@ import { createTestDatabase } from './helpers/pg.js';
 import { randomUUID } from 'node:crypto';
 import { SCHEMA_SQL, seedOrg, seedProject } from './helpers/db.js';
 
-// 批量固化 job 单测：solidify/verify 两个工具模块整体打桩（真实编排已由 pi-*-case 套件覆盖），
-// 聚焦 batchSolidify 自身契约——资格校验 / materialize 事务 / job 状态机与「保留 DSL」失败语义。
+// Unit tests for the batch solidify job: the solidify/verify tool modules are stubbed wholesale (real orchestration is covered by the pi-*-case suites),
+// focusing on batchSolidify's own contract -- eligibility validation / the materialize transaction / the job state machine and the "keep DSL" failure semantics.
 vi.mock('../src/pi/space/tools/solidifyCase.js', () => ({
   buildSolidifyCaseTool: vi.fn(),
 }));
@@ -26,7 +26,7 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32, 1).toString('base64');
   pool = new Pool({ connectionString: pgDb.uri });
   await pool.query(SCHEMA_SQL);
-  // supertest 应用（路由层测试用）：注入种子组织管理员身份，挂 cases 路由
+  // supertest app (for route-level tests): inject the seeded org manager identity and mount the cases route
   const { default: express } = await import('express');
   const { casesRoute } = await import('../src/routes/cases.js');
   const { errorHandler } = await import('../src/middleware/errorHandler.js');
@@ -60,7 +60,7 @@ beforeEach(async () => {
   versionId = seed.versionId;
 });
 
-/** 全未固化 web 用例（compiled 全 NULL）。 */
+/** Fully unsolidified web case (compiled all NULL). */
 async function seedCase(opts: { versionId?: string | null; platform?: string; steps?: Array<{ instruction?: string | null; compiled?: unknown[] | null; sensitive?: boolean }> } = {}): Promise<string> {
   const id = randomUUID();
   await pool.query(
@@ -82,7 +82,7 @@ async function stepRows(caseId: string): Promise<Array<{ id: string; compiled: u
   return r.rows as Array<{ id: string; compiled: unknown }>;
 }
 
-/** 建批次 + queued 行，返回 batchId。 */
+/** Create a batch + queued rows; return the batchId. */
 async function seedBatch(caseIds: string[]): Promise<string> {
   const batchId = randomUUID();
   await pool.query(`INSERT INTO solidify_batches(id, project_id) VALUES ($1, $2)`, [batchId, projectId]);
@@ -103,7 +103,7 @@ async function batchRow(batchId: string, caseId: string): Promise<{ status: stri
   return r.rows[0] as { status: string; error: string | null; solidify_result: unknown; verify_result: unknown; started_at: Date | null; finished_at: Date | null };
 }
 
-/** 让 mock solidify 工具像真工具那样往 batch 草稿区写 solidify-% 暂存（materialize 的输入）。 */
+/** Make the mock solidify tool write solidify-% staging into the batch draft area like the real tool does (the input to materialize). */
 function stageSolidifyOps(caseId: string, stepIds: string[], compiled: unknown[]): (input: unknown) => Promise<{ ok: true; data: string }> {
   return async (input: unknown) => {
     const { caseId: cid } = input as { caseId: string };
@@ -209,7 +209,7 @@ describe('materializeStagedOps', () => {
     expect(after[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }]);
     expect(after[1]!.compiled).toEqual([{ kind: 'fill', locator: [{ strategy: 'css', value: '#n' }], value: 'x' }]);
     const ops = await pool.query(`SELECT * FROM ai_stage_case_ops WHERE thread_id = 'batch-b1'`);
-    expect(ops.rows).toHaveLength(0); // 暂存已清
+    expect(ops.rows).toHaveLength(0); // staging cleared
   });
 
   it('非 solidify-% 暂存不受影响；草稿区无暂存 → 抛错', async () => {
@@ -222,7 +222,7 @@ describe('materializeStagedOps', () => {
     );
     const { materializeStagedOps } = await import('../src/execute/batchSolidify.js');
     await expect(materializeStagedOps('batch-b2', caseId)).rejects.toThrow('固化工件缺失');
-    // manual-op 仍在、compiled 未动
+    // manual-op still present, compiled untouched
     const ops = await pool.query(`SELECT local_id FROM ai_stage_case_ops WHERE thread_id = 'batch-b2'`);
     expect(ops.rows).toHaveLength(1);
     expect((await stepRows(caseId))[0]!.compiled).toBeNull();
@@ -247,7 +247,7 @@ describe('runSolidifyBatchCaseJob', () => {
     expect(row.verify_result).toMatchObject({ result: 'passed' });
     expect(row.solidify_result).toEqual([{ order: 1, status: 'solidified' }]);
     expect((await stepRows(caseId))[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }]);
-    // 合成 ctx：liveView=false 传给工具工厂（job 建构的 ctx 不进这里——工厂入参由工具自己校验，此处只看结果）
+    // Synthetic ctx: liveView=false is passed to the tool factory (the job-constructed ctx doesn't enter here -- factory inputs are validated by the tools themselves; we only look at the outcome)
   });
 
   it('solidify 失败（result=failed）→ solidify_failed，不落库不验收（原子语义）', async () => {
@@ -263,8 +263,8 @@ describe('runSolidifyBatchCaseJob', () => {
     const row = await batchRow(batchId, caseId);
     expect(row.status).toBe('solidify_failed');
     expect(row.error).toBe('保存按钮不可点击');
-    expect(buildVerifyCaseTool).not.toHaveBeenCalled(); // 未进验收
-    expect((await stepRows(caseId))[0]!.compiled).toBeNull(); // 未落库
+    expect(buildVerifyCaseTool).not.toHaveBeenCalled(); // never entered verification
+    expect((await stepRows(caseId))[0]!.compiled).toBeNull(); // never persisted
   });
 
   it('verify 失败 → verify_failed 但 DSL 已保留（决策：保留 DSL + 标记失败）', async () => {
@@ -285,7 +285,7 @@ describe('runSolidifyBatchCaseJob', () => {
     expect(row.status).toBe('verify_failed');
     expect(row.error).toBe('所有定位候选均未命中');
     expect(row.verify_result).toMatchObject({ failure: { failureReason: 'ReplayDivergence' } });
-    expect((await stepRows(caseId))[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }]); // DSL 保留
+    expect((await stepRows(caseId))[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }]); // DSL kept
   });
 
   it('verify ok:false（如全 aiTask 用例被 mechanical 拒绝）→ verify_failed 带 error', async () => {
@@ -336,7 +336,7 @@ describe('runSolidifyBatchCaseJob', () => {
   });
 });
 
-/** 轮询等待批量行落到期望终态（路由 inline 回落是 fire-and-forget，响应返回时 job 还在跑）。 */
+/** Poll until the batch row reaches the expected terminal state (the route's inline fallback is fire-and-forget; the job is still running when the response returns). */
 async function waitForRow(batchId: string, caseId: string, expected: 'passed', timeoutMs = 5000): Promise<void> {
   const start = Date.now();
   for (;;) {
@@ -365,10 +365,10 @@ describe('routes: batch-solidify', () => {
     expect(r.body.batchId).toBeTruthy();
     expect(r.body.accepted).toEqual([okCase]);
     expect(r.body.rejected).toEqual([{ caseId: badCase, reason: expect.stringContaining('已有固化步骤') }]);
-    // inline 回落的 job 跑完：DSL 落库 + 行 passed
+    // The inline-fallback job finished: DSL persisted + row passed
     await waitForRow(r.body.batchId, okCase, 'passed');
     expect((await stepRows(okCase))[0]!.compiled).toEqual([{ kind: 'click', locator: [{ strategy: 'css', value: '#del' }] }]);
-    // 进度查询：passed
+    // Progress query: passed
     const status = await request(app).get(`/api/cases/solidify-batches/${r.body.batchId as string}`);
     expect(status.body).toMatchObject({ status: 'passed', total: 1, passed: 1, failed: 0, running: 0 });
   });
@@ -427,14 +427,14 @@ describe('routes: batch-solidify', () => {
     const c1 = await seedCase();
     const c2 = await seedCase();
     const c3 = await seedCase();
-    // 批次 A：1 passed + 1 verifying → 在途
+    // Batch A: 1 passed + 1 verifying -> in flight
     const batchA = randomUUID();
     await pool.query(`INSERT INTO solidify_batches(id, project_id) VALUES ($1, $2)`, [batchA, projectId]);
     await pool.query(
       `INSERT INTO solidify_batch_cases(batch_id, case_id, status) VALUES ($1,$2,'passed'), ($1,$3,'verifying')`,
       [batchA, c1, c2],
     );
-    // 批次 B：全终态 → 不该出现在列表里
+    // Batch B: all terminal -> must not appear in the list
     const batchB = randomUUID();
     await pool.query(`INSERT INTO solidify_batches(id, project_id) VALUES ($1, $2)`, [batchB, projectId]);
     await pool.query(`INSERT INTO solidify_batch_cases(batch_id, case_id, status) VALUES ($1,$2,'passed')`, [batchB, c3]);
@@ -444,7 +444,7 @@ describe('routes: batch-solidify', () => {
     expect(r.body.batches).toHaveLength(1);
     const b = r.body.batches[0];
     expect(b).toMatchObject({ batchId: batchA, projectId, status: 'running', total: 2, passed: 1, failed: 0, running: 1 });
-    // 行级明细含 caseId/title/status/error
+    // Row-level detail includes caseId/title/status/error
     expect(b.cases).toEqual(expect.arrayContaining([
       expect.objectContaining({ caseId: c1, status: 'passed', title: '批量固化用例', error: null }),
       expect.objectContaining({ caseId: c2, status: 'verifying', title: '批量固化用例' }),
@@ -456,7 +456,7 @@ describe('routes: batch-solidify', () => {
     expect(r.status).toBe(200);
     expect(r.body.batches).toEqual([]);
 
-    // 别的组织的项目 → 与「不存在」同样 404
+    // Another organization's project -> same 404 as "not found"
     const otherOrg = randomUUID();
     await pool.query(`INSERT INTO organizations(id, name, path) VALUES ($1,'他组织',$2)`, [otherOrg, `/${otherOrg}/`]);
     const otherLine = (await pool.query(
@@ -469,7 +469,7 @@ describe('routes: batch-solidify', () => {
     )).rows[0]!.id as string;
     await expect(request(app).get(`/api/cases/solidify-batches?projectId=${otherProject}`)).resolves.toMatchObject({ status: 404 });
 
-    // 无参 → 按可见项目集合过滤：他组织项目的在途批次不出现
+    // No params -> filtered by the visible project set: in-flight batches of another org's project don't appear
     const otherGroup = (await pool.query(
       `INSERT INTO "groups"(project_id, name) VALUES ($1,'他分组') RETURNING id`,
       [otherProject],

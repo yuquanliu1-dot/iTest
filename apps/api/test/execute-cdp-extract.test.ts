@@ -9,14 +9,14 @@ type ExtractArgs = {
 
 const SAMPLE = '订单已提交：ORD-2048';
 
-/** 从 cdp.ts dispatch 抓取 extract 处理逻辑：inline 最小分派，验证 vars 写入与失败语义。 */
+/** Mirrors cdp.ts dispatch's extract handling: an inline minimal dispatch verifying vars writes and failure semantics. */
 async function runExtract(
   action: ExtractArgs,
   initialVars: Record<string, string> = {},
 ): Promise<{ vars: Record<string, string>; error?: string }> {
   const vars: Record<string, string> = { ...initialVars };
   try {
-    // cdp.ts extract 分派：先 inputValue 失败再 innerText；这里模拟 innerText 返回固定样本。
+    // cdp.ts extract dispatch: inputValue first, falling back to innerText on failure; here innerText is simulated to return the fixed sample.
     const raw = SAMPLE.trim();
     let resolved = raw;
     if (action.mode === 'regex') {

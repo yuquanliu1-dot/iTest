@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { mergeConsecutiveFills } from '../src/routes/recorder.js';
 
-// 连续 fill 合并键回归：同 locator 才合并；frameChain 不同 = 不同帧里的同名目标，
-// 合并把值写错帧（2026-11-07 帧链录制批次引入 chain 后的防护锚）。
+// Regression for the consecutive-fill merge key: only the same locator merges; a different frameChain means the same-named target in a different frame,
+// where merging would write the value into the wrong frame (protection anchor added after the 2026-11-07 frame-chain recording batch introduced chain).
 
 type FillItem = { action: { kind?: string; locator?: unknown; value?: unknown; sensitive?: unknown; frameChain?: unknown } };
 const act = (s: unknown) => (s as FillItem).action;

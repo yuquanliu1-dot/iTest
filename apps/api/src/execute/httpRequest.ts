@@ -20,7 +20,7 @@ export class HttpRequestSaveAsFailed extends Error {
 
 export type { HttpStepResult };
 
-/** 报告展示用：请求头里的敏感值打码。 */
+/** For report display: masks sensitive values in request headers. */
 const SENSITIVE_HEADER_RE = /^(authorization|cookie)$/i;
 const MASK = '***';
 const BODY_MAX = 64 * 1024;
@@ -31,7 +31,7 @@ function masked(headers: Record<string, string>): Record<string, string> {
   return out;
 }
 
-/** 简化 dot-path 解析：`a.b[0].c`（引号/转义不支持，超出即抛错）。 */
+/** Simplified dot-path parsing: `a.b[0].c` (quotes/escapes unsupported; anything beyond throws). */
 export function resolveDotPath(data: unknown, path: string): unknown {
   const segments = path
     .replace(/\[(\d+)\]/g, '.$1')
@@ -67,10 +67,10 @@ function compareBody(bodyText: string, match: HttpBodyMatch, expected: string): 
 }
 
 /**
- * undici fetch 默认发送的请求头（实测抓 raw headers 得到）。node:http 只发 Host+Connection，
- * 直接换客户端会让依赖 Accept / Accept-Encoding 内容协商的被测接口返回 HTML 而非 JSON，
- * 存量 httpRequest 用例会静默回归。用户在 DSL 里显式写了同名头时不覆盖（显式优先）。
- * Host/Connection 由 node:http 自行推导且可被用户覆盖，不在此列。
+ * The request headers undici fetch sends by default (captured from raw headers in a live probe). node:http sends only Host+Connection,
+ * so swapping the client outright would make SUT endpoints relying on Accept / Accept-Encoding content negotiation return HTML instead of JSON,
+ * silently regressing existing httpRequest cases. When the user explicitly wrote a same-named header in the DSL, it is not overridden (explicit wins).
+ * Host/Connection are derived by node:http itself and can be overridden by the user, so they are not in this list.
  */
 const DEFAULT_REQUEST_HEADERS: Readonly<Record<string, string>> = {
   accept: '*/*',
@@ -83,13 +83,13 @@ const DEFAULT_REQUEST_HEADERS: Readonly<Record<string, string>> = {
 interface RawResponse {
   status: number;
   statusText: string;
-  /** node:http 的多值头是数组（set-cookie 等），这里原样保留。 */
+  /** node:http's multi-value headers are arrays (set-cookie etc.); kept as-is here. */
   headers: http.IncomingHttpHeaders;
   body: string;
 }
 
-/** 解压响应体：node:http 不自动解，fetch 会。保持「断言作用于明文 body」的既有语义。
- *  deflate 先按 zlib 包装试、失败再按裸 deflate 试（部分服务端发裸流）。 */
+/** Decompresses the response body: node:http doesn't do it automatically, fetch does. Preserves the existing「断言作用于明文 body」semantics.
+ *  deflate first tries the zlib wrapper, then falls back to raw deflate on failure (some servers send the bare stream). */
 function decompress(buf: Buffer, encoding: string | undefined): string {
   const enc = (encoding ?? '').toLowerCase();
   if (enc === '' || enc === 'identity') return buf.toString('utf8');
@@ -102,24 +102,24 @@ function decompress(buf: Buffer, encoding: string | undefined): string {
     }
   }
   if (enc === 'br') return zlib.brotliDecompressSync(buf).toString('utf8');
-  // 未知编码（zstd 等）：node:zlib 不支持，原样返回字节的 utf8 视图，交由断言判定不匹配。
+  // Unknown encoding (zstd etc.): node:zlib doesn't support it; return a utf8 view of the raw bytes and let the assertion judge it a mismatch.
   return buf.toString('utf8');
 }
 
 /**
- * 底层请求：node:http / node:https 直发。
+ * The low-level request: node:http / node:https direct send.
  *
- * 为什么不用 fetch（2026-10-22）：undici 会静默丢弃受保护头——Host 被替换成连接的真实 host，
- * Connection / Transfer-Encoding / Keep-Alive 直接抛 "invalid xxx header"。安全测试用例靠
- * `Host: <注入探针>` 触发 SUT 的 4xx，探针根本送不出去 → 断言恒不命中、假失败
- * （prod228 报告 15dd42d9：期望 400 实际 200 + SPA 外壳页）。node:http 原样透传这些头。
+ * Why not fetch (2026-10-22): undici silently drops protected headers — Host gets replaced with the connection's real host,
+ * and Connection / Transfer-Encoding / Keep-Alive throw "invalid xxx header" outright. Security test cases rely on
+ * `Host: <注入探针>` to trigger the SUT's 4xx; the probe simply never goes out → assertion never matches, false failure
+ * (prod228 report 15dd42d9: expected 400, got 200 + SPA shell page). node:http passes these headers through verbatim.
  *
- * redirect：node:http 本就不跟随重定向，与 fetch 的 redirect:'manual' 语义一致。
+ * redirect: node:http never follows redirects anyway, same semantics as fetch's redirect:'manual'.
  *
- * 自签证书：被测系统常用自签 https（内网测试环境普遍如此），浏览器路径早已放行
- * （cdp.ts 建 context 时 ignoreHTTPSErrors: true）。node:https 默认校验证书链，
- * 自签证书直接 ERR DEPTH_ZERO_SELF_SIGNED_CERT —— 同一个被测系统，浏览器能访问、
- * httpRequest 步骤却 100% 假失败。故此处与浏览器侧对齐：拒绝校验证书链。
+ * Self-signed certs: SUTs commonly use self-signed https (ubiquitous in intranet test environments), and the browser path already allows them
+ * (cdp.ts builds the context with ignoreHTTPSErrors: true). node:https validates the cert chain by default —
+ * a self-signed cert fails outright with ERR DEPTH_ZERO_SELF_SIGNED_CERT — the same SUT is reachable from the browser,
+ * yet the httpRequest step fails 100% of the time. So this side aligns with the browser side: skip cert chain validation.
  */
 function rawRequest(opts: {
   url: string;
@@ -131,12 +131,12 @@ function rawRequest(opts: {
   const u = new URL(opts.url);
   const lib = u.protocol === 'https:' ? https : http;
   return new Promise<RawResponse>((resolve, reject) => {
-    // 总时长预算：从建连开始计时，覆盖「建连 + 等响应头 + 读 body」全程。
-    // 不能用 req.setTimeout——那是 socket 空闲超时（每个数据块都会重置计时器），
-    // 服务端持续慢慢吐数据时它永不触发，而原 AbortController 是硬墙。
-    // 与 fetch 的 abort_signal 语义对齐：到点即判超时，不等 body。
-    // 计时器句柄放在 state 上（而非 let 变量）：settle 闭包要读它，
-    // 但定时器在 request 建好之后才创建，用 let 会踩 TDZ。
+    // Total wall-clock budget: timed from connection setup, covering the whole「建连 + 等响应头 + 读 body」span.
+    // req.setTimeout won't do — that's a socket idle timeout (reset by every data chunk),
+    // so a server trickling data continuously never triggers it, whereas the old AbortController was a hard wall.
+    // Aligned with fetch's abort_signal semantics: at the deadline it's a timeout, without waiting for the body.
+    // The timer handle lives on state (not a let variable): the settle closure reads it,
+    // but the timer is created only after the request is built — a let would hit the TDZ.
     const state: { timer?: NodeJS.Timeout } = {};
     const settle = <T>(fn: (v: T) => void) => (v: T) => {
       if (state.timer) clearTimeout(state.timer);
@@ -150,11 +150,11 @@ function rawRequest(opts: {
         protocol: u.protocol,
         hostname: u.hostname,
         port: u.port || (u.protocol === 'https:' ? 443 : 80),
-        // path 只取 pathname+search，避免把 hash 带上；URL 编码已由 URL 规范化。
+        // path takes only pathname+search so the hash isn't carried along; URL encoding is already normalized by URL.
         path: `${u.pathname}${u.search}`,
         method: opts.method,
         headers: opts.headers,
-        // 自签证书放行（与浏览器路径 ignoreHTTPSErrors 对齐，见上方注释）。
+        // Self-signed certs allowed (aligned with the browser path's ignoreHTTPSErrors; see the comment above).
         ...(u.protocol === 'https:' ? { rejectUnauthorized: false } : {}),
       },
       (res) => {
@@ -177,7 +177,7 @@ function rawRequest(opts: {
     );
     state.timer = setTimeout(() => {
       req.destroy();
-      // 已 resolve/reject 过则 fail 无副作用（promise 吞掉第二次 settle）。
+      // A second fail after resolve/reject is a no-op (the promise swallows the second settle).
       reject(new RawTimeout());
     }, opts.timeoutMs);
     req.on('error', fail);
@@ -186,7 +186,7 @@ function rawRequest(opts: {
   });
 }
 
-/** 超时哨兵：node 的 socket 超时不带可辨识标记，用独立类让调用方与网络错误区分开。 */
+/** Timeout sentinel: node's socket timeout carries no distinguishable marker; a dedicated class lets callers tell it apart from network errors. */
 class RawTimeout extends Error {
   constructor() { super('timeout'); this.name = 'RawTimeout'; }
 }
@@ -214,15 +214,15 @@ export async function runHttpRequest(opts: {
       const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
       if (cookieHeader) headers['Cookie'] = cookieHeader;
     } catch {
-      // 取不到 cookie（如 context 已关闭）不阻断请求，仅按无登录态发出
+      // Failing to get cookies (e.g. the context is closed) doesn't block the request; it just goes out without a login state.
     }
   }
 
   const body = action.body !== undefined ? sub(action.body) : undefined;
 
-  // 未显式指定的默认头按 undici 原样补齐（见 DEFAULT_REQUEST_HEADERS 注释）。
-  // 用户显式写的头优先：默认头都是小写，故把用户头一律降为小写覆盖默认
-  // （node:http 按 key 名字匹配，小写 host / connection 同样被认并原样透传）。
+  // Default headers not explicitly specified are filled in as undici does (see the DEFAULT_REQUEST_HEADERS comment).
+  // User-written headers win: default headers are all lowercase, so user headers are lowercased across the board to override them
+  // (node:http matches by key name; a lowercase host / connection is recognized the same and passed through verbatim).
   const sendHeaders: Record<string, string> = { ...DEFAULT_REQUEST_HEADERS };
   for (const [k, v] of Object.entries(headers)) {
     sendHeaders[k.toLowerCase()] = v;
@@ -254,10 +254,10 @@ export async function runHttpRequest(opts: {
       ? `HTTP ${action.method} ${url} 超时（${action.timeoutMs}ms，实际 ${durationMs}ms）`
       : `HTTP ${action.method} ${url} 失败: ${e instanceof Error ? e.message : String(e)}`;
 
-    // 传输层失败（连接被拒/被重置/超时）通常没有 HTTP 响应可断言。
-    // 安全类用例的期望恰恰是「SUT 在传输层拒绝伪造 Host」——此时判步骤失败是假失败
-    // （prod228 用例 4608e4f4：SUT 直接 RST，curl (52) Empty reply from server）。
-    // 断言显式允许传输失败时：记录失败原因 + 断言命中，步骤通过（无响应，saveAs 无从提取）。
+    // Transport-layer failures (connection refused/reset/timeout) usually leave no HTTP response to assert on.
+    // Security cases expect exactly「SUT 在传输层拒绝伪造 Host」— judging the step failed here is a false failure
+    // (prod228 case 4608e4f4: the SUT answered RST directly, curl (52) Empty reply from server).
+    // When the assertion explicitly allows transport failure: record the failure reason + assertion matched, step passes (no response, nothing for saveAs to extract).
     if (action.assertion?.allowTransportFailure) {
       return {
         request: requestInfo,
@@ -274,8 +274,8 @@ export async function runHttpRequest(opts: {
   const bodyTruncated = bodyText.length > BODY_MAX;
   const bodyForReport = bodyTruncated ? bodyText.slice(0, BODY_MAX) : bodyText;
 
-  // node 的多值头（set-cookie 等）是数组；摊平成与 fetch 一致的字符串形态，
-  // 多值以 ", " 连接（与 undici Headers.forEach 行为相同）。
+  // node's multi-value headers (set-cookie etc.) are arrays; flattened into the same string shape as fetch,
+  // multiple values joined with ", " (same behavior as undici Headers.forEach).
   const responseHeaders: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw.headers)) {
     if (v === undefined) continue;
@@ -293,7 +293,7 @@ export async function runHttpRequest(opts: {
     },
   };
 
-  // 断言：status 精确比对 + body 文本匹配，二者都设置则都须通过
+  // Assertion: status exact comparison + body text match; when both are set, both must pass
   const a = action.assertion;
   if (a && (a.status !== undefined || a.expected !== undefined)) {
     const statusOk = a.status === undefined || raw.status === a.status;
@@ -305,7 +305,7 @@ export async function runHttpRequest(opts: {
     };
   }
 
-  // saveAs：从响应提取变量写入 vars（返回值由 dispatch 写入 opts.vars）
+  // saveAs: extracts a variable from the response into vars (the return value is written into opts.vars by dispatch)
   if (action.saveAs) {
     const { varName, from, path } = action.saveAs;
     let value: string;

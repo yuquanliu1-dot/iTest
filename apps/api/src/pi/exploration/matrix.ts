@@ -1,15 +1,17 @@
 /**
- * 人格矩阵（C3）与跨会话交集（S2）。
+ * Persona matrix (C3) and cross-session intersection (S2).
  *
- * C3：同一章程起 N 个人格会话并行跑（同一 matrix_id 分组）。**不新建表**——
- * matrix_id（分组键）/ matrix_label（展示名）/ matrix_role（角色=persona）三列挂在
- * exploration_sessions 上；矩阵视图按 matrix_id 聚合即可。
+ * C3: N persona sessions run in parallel from the same charter (grouped by the same matrix_id). **No new table** —
+ * the matrix_id (group key) / matrix_label (display name) / matrix_role (role=persona) columns hang off
+ * exploration_sessions; the matrix view just aggregates by matrix_id.
  *
- * S2：矩阵收尾时按「同一 origin + 标题近义」算跨会话交集 → 写 findings.cross_session_count。
- * 交集只是**标注**（≥2 = 多视角共同发现），绝不改 findings.status——人工审阅才是权威。
+ * S2: when the matrix wraps up, cross-session intersections are computed by "same origin + near-identical title" →
+ * written to findings.cross_session_count. The intersection is only an **annotation** (≥2 = found together from multiple
+ * perspectives); it never changes findings.status — human review is the authority.
  *
- * 口径复用：近义判定用 isNearDuplicate（与会话内去重同一份，Dice 0.72 + 位置/主体词一致），
- * 标题归一用 normalizeTitle（同一份）——两处漂移会让「多视角共同发现」的数字对不上会话内去重结果。
+ * Reused rules: near-duplicate detection uses isNearDuplicate (the same copy as in-session dedup: Dice 0.72 + matching
+ * position/subject words), title normalization uses normalizeTitle (the same copy) — drift between the two would make the
+ * "found together from multiple perspectives" numbers disagree with in-session dedup results.
  */
 import { eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/client.js';
@@ -18,16 +20,16 @@ import { isNearDuplicate, normalizeTitle } from '../../execute/explorationPrompt
 import { originOf } from '../../execute/gates.js';
 import { logger } from '../../logger.js';
 
-/** 跨会话同源分组键：显式起点 origin 优先；没填起点时同版本同环境 → 视作同源。
- *  跨 origin 不比——两个不同站点的同名缺陷不是「多视角共同发现」。 */
+/** Cross-session same-source grouping key: an explicit start-origin takes precedence; with no start origin, same version + same environment → treated as same source.
+ *  Different origins are never compared — same-named defects on two different sites are not "found together from multiple perspectives". */
 export function matrixOriginKey(session: { startUrl: string | null; versionId: string }): string {
   const origin = session.startUrl ? originOf(session.startUrl) : null;
   return origin ?? `version:${session.versionId}`;
 }
 
 /**
- * 重算矩阵内 findings 的跨会话命中数（一条 finding = 几个会话报了同一缺陷）。
- * 幂等：整矩阵重算后按差量回写。永不抛错——收尾链路不能因它炸掉。
+ * Recomputes cross-session hit counts for findings in the matrix (one finding = how many sessions reported the same defect).
+ * Idempotent: recompute the whole matrix, then write back by delta. Never throws — the wrap-up chain must not blow up because of it.
  */
 export async function recomputeMatrixIntersection(matrixId: string): Promise<void> {
   try {
@@ -35,7 +37,7 @@ export async function recomputeMatrixIntersection(matrixId: string): Promise<voi
       .select({ id: explorationSessions.id, startUrl: explorationSessions.startUrl, versionId: explorationSessions.versionId })
       .from(explorationSessions)
       .where(eq(explorationSessions.matrixId, matrixId));
-    if (sessions.length < 2) return; // 单会话没有「跨会话」
+    if (sessions.length < 2) return; // A single session has no "cross-session"
     const byOrigin = new Map<string, typeof sessions>();
     for (const s of sessions) {
       const key = matrixOriginKey(s);

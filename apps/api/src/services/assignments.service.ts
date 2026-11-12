@@ -1,11 +1,11 @@
 /**
- * 项目 ACL：assignments（user ⇄ project 分配）。鉴权模型：
- *   - manager：要求 caller 是项目所属组织（或其祖先）的管理员
- *   - user：要求 caller 在 project_assignments 里有该项目的分配
+ * Project ACL: assignments (user ⇄ project allocation). Auth model:
+ *   - manager: requires the caller to be an admin of the project's owning org (or an ancestor)
+ *   - user: requires the caller to have an assignment for the project in project_assignments
  *
- * 与 assertProjectVisible 的差别：assignments 允许 user 在跨组织时被分配到项目。
- * 当前 iTest 已用 assertProjectVisible 做「项目可见性」，assignments 仅作为
- * 「user 在该项目下的额外身份」使用；读取仍走 projectAccess 的子树 + 跨组织 assignment。
+ * Difference from assertProjectVisible: assignments allow a user to be allocated to a project across orgs.
+ * iTest currently uses assertProjectVisible for "project visibility"; assignments serve only as
+ * the "user's extra identity under that project"; reads still go through projectAccess's subtree + cross-org assignment.
  */
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -15,7 +15,7 @@ import { getOrgPath, subtreeOrgIds } from './orgTree.js';
 import { isManagerOfOrg } from '../middleware/auth.js';
 import type { AuthUser } from './auth.service.js';
 
-/** 解析 project → 所属 org id（经 product_lines）；项目不存在返回 null。 */
+/** Resolve project → owning org id (via product_lines); returns null when the project doesn't exist. */
 async function projectOrgId(projectId: string): Promise<string | null> {
   const rows = await db
     .select({ organizationId: productLines.organizationId })
@@ -27,11 +27,11 @@ async function projectOrgId(projectId: string): Promise<string | null> {
 }
 
 /**
- * 是否可见该项目。manager 走子树判定；user 走「我有该项目的 assignment」。
- * 跨组织 assignment 允许 user 看不属于自己激活组织的项目（与 iDO 一致）。
+ * Whether the project is visible. manager goes through subtree judgment; user goes through "I have an assignment for this project".
+ * Cross-org assignments allow a user to see projects outside their activated org (same as iDO).
  *
- * 注意：projectAssignments.organizationId 只是「分配发生时」的组织快照（审计用），
- * 这里刻意不拿它当可见性闸门——R2 起项目组织唯一来源是它的产品线。
+ * Note: projectAssignments.organizationId is only a snapshot of the org at assignment time (for audit);
+ * we deliberately don't use it as the visibility gate — since R2 the project's org has a single source of truth: its product line.
  */
 export async function assertProjectVisibleForAssignments(projectId: string, user: AuthUser): Promise<void> {
   const orgId = await projectOrgId(projectId);
@@ -54,13 +54,13 @@ export async function assertProjectVisibleForAssignments(projectId: string, user
     for (const id of await subtreeOrgIds(p)) visibleOrgIds.add(id);
   }
   for (const m of membershipRows) visibleOrgIds.add(m.organizationId);
-  // 分配快照（project_assignments.organization_id）是分配发生时的组织，搬家后会与项目当前组织脱节；
-  // 可见性只看项目当前所属组织（orgId，上面已算出）——落在调用者可见集合即可。
+  // The assignment snapshot (project_assignments.organization_id) is the org at assignment time; after rehoming it drifts from the project's current org;
+  // visibility only looks at the project's current org (orgId, computed above) — it just needs to fall in the caller's visible set.
   if (!visibleOrgIds.has(orgId)) throw new HttpError(404, 'not_found', 'project not found');
 }
 
 export const assignmentsService = {
-  /** 已分配用户（分页 + 模糊搜索 username/displayName） */
+  /** Assigned users (paginated + fuzzy search on username/displayName) */
   async list(projectId: string, opts: { q?: string; page: number; limit: number }): Promise<{ items: Array<{ id: string; userId: string; username: string; displayName: string; assignedAt: string }>; total: number; page: number; limit: number }> {
     const page = Math.min(Math.max(1, Math.trunc(opts.page)), 1_000_000);
     const limit = Math.min(Math.max(1, Math.trunc(opts.limit)), 100);
@@ -103,7 +103,7 @@ export const assignmentsService = {
     };
   },
 
-  /** 批量分配：userIds 去重 + 跳过已存在；返回最终的全部 assignments。 */
+  /** Bulk assign: dedupe userIds + skip existing; returns the final full set of assignments. */
   async assignMany(projectId: string, userIds: string[], organizationId: string): Promise<{ added: number; total: number }> {
     const unique = [...new Set(userIds)];
     if (unique.length === 0) {
@@ -113,7 +113,7 @@ export const assignmentsService = {
         .where(eq(projectAssignments.projectId, projectId));
       return { added: 0, total: Number(totalRows[0]?.count ?? 0) };
     }
-    // 排除已存在的
+    // Exclude already-existing ones
     const existing = await db
       .select({ userId: projectAssignments.userId })
       .from(projectAssignments)

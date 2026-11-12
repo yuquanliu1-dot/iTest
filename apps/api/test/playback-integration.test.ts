@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { PreflightReport } from '@itest/shared';
 
-// 可变 mock 状态：count 决定定位候选是否命中（0 = 全部未命中 → LocatorAllFailed；1 = 首候选命中）；
-// clickReject = false 时 click 成功，覆盖「命中且步骤通过」的 hitLocator 记录路径。
+// Mutable mock state: count decides whether locator candidates hit (0 = all miss → LocatorAllFailed; 1 = first candidate hits);
+// when clickReject = false, click succeeds, covering the hitLocator recording path of "hit and step passed".
 const mockState = vi.hoisted(() => ({ locatorCount: 0, clickReject: true }));
 
 vi.mock('playwright-core', () => {

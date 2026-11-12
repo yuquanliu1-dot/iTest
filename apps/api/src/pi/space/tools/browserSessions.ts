@@ -1,18 +1,20 @@
 /**
- * verify_case 跨轮浏览器保活注册表：同 thread+case 连续 verify_case 轮次复用同一
- * browser/context/page，已确认前缀零重放零 restore（浏览器停在上一轮终态页直接续跑新步）。
+ * verify_case cross-round browser keep-alive registry: consecutive verify_case rounds on the same thread+case reuse the same
+ * browser/context/page; the confirmed prefix gets zero replay and zero restore (the browser sits on the previous round's
+ * final page and the new steps simply continue from there).
  *
- * 生命周期与 verifyConfirmCache/verifyTraceCache 同模式：进程内 Map + 粘性路由（nginx ip_hash）
- * 保证同线程 verify 轮次命中同副本；副本重启/容器重建硬杀浏览器，下轮 acquire 探测
- * isConnected 失败自动降级现有 fresh+restore 路径，仅损失性能不损失正确性。
- * 同线程全局串行（session.ts Redis itest:thread-run 锁）保证同一 key 不会并发两轮——
- * 注册表只存「轮与轮之间」的空闲浏览器，在途轮的浏览器不进注册表，淘汰不会误伤。
+ * Lifecycle follows the same pattern as verifyConfirmCache/verifyTraceCache: an in-process Map + sticky routing (nginx ip_hash)
+ * keeps same-thread verify rounds on the same replica; a replica restart / container rebuild hard-kills the browser and the next
+ * round's acquire probe fails on isConnected, automatically degrading to the existing fresh+restore path — a performance loss,
+ * never a correctness loss. Same-thread global serialization (session.ts's Redis itest:thread-run lock) guarantees two rounds of
+ * the same key never run concurrently — the registry only stores idle browsers "between rounds"; in-flight rounds' browsers never
+ * enter it, so eviction can never hit the wrong target.
  */
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 
-/** 空闲保活时长：实测→下一步输入的讨论间隔通常在分钟级，20min 覆盖正常讨论节奏。 */
+/** Idle keep-alive duration: measured — the discussion gap before the next step input is usually minutes; 20min covers a normal discussion pace. */
 const SESSION_TTL_MS = 20 * 60 * 1000;
-/** 单副本同时保活的 chromium 上限（实例 ~300MB；超限淘汰最旧）。 */
+/** Per-replica cap on simultaneously kept-alive chromium instances (~300MB each; the oldest is evicted beyond the cap). */
 const MAX_SESSIONS = 2;
 const SWEEP_INTERVAL_MS = 60 * 1000;
 
@@ -24,14 +26,14 @@ export interface BrowserSessionRefs {
 
 interface BrowserSessionRecord extends BrowserSessionRefs {
   metaHash: string;
-  /** 浏览器当前页面状态已生效的步骤哈希前缀（curStepsHash.slice(0, appliedCount)）。 */
+  /** Prefix of applied step hashes matching the browser's current page state (curStepsHash.slice(0, appliedCount)). */
   appliedHashes: string[];
   lastUsedAt: number;
 }
 
 const sessions = new Map<string, BrowserSessionRecord>();
 
-/** 命中探测：过期/浏览器断连/页面已关/env 失配/前缀步被编辑，任一即销毁降级返回 null。 */
+/** Hit probe: expired / browser disconnected / page closed / env mismatch / prefix steps edited — any one destroys the session, degrades, and returns null. */
 export function acquire(
   key: string,
   metaHash: string,
@@ -57,7 +59,7 @@ function isPrefix(prefix: string[], full: string[]): boolean {
   return prefix.length <= full.length && prefix.every((h, i) => h === full[i]);
 }
 
-/** 轮末上册（复用轮与新建轮统一入口）：upsert + touch；超限淘汰最旧（不含本次 key）。 */
+/** End-of-round registration (the unified entry for reused and newly created rounds): upsert + touch; beyond the cap, evict the oldest (excluding this round's key). */
 export function commit(key: string, refs: BrowserSessionRefs, metaHash: string, appliedHashes: string[]): void {
   if (!sessions.has(key) && sessions.size >= MAX_SESSIONS) {
     let oldestKey: string | null = null;
@@ -74,7 +76,7 @@ export function commit(key: string, refs: BrowserSessionRefs, metaHash: string, 
   ensureSweep();
 }
 
-/** 下册并关浏览器（close 失败吞错——进程即将舍弃该实例）；幂等。 */
+/** Deregister and close the browser (close failures are swallowed — the process is about to discard the instance); idempotent. */
 export function invalidate(key: string): void {
   const rec = sessions.get(key);
   if (!rec) return;
@@ -87,14 +89,14 @@ function destroy(key: string, rec: BrowserSessionRecord | undefined): void {
 }
 
 let sweepTimer: NodeJS.Timeout | null = null;
-/** 周期清扫过期会话（懒检查的兜底；空闲进程也回收 chromium）。 */
+/** Periodically sweep expired sessions (the fallback for lazy checks; recycles chromium even for idle processes). */
 function ensureSweep(): void {
   if (sweepTimer) return;
   sweepTimer = setInterval(sweepOnce, SWEEP_INTERVAL_MS);
   sweepTimer.unref?.();
 }
 
-/** 清扫过期记录（导出供测试手动触发）。 */
+/** Sweep expired records (exported so tests can trigger it manually). */
 export function sweepOnce(): void {
   const now = Date.now();
   for (const [k, rec] of sessions) {
@@ -102,12 +104,12 @@ export function sweepOnce(): void {
   }
 }
 
-/** 只读窥视（测试用）。 */
+/** Read-only peek (for tests). */
 export function peekSession(key: string): BrowserSessionRecord | null {
   return sessions.get(key) ?? null;
 }
 
-/** 清空全部会话（测试隔离用；生产不应调用）。 */
+/** Clear every session (for test isolation; production should never call this). */
 export function resetForTest(): void {
   for (const [k, rec] of sessions) destroy(k, rec);
 }

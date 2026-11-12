@@ -21,19 +21,19 @@ import {
   scopeViolationReason,
 } from './gates.js';
 
-// 闸门与元素抽取已抽到共享模块（探索走 pi 工具链后要复用同一份口径）。
-// 这里原样再导出，aiTask 的既有对外表面（测试与 exploration.ts 的 import 路径）不变。
+// Gates and element extraction have been extracted into shared modules (exploration needs the same semantics after moving to the pi tool chain).
+// Re-exported as-is here; aiTask's existing external surface (test and exploration.ts import paths) stays unchanged.
 export { brittleSelectorReason, destructiveActionReason, originOf, renderSqlProbeRows, scopeViolationReason };
 
-/** 单条指令的最大对话轮数（每轮一次 LLM 调用）。 */
+/** Maximum conversation turns per instruction (one LLM call per turn). */
 const MAX_TURNS = 8;
-/** 每轮喂给 LLM 的可交互元素上限，防止提示词膨胀。 */
+/** Per-turn cap of interactive elements fed to the LLM, preventing prompt bloat. */
 const MAX_ELEMENTS = 60;
 
-/** 系统提示词主体（不含凭据段）。凭据段按需拼接——见 assembleSystemPrompt。
- *  坐标协议（对标 midscene）：模型用截图上的归一化坐标指认目标，平台换算成视口像素执行
- *  ——视觉与动作同通道，消灭「看到了哪个元素 → 写出它的 selector」的翻译损耗；坐标点击
- *  天然穿透 iframe/shadow DOM（qiankun 微前端友好）。selector 降级为兜底通道。 */
+/** Main body of the system prompt (credential section excluded). The credential section is appended on demand — see assembleSystemPrompt.
+ *  Coordinate protocol (modeled on midscene): the model points at targets with normalized coordinates on the screenshot, and the platform converts them to viewport pixels
+ *  — vision and action share one channel, eliminating the translation loss of "saw which element → write its selector"; coordinate clicks
+ *  naturally pierce iframe/shadow DOM (qiankun micro-frontend friendly). selector is demoted to a fallback channel. */
 const SYSTEM_PROMPT_BASE = `你是 Web 测试执行智能体，在真实浏览器里执行一条自然语言测试指令。
 每轮你会收到：当前页面 URL、视口尺寸、一张视口截图、可交互元素清单（含与截图对齐的归一化坐标框）。
 只输出 JSON，不要输出其他内容。格式：
@@ -71,18 +71,18 @@ actions 元素类型：
 - 页面状态自检：每轮先看「当前 URL + 截图」确认自己是否在指令期望的界面上。目标连续找不到时优先怀疑「页面不在期望界面」（入口/步骤错位、被弹窗或中间态挡住、导航没生效），需要时用 navigate / 点击返回 / 处理弹窗先回到正确界面。
 - 数据忠实：不得改写或覆盖指令、数据集或前置步骤已填入的表单值（含账号/密码等输入内容）。输入看起来异常（超长、特殊字符、疑似无效）也原样照填——异常输入往往正是测试目的本身。页面状态自检只用于回到正确界面/找对元素，不用于"修正"表单内容。`;
 
-/** 凭据规则：仅在本次步骤确实需要凭据能力时才拼进系统提示词。 */
+/** Credential rule: only appended into the system prompt when this step actually needs credential capability. */
 const CREDENTIAL_RULE = `- 凭据（用户名/密码）：fill 的 value 用字面量 __ITEST_USERNAME@服务名__ / __ITEST_PASSWORD@服务名__（服务名取自下方资源清单里的 name；平台在填入的瞬间替换为真实值）；不要输出 {{}} 变量模板，平台不替换模板。`;
 
 /**
- * 拼装系统提示词。
- *  credEnabled=false → 完全不含凭据段：AI 看不到占位符形态，就不会拿凭据去重填账号/密码框
- *  （2026-10-26 prod228 实测：含凭据段时 AI 会主动 fill __ITEST_USERNAME@web__；不含则只填字面量）。
- *  mobile 版不拼凭据段（移动端无 web 凭据语义）。
+ * Assembles the system prompt.
+ *  credEnabled=false → no credential section at all: the AI can't see the placeholder form, so it won't grab credentials to refill the account/password boxes
+ *  (measured on 2026-10-26 prod228: with the credential section the AI actively fills __ITEST_USERNAME@web__; without it, only literals).
+ *  The mobile version never appends the credential section (mobile has no web-credential semantics).
  */
 export function assembleSystemPrompt(opts: { mobile?: boolean; credEnabled: boolean; manifest: string; base?: string }): string {
   if (opts.mobile) return MOBILE_SYSTEM_PROMPT;
-  // base 覆盖点：探索式会话传探索提示词（执行忠实规则对探索是错误模式）；凭据段拼装逻辑不变。
+  // base override point: exploratory sessions pass the exploration prompt (the execution faithfulness rules are the wrong mode for exploration); the credential-section assembly logic is unchanged.
   const base = opts.base ?? SYSTEM_PROMPT_BASE;
   if (!opts.credEnabled) return base;
   const manifest = opts.manifest.trim();
@@ -115,8 +115,8 @@ actions 元素类型：
 - 每轮动作要保守，最多 6 个；每个动作结果下轮反馈给你，出错就换 accessibilityId / label 重试。
 - 屏幕中可能同时存在多个相同 label 的节点，命中歧义时优先选 accessibilityId。`;
 
-/** click/fill 双形态：坐标（模型主通道，视口归一化 0-1000）或 selector（兜底/解析回填）。
- *  onAction 对外尽量上报 selector 形态（坐标解析回元素后回填），固化/缓存管线形状不变。 */
+/** click/fill dual forms: coordinates (the model's primary channel, viewport-normalized 0-1000) or selector (fallback / resolution backfill).
+ *  onAction reports the selector form externally whenever possible (backfilled after the coordinates resolve to an element), so the solidify/cache pipeline shape is unchanged. */
 export type AiAction =
   | { type: 'click'; selector?: string; x?: number; y?: number }
   | { type: 'fill'; selector?: string; x?: number; y?: number; value: string }
@@ -124,40 +124,40 @@ export type AiAction =
   | { type: 'wait'; ms: number }
   | { type: 'navigate'; url: string }
   | { type: 'screenshot'; selector?: string; x?: number; y?: number }
-  /** 数据库取证（探索会话专用通道）：对被测系统自己的库跑一条只读查询。
-   *  db = 环境 db 对象的 label（缺省 = 环境默认库）；limit = 取回行数上限。 */
+  /** Database evidence (exploration-session-only channel): runs a read-only query against the SUT's own database.
+   *  db = the label of an environment db object (default = the environment's default db); limit = row-fetch cap. */
   | { type: 'sql'; query: string; limit?: number; db?: string }
-  /** 仓库读码（探索会话专用通道，有代码提交范围时开通）：只读查看改动代码。
-   *  read=读文件（offset 起始行 + maxLines 行数上限，大文件读改动段用）；
-   *  grep=按正则/字面量搜码；ls=列目录；
-   *  diff=看范围改动（无 path 时整范围，带 path 时限单文件）。 */
+  /** Repo code reading (exploration-session-only channel, enabled when a code commit scope exists): read-only viewing of changed code.
+   *  read=read a file (offset start line + maxLines line cap, for reading change hunks of large files);
+   *  grep=search code by regex/literal; ls=list a directory;
+   *  diff=view scope changes (whole scope without path, single file with path). */
   | { type: 'repo'; op: 'read' | 'grep' | 'ls' | 'diff'; path?: string; pattern?: string; offset?: number; maxLines?: number };
 
-/** sql 取证的单次回灌上限：行数 / 单元格 / 单行 / 整块四级封顶（反馈进下一轮 userMessage，不能无限膨胀）。 */
+/** Single refill cap of a sql evidence probe: four-level caps on rows / cells / per-row / whole block (fed back into the next userMessage; cannot grow without bound). */
 export const SQL_PROBE_MAX_ROWS = 20;
 export const SQL_PROBE_DEFAULT_ROWS = 20;
 
-/** repo 读码的回灌封顶：整块字符数（防御性截断；行数/匹配数的语义封顶在通道实现里做）。 */
+/** Refill cap of repo code reading: whole-block character count (defensive truncation; the row/match-count semantic caps live in the channel implementations). */
 export const REPO_OUTPUT_MAX_CHARS = 6000;
-/** repo read 单次最大行数（parseAction 钳制 + 通道实现共用同一口径）。 */
+/** repo read per-call max lines (clamped by parseAction and shared with the channel implementation as one semantic). */
 export const REPO_READ_MAX_LINES = 200;
-/** repo path/pattern 字段长度上限（parseAction 截断——模型可能吐超长串）。 */
+/** repo path/pattern field length cap (truncated by parseAction — the model may emit overly long strings). */
 const REPO_FIELD_MAX = 200;
 
-// AI 相凭据占位符协议：verify_case / solidify_case 的提示词要求 LLM 把用户名/密码/
-// 敏感字段 fill 成这三个字面量，执行时刻由 valueSub 替换为真实值。协议常量定义在
-// execute 层（valueSub 语义所在地），pi 工具层从这里取用。
+// AI-phase credential placeholder protocol: the verify_case / solidify_case prompts require the LLM to fill the username/password/
+// sensitive fields with these three literals, and valueSub replaces them with real values at execution time. The protocol constants are defined
+// in the execute layer (where the valueSub semantics live); the pi tool layer takes them from here.
 export const USER_PH = '__ITEST_USERNAME__';
 export const PASSWORD_PH = '__ITEST_PASSWORD__';
 export const SECRET_PH = '__ITEST_STEP_SECRET__';
 
-// ── 凭据占位符识别与替换（AI 相 fill 值统一协议）──────────────────────────────
+// ── Credential placeholder recognition and replacement (the unified protocol for AI-phase fill values) ───────────────────────────────
 export type CredentialKind = 'user' | 'password' | 'secret';
 
-/** 解析结果：kind + 归属 web 服务 name（null = 未指定，走三级默认链）。 */
+/** Parsed result: kind + owning web service name (null = unspecified, walks the three-level default chain). */
 export interface ParsedCredential { kind: CredentialKind; ref: string | null }
 
-/** @ref 段合法性：与 shared 的 VAR_NAME_RE 同口径（字母/数字/下划线，字母或下划线开头，≤64）。 */
+/** @ref segment validity: same semantics as shared's VAR_NAME_RE (letters/digits/underscores, starting with a letter or underscore, ≤64). */
 export function isValidCredentialRef(ref: string): boolean {
   return typeof ref === 'string' && ref.length > 0 && ref.length <= 64 && VAR_NAME_RE.test(ref);
 }
@@ -169,11 +169,11 @@ const KIND_BY_NAME: Record<string, CredentialKind> = {
 };
 
 /**
- * 解析凭据占位符：__ITEST_USERNAME@backend__ / {{ITEST_USERNAME@backend}} /
- * {{__ITEST_USERNAME@backend__}} / 无 ref 的既有形态。
- * 裸名（无哨兵/花括号包裹）不认，避免把普通文本误判成凭据；
- * ref 段非法则整个占位符判否，绝不退化成"无 ref"（那会静默取到默认 web 的账号）。
- * secret 与 web 无关（步骤级密文），其 @ 段被忽略。
+ * Parses a credential placeholder: __ITEST_USERNAME@backend__ / {{ITEST_USERNAME@backend}} /
+ * {{__ITEST_USERNAME@backend__}} / the legacy form without a ref.
+ * Bare names (not wrapped in sentinels/braces) are not recognized, avoiding misjudging ordinary text as credentials;
+ * an invalid ref segment rejects the whole placeholder, never degrading to "no ref" (that would silently take the default web's account).
+ * secret is unrelated to web (step-level ciphertext); its @ segment is ignored.
  */
 export function parseCredentialPlaceholder(raw: string): ParsedCredential | null {
   if (typeof raw !== 'string') return null;
@@ -191,12 +191,12 @@ export function parseCredentialPlaceholder(raw: string): ParsedCredential | null
   return isValidCredentialRef(ref) ? { kind, ref } : null;
 }
 
-/** 只要 kind 的便捷包装（固化判定等只需知道"是不是凭据"）。 */
+/** Convenience wrapper for kind only (solidify decisions etc. only need "is it a credential"). */
 export function credentialPlaceholderKind(raw: string): CredentialKind | null {
   return parseCredentialPlaceholder(raw)?.kind ?? null;
 }
 
-/** 渲染占位符，供提示词拼装（避免各处硬编码字面量拼错）。 */
+/** Renders a placeholder for prompt assembly (avoids hand-copying literals wrong in various places). */
 export function credentialPlaceholder(kind: CredentialKind, ref?: string | null): string {
   const base = kind === 'user' ? USER_PH : kind === 'password' ? PASSWORD_PH : SECRET_PH;
   if (!ref || kind === 'secret') return base;
@@ -205,41 +205,41 @@ export function credentialPlaceholder(kind: CredentialKind, ref?: string | null)
 
 const CREDENTIAL_REF_RE = /(?:\{\{\s*)?_{0,2}ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)_{0,2}(?:@[A-Za-z_][A-Za-z0-9_]*)?(?:\s*\}\})?/;
 
-/** 自由文本是否引用了凭据占位符（任意形态：哨兵 / 花括号 / 裸名 / 带 @ref）。
- *  用途：substituteVars 的 missing 过滤（凭据不来自数据集 vars）+ 环境凭据前置检查。 */
+/** Whether free text references a credential placeholder (any form: sentinel / braces / bare name / with @ref).
+ *  Used by: substituteVars's missing filter (credentials don't come from dataset vars) + the pre-execution environment-credential check. */
 export function referencesCredential(text: string): boolean {
   return CREDENTIAL_REF_RE.test(text);
 }
 
-/** 凭据来源：无 ref 的默认值 + 按 web 服务 name 取值的回调（两者皆空即缺失）。 */
+/** Credential source: the no-ref defaults + a per-web-service-name lookup callback (both empty = missing). */
 export interface CredentialSource {
-  /** 无 ref 占位符的默认来源（既有调用方零改动）。 */
+  /** Default source for no-ref placeholders (zero changes for existing callers). */
   user?: string | null;
   password?: string | null;
   secret?: string | null;
   /**
-   * 按 web 服务 name 取该服务的凭据；返回 null = 该 ref 无凭据 → 回落到上面的默认值。
-   * 注意：由环境派生的实现（buildCredentialSource）在落空时**抛命名错误**而非返回 null——
-   * 显式 @ref 写错服务名时静默用默认服务的凭据，会把测试登到另一个系统上。
+   * Credentials of a web service by its name; returning null = that ref has no credentials → falls back to the defaults above.
+   * Note: the environment-derived implementation (buildCredentialSource) **throws a named error** on a miss rather than returning null —
+   * silently using the default service's credentials when an explicit @ref misspells the service name would log the test into another system.
    */
   byRef?: (ref: string) => { user?: string | null; password?: string | null } | null;
   /**
-   * 显式 @ref 解析不到时是否判死（不回落默认链）。
-   * 通用实现缺省 false（回落默认）；环境派生的实现置 true——写错服务名却静默用
-   * 默认服务的凭据 = 把测试登到另一个系统上。
+   * Whether an unresolvable explicit @ref is judged dead (no fallback to the default chain).
+   * Generic implementations default to false (fall back to defaults); the environment-derived implementation sets true — misspelling the service name yet silently using
+   * the default service's credentials = logging the test into another system.
    */
   strictRef?: boolean;
-  /** 错误消息用：环境显示名（缺失资源要点名，用户靠它排查）。 */
+  /** For error messages: the environment display name (missing resources must be named; users troubleshoot by it). */
   envName?: string | null;
-  /** 错误消息用：无 ref 占位符的默认归属 web 服务名。 */
+  /** For error messages: the default owning web service name of a no-ref placeholder. */
   defaultRef?: string | null;
 }
 
 /**
- * AI 相 / 机械相共用的 fill 值替换器：把凭据占位符（哨兵 / 花括号 / @ref 任意形态）
- * 换成真实值；非占位符原样返回。缺凭据 → 抛 EnvMissing/SecretMissing 命名错误，
- * 错误消息点名缺失的 web 服务，绝不把占位符原样敲进表单（2026-10-21 prod228 实测：
- * 占位符原样进登录表单必败，AI 换 selector 空转烧掉 12+ 次 LLM 调用）。
+ * fill-value replacer shared by the AI phase / mechanical phase: swaps credential placeholders (sentinel / braces / @ref, any form)
+ * for real values; non-placeholders are returned as-is. Missing credentials → throws the EnvMissing/SecretMissing named errors;
+ * the error message names the missing web service; the placeholder is never typed verbatim into the form (measured on 2026-10-21 prod228:
+ * a placeholder verbatim into the login form always fails, and the AI spins switching selectors, burning 12+ LLM calls).
  */
 export function makeCredentialValueSub(src: CredentialSource): (v: string) => string {
   return (v: string): string => {
@@ -250,7 +250,7 @@ export function makeCredentialValueSub(src: CredentialSource): (v: string) => st
     if (ref && src.byRef) {
       const hit = src.byRef(ref);
       if (hit === null && src.strictRef) {
-        // 显式点名的 web 服务不存在或未配凭据 → 判死，绝不回落默认链（会登到别的系统）。
+        // The explicitly named web service doesn't exist or has no credentials → judged dead, never falling back to the default chain (it would log into another system).
         throw missingCredential(src, kind, ref);
       }
       real = kind === 'user' ? hit?.user : hit?.password;
@@ -264,7 +264,7 @@ export function makeCredentialValueSub(src: CredentialSource): (v: string) => st
   };
 }
 
-/** 命名错误构造：EnvMissing（环境凭据）/ SecretMissing（步骤密文）。 */
+/** Named error constructor: EnvMissing (environment credentials) / SecretMissing (step ciphertext). */
 function missingCredential(src: CredentialSource, kind: CredentialKind, ref: string | null): Error {
   const ph = credentialPlaceholder(kind, ref);
   const e = new Error(
@@ -276,21 +276,21 @@ function missingCredential(src: CredentialSource, kind: CredentialKind, ref: str
   return e;
 }
 
-/** 错误消息里的环境标识。 */
+/** Environment identifier for error messages. */
 function envLabel(src: CredentialSource): string {
   return src.envName ? `环境「${src.envName}」` : '当前环境';
 }
 
-/** 错误消息里的归属服务标识：显式 @ref 优先，其次默认归属。 */
+/** Owning-service identifier for error messages: explicit @ref first, then the default owner. */
 function refLabel(src: CredentialSource, ref: string | null): string {
   const name = ref ?? src.defaultRef ?? null;
   return name ? `web 服务 ${name}` : '默认 web 服务';
 }
 
-/** 扫描文本里所有凭据占位符出现（供前置检查逐个解析）。带 @ref 的形态整体匹配。 */
+/** Scans all credential placeholder occurrences in text (for the pre-check to parse one by one). The @ref form matches as a whole. */
 export const CREDENTIAL_PLACEHOLDER_SCAN = /__?ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)@?[A-Za-z0-9_]*__?|\{\{\s*_*ITEST_(?:USERNAME|PASSWORD|STEP_SECRET)@?[A-Za-z0-9_ ]*_*\s*\}\}/g;
 
-/** 0-1000 归一化坐标的钳制与数值校验（非有限数 → null）。 */
+/** Clamping and numeric validation of 0-1000 normalized coordinates (non-finite → null). */
 function clampCoord(v: unknown): number | null {
   if (typeof v !== 'number' || !Number.isFinite(v)) return null;
   return Math.min(1000, Math.max(0, Math.round(v)));
@@ -302,7 +302,7 @@ function parseAction(a: unknown): AiAction | null {
   const type = String(o.type ?? '');
   const hasCoord = clampCoord(o.x) !== null && clampCoord(o.y) !== null;
   if (type === 'click') {
-    // 坐标优先；selector 兜底（两者都在时按坐标执行，selector 由平台解析回填）
+    // Coordinates take priority; selector is the fallback (when both exist, executes by coordinates, the selector is backfilled by the platform's resolution)
     if (hasCoord) return { type, x: clampCoord(o.x)!, y: clampCoord(o.y)! };
     if (typeof o.selector === 'string' && o.selector) return { type, selector: o.selector };
     return null;
@@ -316,15 +316,15 @@ function parseAction(a: unknown): AiAction | null {
   if (type === 'wait' && typeof o.ms === 'number') return { type, ms: Math.min(Math.max(o.ms, 0), 10000) };
   if (type === 'navigate' && typeof o.url === 'string' && /^https?:\/\//.test(o.url)) return { type, url: o.url };
   if (type === 'screenshot') {
-    // selector 形态（元素 4x 放大）与坐标形态（局部区域裁剪放大）二选一。
+    // selector form (4x element zoom) vs coordinate form (local region crop zoom): exactly one.
     if (typeof o.selector === 'string' && o.selector) return { type, selector: o.selector };
     if (clampCoord(o.x) !== null && clampCoord(o.y) !== null) return { type, x: clampCoord(o.x)!, y: clampCoord(o.y)! };
     return null;
   }
   if (type === 'sql') {
-    // 只做形状校验：长度与只读判定留给动作循环里的守卫——那里能给出可行动的错误行，
-    // 在这里判死会让动作被静默丢弃、模型学不到原因。
-    // 键名容忍：模型可能写 query/sql、db/dbRef。
+    // Shape validation only: length and read-only judgment are left to the guards in the action loop — there an actionable error line is possible,
+    // judging dead here would silently drop the action and the model would never learn why.
+    // Key-name tolerance: the model may write query/sql, db/dbRef.
     const raw = typeof o.query === 'string' ? o.query : typeof o.sql === 'string' ? o.sql : null;
     if (typeof raw !== 'string' || !raw.trim()) return null;
     const dbRaw = typeof o.db === 'string' ? o.db : typeof o.dbRef === 'string' ? o.dbRef : null;
@@ -336,9 +336,9 @@ function parseAction(a: unknown): AiAction | null {
     return { type: 'sql', query: raw.trim(), limit, ...(db ? { db } : {}) };
   }
   if (type === 'repo') {
-    // 只做形状校验与截断：路径存在性/沙箱/配额留给动作循环里的通道守卫——
-    // 在这里判死会让动作被静默丢弃、模型学不到原因。
-    // 键名容忍：模型可能写 op/action、pattern/q、path/file。
+    // Shape validation and truncation only: path existence/sandbox/quota are left to the channel guards in the action loop —
+    // judging dead here would silently drop the action and the model would never learn why.
+    // Key-name tolerance: the model may write op/action, pattern/q, path/file.
     const op = String(o.op ?? o.action ?? '');
     const pathRaw = typeof o.path === 'string' ? o.path : typeof o.file === 'string' ? o.file : null;
     const patternRaw = typeof o.pattern === 'string' ? o.pattern : typeof o.q === 'string' ? o.q : null;
@@ -367,9 +367,9 @@ function parseAction(a: unknown): AiAction | null {
   return null;
 }
 
-/** 点击目标 → 元素清单里的可见文本（坐标按归一化框包含判定；selector 按等值匹配）。
- *  清单里找不到 → 返回空串 = 放行：清单只收可交互元素且上限 60，模型可能点在清单外，
- *  宁可漏判也不误杀正常探索（真正的防线仍是给被测环境配可丢弃的数据）。 */
+/** Click target → visible text in the element list (coordinates judged by normalized-box containment; selector by equality).
+ *  Not found in the list → returns the empty string = pass through: the list only collects interactive elements capped at 60, and the model may click outside it —
+ *  better a missed judgment than falsely killing normal exploration (the real line of defense is still disposable data configured for the SUT environment). */
 function clickTargetText(a: AiAction, elements: ElementInfo[]): string {
   if (a.type !== 'click') return '';
   const hit =
@@ -379,21 +379,21 @@ function clickTargetText(a: AiAction, elements: ElementInfo[]): string {
   return destructiveTextOf(hit, typeof a.selector === 'string' ? a.selector : '');
 }
 
-/** 坐标动作的解析结果：该点命中的元素（selector 合成与 dumpElements 共用 SYNTH_SELECTOR_SRC）。 */
+/** Resolution result of a coordinate action: the element hit at that point (selector synthesis shares SYNTH_SELECTOR_SRC with dumpElements). */
 interface PointTarget {
   selector: string;
-  /** 合成选择器在页内是否唯一命中；false 时上报链保持坐标形态（固化管线保守拒绝）。 */
+  /** Whether the synthesized selector hits uniquely in the page; when false, the reporting chain keeps the coordinate form (the solidify pipeline rejects conservatively). */
   unique?: boolean;
   tag: string;
   text?: string;
-  /** input/textarea 的当前值（fill 回读用）。 */
+  /** The current value of input/textarea (for fill read-back). */
   value?: string;
-  /** 该元素是「已展开下拉」的过滤输入框（Element UI / Ant Design）——fill 收尾不得 blur。 */
+  /** The element is an "expanded dropdown" filter input (Element UI / Ant Design) — fill must not blur at the end. */
   dropdownFilter?: boolean;
   box: { x: number; y: number; width: number; height: number };
 }
 
-/** 视口归一化 0-1000 → CSS 像素。viewportSize 不可得时按执行器标准视口 1280x800 回落。 */
+/** Viewport-normalized 0-1000 → CSS pixels. Falls back to the executor's standard viewport 1280x800 when viewportSize is unavailable. */
 function toViewportPt(a: { x?: number; y?: number }, page: Page): { px: number; py: number } {
   const vp = page.viewportSize() ?? { width: 1280, height: 800 };
   return {
@@ -402,13 +402,13 @@ function toViewportPt(a: { x?: number; y?: number }, page: Page): { px: number; 
   };
 }
 
-/** 解析视口坐标上的目标元素：P1 的关键——坐标动作执行前把目标解析回稳定 selector，
- *  onAction 据此上报 selector 形态（固化/缓存管线不变），box 供动作高亮，value 供 fill 回读。
- *  intent='fill'：命中包装容器（label/div 蒙在 input 上）时下沉到内部首个可见输入控件——回读语义以控件为准。
- *  intent='click'：命中内层非交互节点（如 button 内层 span）时上浮最多 5 层取最近交互祖先——
- *  合成目标与高亮 box 以祖先为准（整按钮框），不再产出裸 span。
- *  选择器合成与 dumpElements 共用 SYNTH_SELECTOR_SRC，附唯一性判定（unique）。
- *  坐标点击本身穿透 iframe/shadow DOM，这里解析不到（返回 null）只影响上报形态，不影响执行。 */
+/** Resolves the target element at a viewport point: the key of P1 — before a coordinate action executes, the target is resolved back to a stable selector,
+ *  onAction reports the selector form based on it (the solidify/cache pipeline unchanged), the box serves action highlight, the value serves fill read-back.
+ *  intent='fill': when a wrapping container is hit (a label/div laid over the input), sinks to the first visible input control inside — read-back semantics follow the control.
+ *  intent='click': when an inner non-interactive node is hit (e.g. a span inside a button), floats up at most 5 levels to the nearest interactive ancestor —
+ *  the synthesized target and highlight box follow the ancestor (the whole button box), no more bare spans.
+ *  Selector synthesis shares SYNTH_SELECTOR_SRC with dumpElements, with the uniqueness verdict (unique) attached.
+ *  Coordinate clicks themselves pierce iframe/shadow DOM; failing to resolve here (returns null) only affects the reported form, not execution. */
 async function resolveAtPoint(
   page: Page,
   px: number,
@@ -457,13 +457,13 @@ async function resolveAtPoint(
         if (text) out.text = text;
         const v = (target as HTMLInputElement).value;
         if (typeof v === 'string') out.value = v;
-        // 「已展开下拉的过滤输入框」判定（Element UI / Ant Design）：这类控件在 blur 时会
-        // 清空查询词、关掉候选面板——fill 收尾必须跳过 Tab，否则远程搜索下拉永远选不中。
-        // 判据与 dropdownFilter.ts 同款（宿主 + 是否已展开），此处内联是因为 page.evaluate
-        // 不能引用模块作用域标识符。
+        // "Expanded dropdown's filter input" detection (Element UI / Ant Design): such controls clear the query text and close
+        // the candidate panel on blur — fill must skip the trailing Tab, otherwise a remote-search dropdown can never get a candidate selected.
+        // Same criteria as dropdownFilter.ts (host + expanded or not); inlined here because page.evaluate
+        // cannot reference module-scope identifiers.
         let dropdownFilter = false;
         {
-          // closest 不可用时不抛（探测是可选增强，抛了会连带丢掉 selector 富化）
+          // Don't throw when closest is unavailable (the probe is an optional enhancement; throwing would also lose the selector enrichment)
           const host = typeof target.closest === 'function'
             ? (target.closest('.el-select, .el-autocomplete, .ant-select') as HTMLElement | null)
             : null;
@@ -484,10 +484,10 @@ async function resolveAtPoint(
   }
 }
 
-/** onAction 上报形态：坐标动作在解析出稳定且页内唯一的 selector 时回填为 selector 形态——
- *  mapAiActionsToCompiled / aiTaskCache / solidify 轨迹管线只见 selector 形态，形状不变。
- *  解析失败或非唯一（unique=false，如裸 span 无富化信号）则原样上报坐标动作
- *  （映射层会拒绝固化该步，保守回落 aiTask——非唯一 selector 机械回放会静默点错）。 */
+/** onAction reporting form: a coordinate action is backfilled to the selector form once a stable and page-unique selector resolves —
+ *  the mapAiActionsToCompiled / aiTaskCache / solidify trail pipelines only see the selector form; the shape is unchanged.
+ *  On resolution failure or non-uniqueness (unique=false, e.g. a bare span without enrichment signals), the coordinate action is reported as-is
+ *  (the mapping layer refuses to solidify the step and conservatively falls back to aiTask — a non-unique selector silently clicks wrong on mechanical replay). */
 function toReportAction(a: AiAction, resolvedSelector: string | null | undefined): AiAction {
   if ((a.type === 'click' || a.type === 'fill') && typeof a.x === 'number' && resolvedSelector) {
     return a.type === 'fill'
@@ -497,14 +497,14 @@ function toReportAction(a: AiAction, resolvedSelector: string | null | undefined
   return a;
 }
 
-/** 步内子目标（对标 midscene deepThink sub-goals，滚动维护给模型方向感）：
- *  模型每轮随 JSON 输出完整清单，平台整段替换并回显进下一轮 userMessage。 */
+/** In-step sub-goals (modeled on midscene deepThink sub-goals, rolling-maintained to give the model direction):
+ *  the model outputs the full list with its JSON each turn; the platform replaces it wholesale and echoes it into the next userMessage. */
 export interface SubGoal {
   text: string;
   done: boolean;
 }
 
-/** 宽容解析：接受 [{text,done}] / ["文本"] 混合；全无效返回 null（best-effort，不纠错不反馈）。 */
+/** Tolerant parsing: accepts [{text,done}] / ["text"] mixed; returns null when all invalid (best-effort, no correction no feedback). */
 function parseSubGoals(v: unknown): SubGoal[] | null {
   if (!Array.isArray(v) || v.length === 0) return null;
   const out: SubGoal[] = [];
@@ -523,29 +523,29 @@ function parseSubGoals(v: unknown): SubGoal[] | null {
   return out.length > 0 ? out : null;
 }
 
-/** 回显进 userMessage 的进度块（首轮无清单时不出现）。 */
+/** The progress block echoed into the userMessage (absent on the first turn when no list exists). */
 function renderSubGoals(goals: SubGoal[]): string {
   const lines = goals.map((g, i) => `${i + 1}. [${g.done ? '完成' : '进行中'}] ${g.text}`);
   return `子目标进度（你维护的清单，截图确认生效后标 done:true）：\n${lines.join('\n')}`;
 }
 
-// —— 负面结果账本（外化记忆的最小切片）——
-// 只存「已排除的假设」，不存信念：黑板存信念会把观察冻成结论、自我印证，
-// 而探索测试的产出是信息（哪些路径已排除），不是结论。
-// 平台不猜负面结果（失败动作、无观测变化都是过程噪音），由模型申报、平台持久化并回灌。
+// —— Negative-result ledger (the smallest slice of externalized memory) ——
+// Stores only "excluded hypotheses", never beliefs: a blackboard storing beliefs freezes observations into conclusions and self-confirms,
+// whereas the output of exploratory testing is information (which paths are excluded), not conclusions.
+// The platform doesn't guess negative results (failed actions and no observed change are process noise); the model declares, the platform persists and refills.
 
-/** 单轮申报条数上限 / 单条文本上限 / 会话累计上限（回灌块不能无限膨胀）。 */
+/** Per-turn declared item cap / per-item text cap / session cumulative cap (the refill block cannot grow without bound). */
 const EXCLUDED_PER_TURN_MAX = 5;
 const EXCLUDED_ITEM_MAX = 120;
 const EXCLUDED_TOTAL_MAX = 20;
 
-/** 模型申报的排除项。 */
+/** Model-declared exclusion item. */
 export interface ExcludedItem {
   claim: string;
   evidence: string;
 }
 
-/** 宽容解析：接受 [{claim,evidence}] / [字符串]；无效条目丢弃（best-effort，不纠错不反馈）。 */
+/** Tolerant parsing: accepts [{claim,evidence}] / [strings]; invalid items dropped (best-effort, no correction no feedback). */
 export function parseExcluded(v: unknown): ExcludedItem[] {
   if (!Array.isArray(v)) return [];
   const out: ExcludedItem[] = [];
@@ -565,23 +565,23 @@ export function parseExcluded(v: unknown): ExcludedItem[] {
   return out;
 }
 
-/** 回灌进 userMessage 的排除块（空账本不出现在 userMessage 里）。 */
+/** The exclusion block refilled into the userMessage (an empty ledger never appears in the userMessage). */
 export function renderExcluded(items: ExcludedItem[]): string {
   if (items.length === 0) return '';
   const lines = items.map((e) => `- ${e.claim}${e.evidence ? `（依据：${e.evidence}）` : ''}`);
   return `已排除（你申报并已验证过的路径，不要重复探索）：\n${lines.join('\n')}`;
 }
 
-/** 动作后短暂稳定（对标 midscene 300ms + networkIdle）：导航/重渲染落地后再进下一个动作。 */
+/** Brief settle after an action (modeled on midscene's 300ms + networkIdle): navigation/re-render lands before the next action starts. */
 async function settleAfterAction(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => undefined);
   await page.waitForTimeout(150);
 }
 
-/** 执行单个动作，返回给 LLM 的结果描述 + 坐标动作解析出的稳定 selector。
- *  resolvedSelector 仅在解析成功且页内唯一（unique !== false）时给出——非唯一时为 null，
- *  上报链保持坐标形态、固化管线保守拒绝该步。
- *  valueSub：fill value 执行前替换（占位符 → 真实凭据）；发生替换后反馈不回显真实值。 */
+/** Executes a single action; returns the result description for the LLM + the stable selector resolved from coordinate actions.
+ *  resolvedSelector is given only when resolution succeeds and the hit is page-unique (unique !== false) — null when non-unique,
+ *  the reporting chain keeps the coordinate form and the solidify pipeline rejects the step conservatively.
+ *  valueSub: replaces the fill value before execution (placeholder → real credential); once substitution happened, feedback never echoes the real value. */
 interface ExecOutcome {
   report: string;
   resolvedSelector?: string | null;
@@ -610,13 +610,13 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
         await page.mouse.click(px, py);
         await page.keyboard.press('ControlOrMeta+A').catch(() => undefined);
         await page.keyboard.type(realValue, { delay: 20 });
-        // 打字后、blur 前探测：远程搜索下拉（Element UI remote+filterable）在 blur 时会清空
-        // 查询词、关掉候选面板，输入值被抹成 ""——这类控件必须跳过 Tab，且回读取 blur 前的值
-        // （blur 之后读到的必然是空，AI 会误判"填不进去"并反复重试）。
+        // Probe after typing, before blur: a remote-search dropdown (Element UI remote+filterable) clears the query
+        // text and closes the candidate panel on blur, wiping the input value to "" — such controls must skip Tab, and the read-back must take the pre-blur value
+        // (post-blur reads are necessarily empty; the AI would misjudge "can't fill" and retry endlessly).
         const typed = await resolveAtPoint(page, px, py, 'fill');
         const keepOpen = typed?.dropdownFilter === true;
         if (!keepOpen) {
-          // React 受控表单常在 blur 时才提交 state / 触发校验；与 selector 路径保持一致。
+          // React controlled forms often only commit state / trigger validation on blur; kept consistent with the selector path.
           await page.keyboard.press('Tab').catch(() => undefined);
           await page.waitForTimeout(80);
         }
@@ -625,7 +625,7 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
         const label = before?.selector ? `@${action.x},${action.y}（${before.selector}）` : `@${action.x},${action.y}`;
         const resolvedSel = before && before.unique !== false ? before.selector : null;
         if (actual !== null && actual !== realValue) {
-          // 发生替换（凭据类 fill）时不回显 actual/目标值——防密码片段泄漏回 LLM。
+          // When substitution happened (credential fills), don't echo actual/target values — prevents password fragments leaking back to the LLM.
           if (substituted) {
             return { report: `fill ${label}: 实际值与目标不一致（实际值长度 ${actual.length}）`, resolvedSelector: resolvedSel };
           }
@@ -637,16 +637,16 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
       const loc = page.locator(selector).first();
       await loc.fill('', { timeout: 5000 });
       await loc.pressSequentially(realValue, { delay: 20 });
-      // 已展开下拉的过滤输入框不能 blur：blur 会清空查询词、关掉候选面板（远程搜索下拉致命，
-      // 后续步骤就点不到候选了）。判定在打字之后——此时面板才可能处于展开态。
+      // An expanded dropdown's filter input must not blur: blur clears the query text and closes the candidate panel (fatal for remote-search
+      // dropdowns; later steps could never click a candidate). The detection runs after typing — only then can the panel be open.
       const keepOpen = await isOpenDropdownFilter(loc);
       if (!keepOpen) {
-        // React 受控表单常在 blur 时才提交 state / 触发校验；与 cdp.ts dispatch fill 保持一致。
+        // React controlled forms often only commit state / trigger validation on blur; kept consistent with cdp.ts's dispatch fill.
         await page.keyboard.press('Tab').catch(() => undefined);
-        // 简短停顿让 onChange/blur 事件落地（Antd 等库在 blur 后异步校验）。
+        // Brief pause letting onChange/blur events land (Antd and friends validate asynchronously after blur).
         await page.waitForTimeout(80);
       }
-      // 回读确认：若 DOM value 与目标不一致，把实际值反馈给 LLM 以便下轮修正。
+      // Read-back confirmation: if the DOM value differs from the target, feed the actual value back to the LLM for next-turn correction.
       const actual = await loc.inputValue({ timeout: 3000 }).catch(() => '');
       if (actual !== realValue) {
         if (substituted) return { report: `fill ${selector}: 实际值与目标不一致（实际值长度 ${actual.length}）` };
@@ -664,27 +664,27 @@ async function execAction(page: Page, action: AiAction, valueSub?: (v: string) =
     }
     case 'navigate': {
       await page.goto(action.url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
-      // 与 init-goto 对齐：等 SPA hydrate，长连接页面 5s 兜底不阻塞。
+      // Aligned with init-goto: wait for SPA hydration; a 5s fallback so long-connection pages don't block.
       await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
       return { report: `navigate ${action.url}: ok` };
     }
     case 'screenshot': {
-      // 不在这里截图：标记后由主循环在下一轮开头截 4x 白底图（selector）/ 坐标裁剪放大图（x,y）
+      // Not screenshotted here: once flagged, the main loop takes the 4x white-background image (selector) / coordinate-crop zoom (x,y) at the start of the next turn
       const label = action.selector ?? `@${action.x},${action.y}`;
       return { report: `screenshot ${label}: 已接受，下轮附图` };
     }
     case 'sql': {
-      // sql 动作由主循环单独处理（不进浏览器执行器）；走到这里说明有漏网路径——判死而非静默无返回。
+      // sql actions are handled by the main loop separately (they don't enter the browser executor); reaching here means a leaked path — judge dead rather than silently returning.
       throw new Error('sql 动作不应进入浏览器动作执行器');
     }
     case 'repo': {
-      // repo 动作同 sql：由主循环单独处理，漏网路径判死。
+      // repo actions like sql: handled by the main loop separately; leaked paths are judged dead.
       throw new Error('repo 动作不应进入浏览器动作执行器');
     }
   }
 }
 
-/** 元素 4x 白底截图（验证码小图识别用），失败返回 null（回退整页截图）。 */
+/** Element 4x white-background screenshot (for small captcha image recognition); returns null on failure (falls back to the full-page screenshot). */
 async function shotElement(page: Page, selector: string): Promise<Buffer | null> {
   try {
     const el = page.locator(selector).first();
@@ -706,9 +706,9 @@ async function shotElement(page: Page, selector: string): Promise<Buffer | null>
   }
 }
 
-/** 坐标点附近区域的局部裁剪截图（deepLocate 两段式适配：密集/相似元素区域校准定位）。
- *  点位为中心裁边长 min(480, 视口短边) 的方块（≥ midscene 400×400 下限），clamp 视口边界。
- *  不做数字放大：VL 模型无新信息增益，且不换坐标系（附图仅校准，动作仍按全页坐标输出）。 */
+/** Local cropped screenshot of the area around a coordinate point (deepLocate two-stage adaptation: calibrating targeting in dense/similar-element regions).
+ *  The point is the center of a square with side min(480, the viewport's short edge) (≥ midscene's 400×400 floor), clamped to the viewport bounds.
+ *  No digital zooming: VL models gain no new information, and the coordinate system doesn't change (the attached image only calibrates; actions still output full-page coordinates). */
 async function shotCrop(page: Page, x: number, y: number): Promise<Buffer | null> {
   try {
     const vp = page.viewportSize() ?? { width: 1280, height: 800 };
@@ -728,12 +728,12 @@ async function shotCrop(page: Page, x: number, y: number): Promise<Buffer | null
   }
 }
 
-/** 验证码类指令判定（录制器产物 instruction 固定为「识别验证码图片中的字符并填入验证码输入框」）。 */
+/** Captcha-task instruction detection (recorder output fixes the instruction as 「识别验证码图片中的字符并填入验证码输入框」). */
 export const CAPTCHA_TASK_RE = /验证码|captcha/i;
 
-/** 用 LLM 判断页面是否展示了验证码失败提示（任何措辞：不合法/未通过/无效/识别失败/已过期等）。
- *  替代旧的正则 detectCaptchaFailure——正则无法覆盖被测系统各异的错误文案。
- *  best-effort：LLM 调用失败时返回 false（不比旧行为差）。 */
+/** Uses the LLM to judge whether the page shows a captcha failure notice (any wording: invalid / not passed / unrecognized / expired etc.).
+ *  Replaces the old regex detectCaptchaFailure — a regex cannot cover the SUT's varying error wording.
+ *  best-effort: returns false when the LLM call fails (no worse than the old behavior). */
 export async function isCaptchaFailed(
   page: Page,
   client: LLMClient,
@@ -759,11 +759,11 @@ const CAPTCHA_OCR_PROMPT = `你是验证码识别器。仔细辨认图片中的�
 规则：字符集为字母+数字；绝不出现 0 O o 1 l I；不区分大小写；通常是 4 位。没有把握时输出 {"fail":"原因"}。`;
 
 /**
- * 验证码单轮识别：页内启发式定位「验证码图 + 配套输入框」→ 4x 截图 → 一次 vision 调用 → 填入。
- * 供「多轮验证」重试使用——重试要抢在验证码 TTL 内完成，必须快（一次 LLM 往返 ~10s），
- * 不走通用 runAiTask 的多轮 Agent 回路（实测 31s）。任何一步失败抛错，由调用方决定回落。
- * hint：录制时的语义定位（data-testid / name），有则优先精确命中输入框。
- * 注意：evaluate 回调内不能有嵌套函数声明（tsx esbuild keepNames 陷阱）。
+ * Single-turn captcha recognition: heuristically locates "captcha image + companion input box" in the page → 4x screenshot → one vision call → fill in.
+ * For "multi-round verification" retries — the retry must finish within the captcha TTL, so it must be fast (one LLM round-trip ~10s),
+ * not the generic runAiTask multi-turn Agent loop (measured at 31s). Any step failure throws; the caller decides the fallback.
+ * hint: the semantic locator from recording time (data-testid / name); when present, the input box is matched precisely first.
+ * Note: no nested function declarations inside evaluate callbacks (the tsx esbuild keepNames gotcha).
  */
 export async function solveCaptchaOnce(
   page: Page,
@@ -830,8 +830,8 @@ export async function solveCaptchaOnce(
     }
   }
   if (!buffer) {
-    // 整页兜底截图：等渲染稳定再拍，避免验证码图已就位但整页仍在骨架/接口回填时拍到过渡帧。
-    // 用较短预算（验证码 TTL 敏感），超时按当前帧继续。
+    // Full-page fallback screenshot: waits for render stability before shooting, avoiding a transitional frame shot while the captcha image is in place but the page is still in skeleton/API backfill.
+    // A shorter budget is used (captcha-TTL sensitive); on timeout, continue with the current frame.
     await waitForPageSettled(page, { timeoutMs: 4000, settleMs: 300 });
     buffer = await page.screenshot({ timeout: 5000 });
   }
@@ -852,7 +852,7 @@ export async function solveCaptchaOnce(
   return `已识别验证码为 ${text} 并填入`;
 }
 
-/** 机械步骤动作 → 人类可读语义（供 AI 降级时说明「这一步本意是什么」）。 */
+/** Mechanical step action → human-readable semantics (for AI fallback to explain "what this step originally meant"). */
 function describeAction(a: StepAction): string {
   const loc = (x: StepAction): string => {
     const l = (x as { locator?: Array<{ strategy: string; value: string }> }).locator ?? [];
@@ -880,23 +880,23 @@ function describeAction(a: StepAction): string {
   }
 }
 
-/** 步骤的机械语义分类：决定降级时给 AI 哪条守则。 */
+/** Mechanical-semantics classification of a step: decides which guideline the AI gets on fallback. */
 export type DegradeStepType = 'observe' | 'interact' | 'unknown';
 
-/** 观察类动作：只看不碰。 */
+/** Observe actions: look without touching. */
 const OBSERVE_KINDS = new Set(['waitFor', 'assertVisible', 'assertText', 'assertJson', 'screenshot', 'extract']);
-/** 交互类动作：会改页面状态。 */
+/** Interact actions: change page state. */
 const INTERACT_KINDS = new Set(['click', 'fill', 'check', 'select', 'upload', 'navigate', 'press', 'hover']);
 
 /**
- * 按机械语义给步骤分类。
+ * Classifies a step by mechanical semantics.
  *
- * observe（waitFor / assertVisible / assertText / assertJson / screenshot / extract）——本步只要求
- *   「看到某现象」：降级时 AI 不得填值、不得重复提交、不得为诱发现象而改页面（prod228 实测：
- *   AI 造了个错验证码 + 重复提交，把预期的错误提示造了出来，负向用例假通过）。
- * interact（click/fill 等）——本步本来就要改页面：降级时 AI 可以动手，但不得改写前置步骤
- *   已填入的值（数据忠实）、不得重复执行刚失败的那次交互（重复提交会造出现象、掩盖真实失败）。
- * unknown——无机械动作（纯自然语言步）：按 observe 处理，指令文字就是意图。
+ * observe (waitFor / assertVisible / assertText / assertJson / screenshot / extract) — the step only requires
+ *   "seeing some phenomenon": on fallback the AI must not fill values, must not resubmit, must not alter the page to induce the phenomenon (measured on prod228:
+ *   the AI fabricated a wrong captcha + resubmitted, producing the expected error notice itself; the negative case false-passed).
+ * interact (click/fill etc.) — the step is meant to change the page: on fallback the AI may act, but must not rewrite values
+ *   already filled by preceding steps (data faithfulness), must not re-run the interaction that just failed (resubmission fabricates the phenomenon and masks the real failure).
+ * unknown — no mechanical actions (pure natural-language step): treated as observe; the instruction text is the intent.
  */
 export function classifyDegradeStep(input: { compiled: unknown; failedAction?: unknown }): DegradeStepType {
   const actions: StepAction[] = [];
@@ -904,16 +904,16 @@ export function classifyDegradeStep(input: { compiled: unknown; failedAction?: u
   const failed = input.failedAction as StepAction | undefined;
   if (failed) actions.push(failed);
   if (actions.length === 0) return 'unknown';
-  // 有交互类动作 → interact；只有观察类 → observe。
+  // Has interact actions → interact; observe actions only → observe.
   if (actions.some((a) => INTERACT_KINDS.has(a.kind))) return 'interact';
   if (actions.some((a) => OBSERVE_KINDS.has(a.kind))) return 'observe';
   return 'unknown';
 }
 
-/** 各分类对应的降级守则（提示词层约束，非机械拦截）。 */
+/** The fallback guideline per classification (a prompt-level constraint, not mechanical blocking). */
 function degradeGuard(stepType: DegradeStepType): string[] {
-  // unknown（纯自然语言步）按 observe 处理：这类步没有机械语义兜底，AI 的自由度最大，
-  // 而「只观察」的约束正是防止它为诱发预期现象而造数据的关键。
+  // unknown (pure natural-language step) is treated as observe: these steps have no mechanical-semantics fallback and the AI has maximum freedom,
+  // and the "observe only" constraint is exactly the key to preventing it from fabricating data to induce the expected phenomenon.
   if (stepType === 'observe' || stepType === 'unknown') {
     return [
       '  【本步是观察步——严格限制】上面的机械动作只要求「看到某现象」。你只能观察并如实报告'
@@ -931,27 +931,27 @@ function degradeGuard(stepType: DegradeStepType): string[] {
 }
 
 /**
- * 机械失败后的 AI 降级上下文：把「这一步本意的机械动作」和「机械实际结果」一起告诉 AI。
+ * AI-fallback context after a mechanical failure: tells the AI both "the step's intended mechanical actions" and "what the mechanical run actually did".
  *
- * 背景（2026-10-26 prod228 实测）：降级路径原本只传自然语言指令，AI 拿到的是「让错误提示出现」
- * 这个目标 + 一整套改页面的动作，却不知道机械语义是「等某文本出现 10s」、也不知道机械已经
- * 等满并确认没出现。AI 于是填了个编造的错验证码 + 重复提交，**把预期现象造了出来**，
- * 负向用例因此假通过。
+ * Background (measured on 2026-10-26 prod228): the fallback path used to pass only the natural-language instruction — the AI got the goal
+ * "make the error notice appear" plus a whole set of page-altering actions, without knowing the mechanical semantics were "wait 10s for some text"
+ * or that the mechanical run had already waited the full window and confirmed it never appeared. The AI then filled a fabricated wrong captcha + resubmitted,
+ * **producing the expected phenomenon itself**; the negative case false-passed as a result.
  *
- * 有了机械语义 + 机械结果 + 按步类型的守则，AI 能判断「本步是观察步、等了 10s 没等到」，
- * 配合守则如实报告未达成。
+ * With the mechanical semantics + mechanical result + per-step-type guideline, the AI can judge "this is an observe step; it waited 10s and the text never came",
+ * and, following the guideline, honestly report not-achieved.
  */
 export function buildDegradeContext(input: {
   compiled: unknown;
-  /** 实际失败的那条动作（可能是步骤级断言，不在 compiled 里）。缺省时只描述 compiled。 */
+  /** The action that actually failed (may be a step-level assertion, absent from compiled). When absent, only compiled is described. */
   failedAction?: unknown;
-  /** 机械失败原因；缺省表示「本步无机械动作可失败」（未编译的纯自然语言步）。 */
+  /** The mechanical failure reason; absent means "this step has no mechanical action that can fail" (an uncompiled pure natural-language step). */
   mechanicalError?: string;
 }): string {
   const compiled = Array.isArray(input.compiled) ? (input.compiled as StepAction[]) : [];
   const semantics = compiled.map(describeAction);
-  // 断言不在 compiled 里（compiled 只有动作，断言是步骤级字段）——失败在断言上时补一条，
-  // 否则 AI 看到的语义与真实失败点对不上。
+  // Assertions aren't in compiled (compiled holds only actions; assertions are a step-level field) — when the failure was on an assertion, append one line,
+  // otherwise the semantics the AI sees won't line up with the real failure point.
   const failed = input.failedAction as StepAction | undefined;
   if (failed && !semantics.includes(describeAction(failed))) {
     semantics.push(`${describeAction(failed)}（实际失败于这条）`);
@@ -971,74 +971,74 @@ export function buildDegradeContext(input: {
   ].join('\n');
 }
 
-/** 数据库取证的探针结果（调用方提供实现；平台只喂只读查询）。 */
+/** Probe result of database evidence (the caller provides the implementation; the platform only feeds read-only queries). */
 export type SqlProbeResult =
   | { ok: true; rowCount: number; truncated: boolean; rows: Array<Record<string, unknown>> }
   | { ok: false; error: string };
 
-/** 仓库读码请求（repo 动作的平台侧形状；调用方实现只读访问 + 沙箱限仓库根）。 */
+/** Repo code-reading request (the platform-side shape of the repo action; the caller's implementation does read-only access + sandbox confined to the repo root). */
 export type RepoReadRequest =
   | { op: 'read'; path: string; offset: number; maxLines: number }
   | { op: 'grep'; pattern: string; path?: string; maxLines: number }
   | { op: 'ls'; path?: string }
   | { op: 'diff'; path?: string };
 
-/** 仓库读码结果：content 由调用方按语义封顶（行数/匹配数），aiTask 侧再防御性截整块。 */
+/** Repo code-reading result: content is semantically capped by the caller (lines/matches); the aiTask side additionally truncates the whole block defensively. */
 export type RepoReadResult =
   | { ok: true; content: string }
   | { ok: false; error: string };
 
-/** runAiTask 可选项。 */
+/** runAiTask optional items. */
 export interface RunAiTaskOpts {
-  /** 对话轮数上限（缺省 MAX_TURNS=8）。 */
+  /** Conversation turn cap (default MAX_TURNS=8). */
   maxTurns?: number;
-  /** fill value 执行前替换（占位符 → 真实凭据）；替换后错误反馈不回显真实值。 */
+  /** Replaces the fill value before execution (placeholder → real credential); after substitution, error feedback never echoes the real value. */
   valueSub?: (v: string) => string;
-  /** 每个动作执行后回调（ok = 未抛错）。solidify_case 用它收集 AI 实际操作过的元素。 */
+  /** Callback after each action executes (ok = didn't throw). solidify_case uses it to collect the elements the AI actually touched. */
   onAction?: (action: AiAction, ok: boolean) => void;
-  /** 每轮 LLM complete 后回调（usage/durationMs/model 透传，供 aiUsage 累加）。 */
+  /** Callback after each turn's LLM complete (usage/durationMs/model passed through, for aiUsage accumulation). */
   onUsage?: (r: AiUsageAddend) => void;
-  /** 界面语言：缺省 zh-CN（执行路径无用户上下文时确定性回落）。 */
+  /** UI language: default zh-CN (deterministic fallback when the execution path has no user context). */
   lang?: AiLang;
-  /** web 资源清单（name / origin / 有无凭据）文本，由调用方用 renderWebResourceManifest 渲染。 */
+  /** web resource manifest (name / origin / whether credentials exist) text, rendered by the caller via renderWebResourceManifest. */
   resourceManifest?: string;
-  /** 降级上下文：本步的机械语义 + 机械失败原因（buildDegradeContext 渲染）。缺省不传。 */
+  /** Fallback context: this step's mechanical semantics + mechanical failure reason (rendered by buildDegradeContext). Absent by default. */
   degradeContext?: string;
-  /** 终止检查点（计划运行取消）：每轮对话开始前轮询，命中即抛错中断 AI 步骤。 */
+  /** Abort checkpoint (plan-run cancel): polled before each turn's conversation starts; on hit, throws to interrupt the AI step. */
   shouldAbort?: () => boolean | Promise<boolean>;
-  /** 系统提示词基底覆盖：探索式会话传探索提示词（执行提示词的「忠实/不加戏」规则对探索是错误模式）。
-   *  只换基底，凭据段/资源清单拼装逻辑不变。 */
+  /** System-prompt base override: exploratory sessions pass the exploration prompt (the execution prompt's "faithful / no embellishment" rules are the wrong mode for exploration).
+   *  Only the base is swapped; the credential-section/manifest assembly logic is unchanged. */
   systemPromptBase?: string;
-  /** 模型当轮输出 findings 数组时的回调（探索式会话收集缺陷候选）。
-   *  调用时机 = fail 检查之后、本轮动作解析执行之前；await 语义——回调内可截当前页截图，
-   *  取到的是模型作证时的页面状态（动作尚未改变页面）。 */
+  /** Callback when the model outputs a findings array this turn (exploratory sessions collect defect candidates).
+   *  Timing = after the fail check, before this turn's actions are parsed and executed; await semantics — the callback may screenshot the current page,
+   *  capturing the page state at the moment the model testified (actions haven't changed the page yet). */
   onFindings?: (raw: unknown[]) => Promise<void>;
-  /** 探索范围白名单（origin 列表）：navigate 只允许落在这些 origin 内，越界事前拒收。
-   *  缺省不传 = 不设限（verify/登录路径行为不变）；传空数组 = 全拒（起点 origin 不可解析时的保守口径）。
-   *  探索式会话传起点 origin——
-   *  2026-11-10 prod 实证：SUT 端点挂掉后模型按「页面自检」自主导航到了项目默认环境
-   *  的真实系统并用真凭据登录、写入了数据；charter 的「禁止离开」纯提示词约束无人执行。 */
+  /** Exploration-scope whitelist (origin list): navigates are only allowed to land within these origins; out-of-scope is rejected upfront.
+   *  Absent = unrestricted (verify/login path behavior unchanged); empty array = reject all (the conservative stance when the starting origin is unresolvable).
+   *  Exploratory sessions pass the starting origin —
+   *  evidenced on 2026-11-10 prod: after the SUT endpoint died, the model, following "page self-check", navigated on its own to the project default
+   *  environment's real system, logged in with real credentials and wrote data; the charter's "no leaving" was a pure prompt constraint nobody enforced. */
   scopeOrigins?: string[];
-  /** 数据库取证通道：挂上才允许 sql 动作（未挂 = 通道不存在，sql 动作被机械拒收）。
-   *  探索会话传（环境配了 db 对象时）；verify/登录/solidify 路径不传 → 行为零变化。
-   *  平台侧只喂只读查询：写语句在调用探针前就被 sqlGuard 的只读守卫拦下。 */
+  /** Database evidence channel: sql actions are allowed only when mounted (unmounted = the channel doesn't exist; sql actions are mechanically rejected).
+   *  Exploration sessions pass it (when the environment has db objects configured); verify/login/solidify paths don't → zero behavior change.
+   *  The platform side only feeds read-only queries: write statements are stopped by sqlGuard's read-only guard before the probe is invoked. */
   runSqlProbe?: (query: string, opts: { limit: number; db?: string }) => Promise<SqlProbeResult>;
-  /** 仓库读码通道：挂上才允许 repo 动作（有代码提交范围的探索会话）。
-   *  只读 + 沙箱限仓库工作树内（assertInCwd）；路径越界/配额耗尽在通道实现里转成 ok:false。 */
+  /** Repo code-reading channel: repo actions are allowed only when mounted (exploration sessions with a code commit scope).
+   *  Read-only + sandboxed inside the repo worktree (assertInCwd); path escapes/exhausted quota become ok:false inside the channel implementation. */
   runRepoRead?: (req: RepoReadRequest) => Promise<RepoReadResult>;
-  /** 破坏性动作闸策略：传了才启用（verify/登录/solidify 路径不传 → 行为零变化）。
-   *  allow=false = 点击可见文本命中破坏性关键词一律拒收；allow=true = 用户在建会话时
-   *  显式授权（探索会话的 allow_destructive 列），放行但仍写日志与留痕。 */
+  /** Destructive-action gate policy: enabled only when passed (verify/login/solidify paths don't → zero behavior change).
+   *  allow=false = clicks whose visible text hits destructive keywords are always rejected; allow=true = the user explicitly
+   *  authorized at session creation (the exploration session's allow_destructive column), so they pass but still log and leave an action trail. */
   destructivePolicy?: { allow: boolean };
-  /** 模型本轮申报的「已排除的假设」（负面结果账本）——平台侧据此落库。 */
+  /** The model's declared "excluded hypotheses" this turn (the negative-result ledger) — the platform persists them based on this. */
   onExcluded?: (items: Array<{ claim: string; evidence: string }>) => void;
 }
 
 /**
- * 运行时 LLM 智能步骤：多轮「截图+元素清单 → LLM 决策 → 执行 → 反馈」循环，
- * 直到 LLM 声明完成/放弃或超过轮数上限。返回 done summary（用于步骤 warning）。
- * mobile=true 时改用移动端系统提示词（accessibility tree / tap / swipe / app 控制）。
- * opts.maxTurns：轮数上限覆盖（verify_case 逐步执行用 5）；opts.valueSub：凭据占位符替换。
+ * Runtime LLM smart step: a multi-turn "screenshot + element list → LLM decision → execute → feedback" loop,
+ * until the LLM declares done/gives up or the turn cap is exceeded. Returns the done summary (used for the step warning).
+ * When mobile=true, the mobile system prompt is used instead (accessibility tree / tap / swipe / app control).
+ * opts.maxTurns: turn-cap override (verify_case step-by-step uses 5); opts.valueSub: credential placeholder replacement.
  */
 export async function runAiTask(
   page: Page,
@@ -1049,15 +1049,15 @@ export async function runAiTask(
 ): Promise<string> {
   const maxTurns = opts?.maxTurns ?? MAX_TURNS;
   const lang = aiLangFrom(opts?.lang);
-  // 资源清单进系统提示词：模型据此知道有哪些 web 服务、哪些配了凭据、该用哪个 @name。
-  // 无清单时保留旧的固定文案（调用方无环境上下文，行为不变）。
+  // The resource manifest enters the system prompt: the model learns from it which web services exist, which have credentials, and which @name to use.
+  // Without a manifest, the old fixed wording is kept (the caller has no environment context; behavior unchanged).
   const manifest = opts?.resourceManifest?.trim() ?? '';
-  // 凭据能力 = 挂了 valueSub（真值替换通道）。没挂 → 提示词里完全不提凭据，
-  // AI 看不到占位符形态，就不会拿凭据去重填账号/密码框（2026-10-26 prod228 实测：
-  // 含凭据段时 AI 会主动 fill __ITEST_USERNAME@web__，不含则只填字面量）。
+  // Credential capability = valueSub mounted (the real-value substitution channel). Not mounted → the prompt never mentions credentials,
+  // the AI can't see the placeholder form, so it won't grab credentials to refill the account/password boxes (measured on 2026-10-26 prod228:
+  // with the credential section the AI actively fills __ITEST_USERNAME@web__; without it, only literals).
   const credEnabled = !!opts?.valueSub;
   const systemPrompt = assembleSystemPrompt({ mobile, credEnabled, manifest, base: opts?.systemPromptBase });
-  // 凭据替换留痕：只记次数、不记真值（真值绝不回显给 LLM/日志）。
+  // Credential substitution trail: only the count is recorded, never the real values (real values are never echoed to the LLM/logs).
   let credSubCount = 0;
   const valueSub = opts?.valueSub
     ? (v: string): string => {
@@ -1068,24 +1068,24 @@ export async function runAiTask(
     : undefined;
   let lastResults: string[] = [];
   let pendingShot: { kind: 'element'; selector: string } | { kind: 'crop'; x: number; y: number } | null = null;
-  /** 同目标连续失败计数（key=selector 或坐标粗桶）：3 连错注入强制页面自检指令，防换 selector 空转。 */
+  /** Same-target consecutive-failure counter (key = selector or coarse coordinate bucket): 3 misses inject a forced page-self-check instruction, preventing selector spinning. */
   const errStreak = new Map<string, number>();
-  // 多轮累积：每轮把「本轮 user（+截图）」与「上轮 LLM 原始输出」追加到 history，
-  // 请求时整段回传。缓存按前缀匹配，只发当轮会让第 1..N-1 轮内容彻底消失、
-  // 每轮都从零建缓存（2026-10-14 网关实测命中率 2%）；累积后第 2 轮起可命中
-  // 全部历史前缀（实测 86~94%）。assistant 侧回放原始 JSON 输出而非 lastResults 摘要，
-  // 以保证与"当轮实际收到的上下文"逐字一致、缓存前缀不漂移。
+  // Multi-turn accumulation: each turn appends "this turn's user (+screenshot)" and "the previous turn's raw LLM output" to history,
+  // and the request sends the whole thing back. Cache matching is prefix-based; sending only the current turn would make turns 1..N-1 vanish entirely and
+  // rebuild the cache from scratch every turn (measured at 2% hit rate on the gateway, 2026-10-14); after accumulation, from turn 2 onward the
+  // full history prefix can be hit (measured 86~94%). The assistant side replays the raw JSON output rather than a lastResults summary,
+  // so it matches "the context actually received that turn" verbatim and the cache prefix doesn't drift.
   const history: LLMMessage[] = [];
-  // 步内子目标滚动清单（模型自维护，平台整段替换+回显；无清单的简单指令恒为 null）
+  // In-step rolling sub-goal list (model-maintained, wholesale-replaced + echoed by the platform; always null for simple instructions without a list)
   let subGoals: SubGoal[] | null = null;
-  // 负面结果账本（模型申报的「已排除的假设」）：跨轮累计、逐轮回灌。
-  // 只进当轮 user message —— history 逐字节重发（缓存按前缀匹配），动历史会让命中率崩掉。
+  // Negative-result ledger (model-declared "excluded hypotheses"): accumulated across turns, refilled each turn.
+  // Enters only the current turn's user message — history is resent byte-for-byte (prefix-based cache matching); touching history would collapse the hit rate.
   const excluded: ExcludedItem[] = [];
-  // 网络请求累计计数（可观测变化闸信号之一，liveRegion.hasObservableChange）：每个 click 动作
-  // 窗口取 delta。不做 removeListener——verify 会在同一 page 上多次 runAiTask，各 run 闭包独立
-  // 计数（旧监听器只 bump 旧闭包），delta 语义仍正确；泄漏量 = 每 run 一个闭包，可忽略。
-  // 可选调用：prod Page 恒有 on；测试桩 page 没有也不拦主流程（console-capture 批次教训：
-  // 对 mock 缺的方法不设防 = 新增一批永久基线红）。
+  // Cumulative network-request counter (one of the observable-change gate signals, liveRegion.hasObservableChange): each click action
+  // window takes a delta. No removeListener — verify runs runAiTask multiple times on the same page, each run's closure counts
+  // independently (old listeners only bump the old closure), so the delta semantics stay correct; the leak = one closure per run, negligible.
+  // Optional call: prod Pages always have on; test-stub pages without it don't block the main flow (lesson of the console-capture batch:
+  // not guarding against missing mock methods = a new batch of permanently red baseline tests).
   let requestCount = 0;
   page.on?.('request', () => {
     requestCount += 1;
@@ -1094,8 +1094,8 @@ export async function runAiTask(
     if (opts?.shouldAbort && (await opts.shouldAbort())) {
       throw new Error('计划运行已终止，AI 步骤中断');
     }
-    // 每轮先等渲染静默再截图（对标 midscene 所见即所点：截图时刻与决策时刻页面一致）。
-    // 指纹收敛 best-effort，超时按当前帧继续，绝不阻塞。
+    // Each turn waits for render settle before screenshotting (modeled on midscene's WYSIWYG-clicking: the page is identical at screenshot and decision time).
+    // Fingerprint convergence is best-effort; on timeout, continue with the current frame, never blocking.
     await waitForPageSettled(page, { timeoutMs: 2500, settleMs: 200 }).catch(() => undefined);
     let buffer: Buffer | null = null;
     let shotMime: 'image/png' | 'image/jpeg' = 'image/png';
@@ -1114,10 +1114,10 @@ export async function runAiTask(
       pendingShot = null;
     }
     if (!buffer) {
-      // 全页截图超时降级：微前端子应用切换时页面持续重绘/字体慢加载，page.screenshot
-      // 等 stable 会 5s 超时抛错。这里不能让它炸掉整个 AI 步骤——重试一次，仍失败则
-      // 无图继续本轮（LLM 靠元素清单也能操作），并在下轮结果里标注无图原因。
-      // 主截图走 JPEG（q85）：坐标指认不需要无损精度，token 显著省于 PNG。
+      // Full-page screenshot timeout fallback: during micro-frontend sub-app switches the page repaints continuously / fonts load slowly, and page.screenshot
+      // waiting for stable times out at 5s and throws. It must not blow up the whole AI step here — retry once; if it still fails,
+      // continue this turn imageless (the LLM can operate from the element list), and note the reason in the next turn's results.
+      // The main screenshot is JPEG (q85): coordinate pointing needs no lossless precision, and it saves substantial tokens vs PNG.
       buffer = await page.screenshot({ timeout: 5000, type: 'jpeg', quality: 85 }).catch(() => null);
       if (buffer) shotMime = 'image/jpeg';
       if (!buffer) {
@@ -1145,7 +1145,7 @@ export async function runAiTask(
       renderExcluded(excluded),
       `第 ${turn}/${maxTurns} 轮。`,
     ].filter(Boolean).join('\n');
-    // 截图放在文本之前：与单轮形态的历史顺序保持一致，且首轮前缀稳定。
+    // Screenshot placed before the text: keeps the history order identical to the single-turn form and stabilizes the first-turn prefix.
     history.push({
       role: 'user',
       content: [
@@ -1157,14 +1157,14 @@ export async function runAiTask(
       systemPrompt,
       messages: history,
       lang,
-      // 单轮字段仍给：无 messages 支持的实现按它们走；回退路径共用。
+      // Single-turn fields are still provided: implementations without messages support fall back to them; the fallback path is shared.
       userMessage,
       ...(buffer ? { image: { base64: buffer.toString('base64'), mime: shotMime } } : {}),
     });
     opts?.onUsage?.(r);
     const raw = r.kind === 'json' ? JSON.stringify(r.value) : r.value;
-    // 回放 LLM 原始输出进历史（而非动作摘要）：保持与"模型实际说过的话"逐字一致，
-    // 否则下一轮前缀与本轮实际发送的不匹配，缓存断点漂移、命中率反降。
+    // Replay the LLM's raw output into history (not an action summary): keeps it verbatim-identical to "what the model actually said",
+    // otherwise the next turn's prefix mismatches what was actually sent this turn — the cache breakpoint drifts and the hit rate drops.
     history.push({ role: 'assistant', content: [{ type: 'text', text: raw }] });
     const parsed = tryParseJson(raw);
     if (!parsed) {
@@ -1174,14 +1174,14 @@ export async function runAiTask(
     if (typeof parsed.fail === 'string' && parsed.fail.trim()) {
       throw new Error(`aiTask 放弃：${parsed.fail.trim()}`);
     }
-    // 探索式会话：模型本轮报告的缺陷候选。在动作执行前回调——回调内截图取的是作证时的页面状态。
+    // Exploratory sessions: the model's defect candidates reported this turn. Callback before actions execute — a screenshot inside the callback captures the state at testimony time.
     if (opts?.onFindings && Array.isArray(parsed.findings) && parsed.findings.length > 0) {
       await opts.onFindings(parsed.findings);
     }
-    // 子目标清单整段替换（done 响应里的最终状态也先落到 subGoals 再结算进度）
+    // Sub-goal list replaced wholesale (the final state in a done response also lands in subGoals before progress settles)
     const planNow = parseSubGoals(parsed.plan);
     if (planNow) subGoals = planNow;
-    // 负面结果账本：模型申报本轮已验证过的「排除项」——跨轮累计 + 去重 + 通知平台落库。
+    // Negative-result ledger: the model declares this turn's verified "exclusions" — accumulated across turns + deduped + the platform notified to persist.
     const excludedNow = parseExcluded(parsed.excluded);
     if (excludedNow.length > 0) {
       for (const e of excludedNow) {
@@ -1198,7 +1198,7 @@ export async function runAiTask(
     lastResults = [];
     for (const a of actions) {
       if (a.type === 'screenshot') {
-        // screenshot 的 selector 同样拿 locator 查询——同过硬闸，拒绝时不接受截图请求。
+        // screenshot's selector goes through the same locator query — must pass the same hard gate; when rejected, the screenshot request isn't accepted.
         if (a.selector) {
           const reason = brittleSelectorReason(a.selector);
           if (reason) {
@@ -1213,8 +1213,8 @@ export async function runAiTask(
         opts?.onAction?.(a, true);
         continue;
       }
-      // 数据库取证（sql）：只挂 runSqlProbe 的会话才有这个通道（探索）。
-      // 只读守卫先行——写语句在触库前被拒，守卫不通过时绝不调用探针。
+      // Database evidence (sql): only sessions with runSqlProbe mounted have this channel (exploration).
+      // The read-only guard runs first — write statements are rejected before touching the DB; the probe is never invoked when the guard fails.
       if (a.type === 'sql') {
         const probe = opts?.runSqlProbe;
         const sqlKey = `sql:${a.query.replace(/\s+/g, ' ').slice(0, 40)}`;
@@ -1255,8 +1255,8 @@ export async function runAiTask(
         }
         continue;
       }
-      // 仓库读码（repo）：只挂 runRepoRead 的会话才有这个通道（有代码提交范围的探索会话）。
-      // 沙箱/配额在通道实现里——越界与超额都转成 ok:false 的错误反馈，这里不再重复守卫。
+      // Repo code reading (repo): only sessions with runRepoRead mounted have this channel (exploration sessions with a code commit scope).
+      // Sandbox/quota live in the channel implementation — escapes and over-quota both become ok:false error feedback; no duplicated guarding here.
       if (a.type === 'repo') {
         const read = opts?.runRepoRead;
         const repoKey = `repo:${a.op}:${(a.path ?? a.pattern ?? '').slice(0, 40)}`;
@@ -1293,13 +1293,13 @@ export async function runAiTask(
         }
         continue;
       }
-      // 同目标连续失败计数（坐标按 ~25‰ 粗桶聚合）：3 连错注入强制自检指令，砍 selector/坐标空转。
+      // Same-target consecutive-failure counter (coordinates aggregated into ~25‰ coarse buckets): 3 misses inject a forced self-check instruction, cutting selector/coordinate spinning.
       const streakKey = a.type === 'click' || a.type === 'fill'
         ? (a.selector ?? (typeof a.x === 'number' && typeof a.y === 'number' ? `@${Math.round(a.x / 25)},${Math.round(a.y / 25)}` : null))
         : null;
       const sel = 'selector' in a ? a.selector : null;
-      // 脆弱 selector 硬闸：XPath/位置链事前拒收（srbarrios 口径），错误行计入 errStreak——
-      // 同一死目标换着花样写脆弱 selector 也拦得住，3 连触发自检注入。
+      // Brittle-selector hard gate: XPath/positional chains rejected upfront (srbarrios semantics), the error line counts into errStreak —
+      // the same dead target rewritten as different brittle selectors is still caught; 3 in a row triggers the self-check injection.
       if (sel) {
         const reason = brittleSelectorReason(sel);
         if (reason) {
@@ -1311,8 +1311,8 @@ export async function runAiTask(
           continue;
         }
       }
-      // 探索范围闸：navigate 越界事前拒收（不 goto）。与脆弱 selector 硬闸同法——拒收也是一次
-      // 失败，计入 errStreak，同一越界目标反复尝试 3 次触发自检注入。
+      // Exploration-scope gate: out-of-scope navigates rejected upfront (no goto). Same method as the brittle-selector hard gate — a rejection is also
+      // a failure counted into errStreak; 3 attempts at the same out-of-scope target trigger the self-check injection.
       if (a.type === 'navigate' && opts?.scopeOrigins) {
         const reason = scopeViolationReason(a.url, opts.scopeOrigins);
         if (reason) {
@@ -1324,9 +1324,9 @@ export async function runAiTask(
           continue;
         }
       }
-      // 破坏性动作闸：点击可见文本命中破坏性关键词（删除/支付/发送/审批/注销…）一律拒收。
-      // 默认拒；会话显式授权（allow_destructive）才放行。charter 说辞不算授权——
-      // 2026-11-10 prod 实录正是"章程要求核查删除"→ 模型点了删除 → 资产真被删。
+      // Destructive-action gate: clicks whose visible text hits destructive keywords (delete/pay/send/approve/sign-off…) are always rejected.
+      // Rejected by default; passed only with explicit session authorization (allow_destructive). Charter wording is not authorization —
+      // the 2026-11-10 prod record was exactly "the charter asked to verify deletion" → the model clicked delete → the asset was really deleted.
       if (a.type === 'click' && opts?.destructivePolicy) {
         const targetText = clickTargetText(a, elements);
         const reason = destructiveActionReason(targetText);
@@ -1346,9 +1346,9 @@ export async function runAiTask(
       const coordPt = typeof (a as { x?: number }).x === 'number' && typeof (a as { y?: number }).y === 'number'
         ? toViewportPt(a as { x?: number; y?: number }, page)
         : null;
-      // 动作高亮（blackboard）：坐标动作按解析元素取盒（拿不到给点位小盒），selector 动作按
-      // locator 取盒——有人观看（playground 画面流）时注入，无人观看零 DOM/CDP 干扰（懒求值）。
-      // 清除保证下轮截图/步截图不被污染。
+      // Action highlight (blackboard): coordinate actions take the box from the resolved element (a small point box when unavailable); selector actions
+      // take the box via locator — injected only when someone is watching (the playground live stream); zero DOM/CDP interference otherwise (lazy evaluation).
+      // Clearing guarantees the next turn's screenshot / step screenshot isn't polluted.
       if (coordPt) {
         const pt = coordPt;
         const intent = a.type === 'fill' ? 'fill' : 'click';
@@ -1357,8 +1357,8 @@ export async function runAiTask(
       } else if (sel) {
         await annotateAction(page, () => page.locator(sel).first().boundingBox().catch(() => null));
       }
-      // 可观测变化采样：click/fill/press 动作前抓 live-region 基线（toast/提示一手证据），
-      // click 另存变化闸快照（URL/视觉指纹/请求数）。
+      // Observable-change sampling: capture a live-region baseline before click/fill/press (first-hand toast/notice evidence);
+      // click additionally saves a change-gate snapshot (URL/visual fingerprint/request count).
       const observe = a.type === 'click' || a.type === 'fill' || a.type === 'press';
       const beforeMsgs = observe ? await captureLiveRegionMessages(page) : [];
       const clickBefore: ChangeSnapshot | null = a.type === 'click'
@@ -1367,21 +1367,21 @@ export async function runAiTask(
       try {
         const outcome = await execAction(page, a, valueSub);
         lastResults.push(outcome.report);
-        // onAction 上报 selector 形态（坐标已解析回填），固化/缓存管线形状不变。
+        // onAction reports the selector form (coordinates already resolved and backfilled); the solidify/cache pipeline shape is unchanged.
         opts?.onAction?.(toReportAction(a, outcome.resolvedSelector), true);
         if (streakKey != null) errStreak.delete(streakKey);
-        // 会改页面的动作后短暂稳定，下一个动作不建立在过期认知上（对标 midscene）。
-        // press 纳入：Enter/Escape 常触发提交/关弹窗，消息提取需要稳定窗口。
+        // Brief settle after page-altering actions so the next action isn't built on stale knowledge (modeled on midscene).
+        // press included: Enter/Escape often trigger submit/dialog-close; message extraction needs a stable window.
         if (a.type === 'click' || a.type === 'fill' || a.type === 'press' || a.type === 'navigate') await settleAfterAction(page);
         if (observe) {
           const afterMsgs = await captureLiveRegionMessages(page);
           const newMsgs = diffNewMessages(beforeMsgs, afterMsgs);
           if (newMsgs.length > 0) {
-            // 应用自己吐的 toast/提示文本（aria-live 区域），一手证据回喂——截图读不清不成为漏报理由。
+            // The app's own toast/notice text (aria-live region) fed back as first-hand evidence — an unreadable screenshot is no excuse for a missed report.
             lastResults.push(`页面消息: ${newMsgs.slice(0, 3).map((m) => `"${m.slice(0, 160)}"`).join('、')}`);
           }
-          // 可观测变化闸（explorbot hasObservablePageChange 口径）：点击四路信号全无变化 = 无效
-          // 点击（目标被遮挡/禁用/命中非交互元素）。计入 errStreak——同一死目标 3 连触发自检，砍空转。
+          // Observable-change gate (explorbot hasObservablePageChange semantics): all four signals unchanged = an invalid
+          // click (target occluded/disabled/hit a non-interactive element). Counted into errStreak — 3 in a row on the same dead target triggers the self-check, cutting spinning.
           if (clickBefore) {
             const clickAfter: ChangeSnapshot = {
               url: page.url(),
@@ -1398,8 +1398,8 @@ export async function runAiTask(
           }
         }
       } catch (e) {
-        // 凭据缺失是环境级硬错误：反馈给 LLM 只会让它换 selector 空转烧调用，直接终止本步
-        // （EnvMissing/SecretMissing 由 valueSub 抛出，携带可行动的配置指引）。
+        // Missing credentials are an environment-level hard error: feeding it back to the LLM would only make it spin on selectors burning calls; terminate the step directly
+        // (EnvMissing/SecretMissing are thrown by valueSub, carrying actionable configuration guidance).
         if (e instanceof Error && (e.name === 'EnvMissing' || e.name === 'SecretMissing')) throw e;
         opts?.onAction?.(toReportAction(a, null), false);
         const target = sel ?? (coordPt ? `@${(a as { x?: number }).x},${(a as { y?: number }).y}` : ('url' in a ? a.url : a.type));
@@ -1413,23 +1413,23 @@ export async function runAiTask(
     if (actions.length === 0) {
       lastResults.push('[system] 没有可执行的动作（actions 为空）。如需结束请输出 done 或 fail。');
     }
-    // 先执行动作再结束：LLM 可能在 done 响应里携带最终动作（如 fill 验证码）。
+    // Actions execute before ending: the LLM may carry final actions in a done response (e.g. filling the captcha).
     if (parsed.done === true) {
       const s = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
-      // 子目标进度留痕：报告/DB 能看到步内计划的结算状态（防"终态像完成"式的虚报）。
+      // Sub-goal progress trail: reports/DB can see the settled state of the in-step plan (guards against "final state looks done" style overclaiming).
       const goalNote = subGoals
         ? `（子目标 ${subGoals.filter((g) => g.done).length}/${subGoals.length} 完成）`
         : '';
       const credNote = credSubCount > 0 ? `（凭据占位符已替换 ${credSubCount} 处为环境凭据）` : '';
-      // 凭据替换留痕：报告里能看到「本步真的用了环境凭据」，便于事后判读。
+      // Credential substitution trail: reports show "this step really used environment credentials", aiding after-the-fact interpretation.
       return `${s}${goalNote}${credNote}`;
     }
   }
-  // 轮数耗尽兜底：零动作可完成的步骤（确认式/条件式指令，目标状态已在页面）曾是完成判据
-  // 规则下的分布外样本——模型不敢零动作 done，反复「找事做」空转到耗尽（2026-11-08 prod228
-  // 实录：登录用例的「检查输入框展示」步 5 轮 ×41s 全灭，事后归因 LLM 已判「目标已达成」
-  // 但归因只写 note 不改判定）。这里用当前页面截图问一次「目标是否已达成」，达成则改判通过。
-  // 严判防假阳性：非明确 achieved:true 一律照旧抛错；判定失败也照旧抛错（best-effort）。
+  // Turn-exhaustion fallback: steps completable with zero actions (confirmatory/conditional instructions whose target state is already on the page) were out-of-distribution
+  // samples under the done-criteria rules — the model dared not done with zero actions and spun "looking for things to do" until exhaustion (2026-11-08 prod228
+  // record: the login case's "check input box display" step died 5 turns ×41s; the post-hoc attribution showed the LLM had already judged "goal achieved",
+  // but attribution only writes a note and doesn't change the verdict). Here the current page screenshot is used to ask once "is the goal achieved"; if so, the verdict flips to passed.
+  // Strict judgment prevents false positives: anything short of an explicit achieved:true keeps throwing as before; judgment failure also keeps throwing (best-effort).
   try {
     const shot = await page.screenshot({ timeout: 5000, type: 'jpeg', quality: 85 });
     const r = await client.complete({
@@ -1448,7 +1448,7 @@ export async function runAiTask(
       return `目标已达成，零动作完成（轮数耗尽兜底判定）：${reason}`;
     }
   } catch {
-    // 兜底判定失败照旧按超时抛错
+    // Fallback judgment failure keeps throwing as a timeout
   }
   throw new Error(`aiTask 超过 ${maxTurns} 轮未完成：${instruction.slice(0, 80)}`);
 }

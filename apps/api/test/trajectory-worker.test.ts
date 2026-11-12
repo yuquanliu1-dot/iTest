@@ -1,7 +1,7 @@
 /**
- * 轨迹蒸馏 worker 编排：判据核实（verify_case 成功链）→ LLM 蒸馏 → 幂等入库。
- * stub LLM client 固定返回合法蒸馏 JSON；判据不满足/文件缺失/输出不合法三条
- * 失败路径均须静默丢弃（设计 §4.2：不重试不阻塞）。
+ * Trajectory distillation worker orchestration: evidence verification (verify_case success chain) → LLM distillation → idempotent persistence.
+ * The stub LLM client always returns valid distillation JSON; the three failure paths — evidence unmet /
+ * file missing / output invalid — must all be silently discarded (design §4.2: no retry, no blocking).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
@@ -34,7 +34,7 @@ beforeEach(async () => {
   await pool.query(`TRUNCATE assistant_trajectories`);
 });
 
-/** 假 LLM client：返回固定蒸馏 JSON（completeJson 首轮 kind:'json' 即透传 value/model）。 */
+/** Fake LLM client: returns a fixed distillation JSON (completeJson's first-round kind:'json' passes value/model through). */
 function stubClient() {
   return {
     provider: 'openai' as const,
@@ -55,12 +55,12 @@ describe('R2 trajectories：蒸馏 worker', () => {
     const threadId = randomUUID();
     const piThreadId = `01atest-${randomUUID().slice(0, 8)}`;
     await pool.query(`INSERT INTO ai_threads (id, kind, version_id, pi_thread_id) VALUES ($1,'version',$2,$3)`, [threadId, versionId, piThreadId]);
-    // 用例 + 步骤（蒸馏输入的最终形态）
+    // Case + steps (the final shape fed into distillation)
     const gid = (await pool.query(`INSERT INTO "groups" (project_id, name) VALUES ($1,'G') RETURNING id`, [projectId])).rows[0]!.id;
     const caseId = (await pool.query(`INSERT INTO test_cases (group_id, version_id, title, expected_outcome) VALUES ($1,$2,'登录-密码错误',$3) RETURNING id`, [gid, versionId, '提示密码错误'])).rows[0]!.id;
     await pool.query(`INSERT INTO test_steps (case_id, "order", source, instruction) VALUES ($1,0,'ai','输入错误密码'),($1,1,'ai','点击登录')`, [caseId]);
     const callId = 'c1';
-    // 生产形态：verify_case 常规失败也是 ok:true → isError:false，判据在正文 JSON（C1）。
+    // Production shape: verify_case's ordinary failures are also ok:true → isError:false; the evidence lives in the body JSON (C1).
     const verifyText = opts.verified
       ? JSON.stringify({ result: 'passed', basedOn: 'staged', caseId: 'loc-1', resumeFrom: 0, steps: [] })
       : JSON.stringify({ result: 'failed', basedOn: 'staged', caseId: 'loc-1', failure: { stepOrder: 1, error: '找不到元素' } });
@@ -122,7 +122,7 @@ describe('R2 trajectories：蒸馏 worker', () => {
 
   it('pi_thread_id 为完整路径（生产 session.ts:849 形态）：仍能定位文件并蒸馏入库', async () => {
     const fx = await seedThreadWithFixture({ verified: true });
-    // 生产代码写的是 sessionFile 完整路径，不是裸 UUID——fixture 对齐真实形态
+    // Production code writes the full sessionFile path, not a bare UUID — the fixture matches the real shape
     await pool.query(`UPDATE ai_threads SET pi_thread_id=$1 WHERE id=$2`, [fx.sessionFile, fx.threadId]);
     const { processTrajectoryJob } = await import('../src/scheduler/trajectoryWorker.js');
     await processTrajectoryJob(
@@ -135,8 +135,8 @@ describe('R2 trajectories：蒸馏 worker', () => {
 
   it('LLM 输出形状不合法：丢弃该 item 不入库、不抛', async () => {
     const fx = await seedThreadWithFixture({ verified: true });
-    // completeJson 对 kind:'text' 会语义重试 1 次，仍 text 则抛错——worker 的 per-item
-    // try/catch 兜住 → 丢弃。两条路径（抛错/zod 失败）可观测结果同为不入库。
+    // completeJson semantically retries kind:'text' once; if it's still text it throws — the worker's per-item
+    // try/catch catches it → discard. Both paths (throw / zod failure) share the same observable result: nothing persisted.
     const bad = { ...stubClient(), complete: async () => ({ kind: 'text' as const, value: 'not json', provider: 'openai' as const, vision: false, model: 'stub' }) };
     const { processTrajectoryJob } = await import('../src/scheduler/trajectoryWorker.js');
     await processTrajectoryJob(

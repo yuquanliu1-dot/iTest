@@ -1,8 +1,8 @@
 /**
- * AI 输出语言指令块。定位/展示分离:
- * - 展示文案(标题/说明/摘要/回复)跟随界面语言;
- * - 定位用业务文案(Locator.value / assertText.equals / contextText)必须取页面实际文本,禁止翻译。
- * 会追加到 systemPrompt 末尾,由各 prompt 装配点调用。
+ * AI output language directive block. Locator/display separation:
+ * - Display text (titles/descriptions/summaries/replies) follows the UI language;
+ * - Locator-matching business text (Locator.value / assertText.equals / contextText) must be taken verbatim from actual page text; translation is forbidden.
+ * Appended to the end of systemPrompt by each prompt assembly point.
  */
 export type AiLang = 'zh-CN' | 'en-US';
 

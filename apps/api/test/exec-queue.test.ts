@@ -1,9 +1,9 @@
 /**
- * exec queue 分发测试：mock 掉 execQueue / runPlan 模块，覆盖 enqueuePlanRun 两个分支。
- * - isExecutionQueueReady()===true  → 任务入队 exec.add('exec', {kind:'plan',planRunId})，inline runPlanAsync 不调用
- * - isExecutionQueueReady()===false → 回落 inline runPlanAsync({planRunId})，不入队
+ * exec queue dispatch tests: mock out the execQueue / runPlan modules, covering both enqueuePlanRun branches.
+ * - isExecutionQueueReady()===true  -> the job is enqueued via exec.add('exec', {kind:'plan',planRunId}); inline runPlanAsync is not called
+ * - isExecutionQueueReady()===false -> falls back to inline runPlanAsync({planRunId}); nothing is enqueued
  *
- * 测试环境无 redis；分支由 mocked isExecutionQueueReady 的返回值控制（不改 env，避免真的构造 Queue）。
+ * The test environment has no redis; which branch runs is controlled by the mocked isExecutionQueueReady return value (env untouched, avoiding a real Queue).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { Pool } from 'pg';
