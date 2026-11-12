@@ -15,10 +15,8 @@ import { readFile } from 'node:fs/promises';
 import { db } from '../../db/client.js';
 import { explorationFindings, explorationSessions } from '../../db/schema.js';
 import { completeJson, type LLMClient } from '../../agent/llm-client.js';
-import { CHANNEL_KEYS, parseChannels, resolveLlmClient } from '../../agent/llmSettings.js';
-import { inArray } from 'drizzle-orm';
-import { settings } from '../../db/schema.js';
-import { withTimeout } from '../../execute/explorationShared.js';
+import { resolveLlmClient } from '../../agent/llmSettings.js';
+import { screenshotDiskPath, withTimeout } from '../../execute/explorationShared.js';
 import { logger } from '../../logger.js';
 
 /** 评审判定：成立 / 不成立 / 材料不足。 */
@@ -79,6 +77,8 @@ function renderTrail(trail: unknown): string {
     if (o.ok === false) parts.push('失败');
     if (typeof o.key === 'string' && o.key) parts.push(`键=${o.key}`);
     if (typeof o.value === 'string' && o.value) parts.push(`值=${o.value.slice(0, 60)}`);
+    // 结果摘要（平台机械记录的事实：这步看到了什么/变成了什么）——评审判断的关键证据。
+    if (typeof o.outcome === 'string' && o.outcome) parts.push(o.outcome.slice(0, 140));
     return parts.join(' ');
   });
   if (!lines.length) return '（无动作留痕）';
@@ -95,6 +95,7 @@ function buildUserMessage(f: {
   evidenceFrame: unknown;
   actionsTrail: unknown;
 }): string {
+  const frame = (f.evidenceFrame ?? {}) as { screenshotPath?: string };
   return [
     `缺陷标题：${f.title}`,
     `严重程度（探索者自报）：${f.severity}`,
@@ -102,6 +103,7 @@ function buildUserMessage(f: {
     `页面 URL：${f.pageUrl ?? '-'}`,
     f.evidenceFrame ? `决策帧元数据：${JSON.stringify(f.evidenceFrame)}` : '',
     `平台动作留痕（机械记录的事实）：\n${renderTrail(f.actionsTrail)}`,
+    frame.screenshotPath ? '决策帧截图已附在本消息的图片块里——请结合截图核对描述与画面是否一致。' : '',
     '判断这条缺陷是否成立。',
   ]
     .filter(Boolean)
@@ -109,26 +111,13 @@ function buildUserMessage(f: {
 }
 
 /**
- * 是否可以附决策帧截图：必须配了视觉渠道。
+ * 是否可以附决策帧截图：读文件在且渠道能收图。
  * 文本渠道收图可能直接 400（网关图片尺寸/类型限制）——评审是增强项，
  * 不能因为附图把整场评审搞挂：附不了就纯文本判。
  */
-async function hasVisionChannel(): Promise<boolean> {
-  const rows = await db
-    .select()
-    .from(settings)
-    .where(inArray(settings.key, [CHANNEL_KEYS.channels, CHANNEL_KEYS.visionChannel]));
-  const map = new Map(rows.map((r) => [r.key, r.value as unknown]));
-  const channels = parseChannels(map.get(CHANNEL_KEYS.channels));
-  const visionId = String(map.get(CHANNEL_KEYS.visionChannel) ?? '');
-  return channels.some((c) => c.id === visionId && c.apiKey && c.model);
-}
-
-/** 决策帧截图 → base64（文件不在/读不了就不附图，评审降级为纯文本判断）。 */
-async function readFrameBase64(screenshotPath: string | null): Promise<string | null> {
-  if (!screenshotPath) return null;
+async function readFrameBase64(sessionId: string, order: number): Promise<string | null> {
   try {
-    const buf = await readFile(screenshotPath);
+    const buf = await readFile(screenshotDiskPath(sessionId, order));
     return buf.toString('base64');
   } catch {
     return null;
@@ -163,20 +152,21 @@ export async function judgeExplorationSession(sessionId: string, deps?: JudgeDep
     }
 
     const client = deps?.llm ?? (await resolveLlmClient()).client;
-    const canSeeImage = deps?.vision ?? (await hasVisionChannel());
+    // 决策帧默认附上（评审看得见图才判得准）；deps.vision=false 时纯文本评审。
+    const canSeeImage = deps?.vision !== false;
     const results: JudgeFinding[] = [];
     let okCount = 0;
     let lastError = '';
     for (const f of findings) {
       const userMessage = buildUserMessage(f);
       let frame: string | null = null;
-      if (canSeeImage) frame = await readFrameBase64(f.screenshotPath);
-      try {
-        const r = await withTimeout(
+      if (canSeeImage) frame = await readFrameBase64(sessionId, f.order);
+      const callJudge = (withFrame: boolean) =>
+        withTimeout(
           completeJson(client, {
             systemPrompt: JUDGE_SYSTEM_PROMPT,
             userMessage,
-            ...(frame
+            ...(withFrame && frame
               ? {
                   image: { base64: frame, mime: 'image/png' as const },
                   messages: [
@@ -194,6 +184,17 @@ export async function judgeExplorationSession(sessionId: string, deps?: JudgeDep
           JUDGE_TIMEOUT_MS,
           '评审调用超时',
         );
+      try {
+        let r: Awaited<ReturnType<typeof callJudge>>;
+        try {
+          r = await callJudge(!!frame);
+        } catch (e) {
+          // 附图这条路失败（网关收图 400 / 模型不收图）→ 退纯文本再判一次：
+          // 评审是增强项，不能因为一张图把整场评审搞挂。超时则不重试（等下去只会更贵）。
+          const first = e instanceof Error ? e.message : String(e);
+          if (!frame || first === '评审调用超时') throw e;
+          r = await callJudge(false);
+        }
         const parsed = parseVerdict(r.value);
         const verdict = parsed ?? { verdict: 'unclear' as JudgeVerdict, reason: '评审输出形状不可解析', confidence: 0 };
         results.push({ id: f.id, verdict: verdict.verdict, reason: verdict.reason, confidence: verdict.confidence });

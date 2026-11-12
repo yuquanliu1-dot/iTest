@@ -17,6 +17,8 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Pool } from 'pg';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { createTestDatabase } from './helpers/pg.js';
 import { SCHEMA_SQL, seedProject } from './helpers/db.js';
 import type { LLMClient, LLMRequest } from '../src/agent/llm-client.js';
@@ -56,15 +58,15 @@ async function insertSession(opts: { judgeStatus?: string } = {}): Promise<strin
   return r.rows[0]!.id as string;
 }
 
-/** 建一条 finding（可选平台留痕）。 */
+/** 建一条 finding（可选平台留痕）。返回 id 与 order（order 决定决策帧文件名）。 */
 async function insertFinding(
   sessionId: string,
-  opts: { title?: string; trail?: unknown; status?: string } = {},
-): Promise<string> {
+  opts: { title?: string; trail?: unknown; status?: string; evidenceFrame?: unknown } = {},
+): Promise<{ id: string; order: number }> {
   sessionCounter += 1;
   const r = await pool.query(
-    `INSERT INTO exploration_findings(session_id, "order", title, description, severity, actions_trail, status)
-     VALUES ($1,$2,$3,'预期：删除后列表少一行；实际：仍显示旧数据','P1',$4,$5) RETURNING id`,
+    `INSERT INTO exploration_findings(session_id, "order", title, description, severity, actions_trail, status, evidence_frame)
+     VALUES ($1,$2,$3,'预期：删除后列表少一行；实际：仍显示旧数据','P1',$4,$5,$6) RETURNING id`,
     [
       sessionId,
       sessionCounter,
@@ -76,9 +78,25 @@ async function insertFinding(
         ],
       ),
       opts.status ?? 'pending',
+      opts.evidenceFrame ? JSON.stringify(opts.evidenceFrame) : null,
     ],
   );
-  return r.rows[0]!.id as string;
+  return { id: r.rows[0]!.id as string, order: sessionCounter };
+}
+
+/** 写一张真 PNG 到决策帧落盘路径（judge 按 <order> 从盘上读帧）。
+ *  screenshotDiskPath 必须动态 import：它拖出 db/client（模块加载时读 DATABASE_URL），
+ *  静态 import 会抢在 beforeAll 设 env 之前把 pool 绑到默认库——全部 judge 用例假红。 */
+async function writeFrame(sessionId: string, order: number): Promise<{ base64: string; file: string }> {
+  const { screenshotDiskPath } = await import('../src/execute/explorationShared.js');
+  const file = screenshotDiskPath(sessionId, order);
+  await mkdir(dirname(file), { recursive: true });
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  await writeFile(file, png);
+  return { base64: png.toString('base64'), file };
 }
 
 /** 假 LLM 客户端：按脚本回 JSON，或抛错。记录收到的请求（验「只喂材料」）。 */
@@ -119,7 +137,7 @@ describe('A3 独立评审（judge）', () => {
 
   it('评审成立 → 写 findings.judge，**不改 findings.status**（人工才是权威）', async () => {
     const sessionId = await insertSession();
-    const findingId = await insertFinding(sessionId);
+    const { id: findingId } = await insertFinding(sessionId);
     const { client, calls } = makeLlm(() => ({
       verdict: 'confirmed',
       reason: '留痕显示点击删除后列表未刷新',
@@ -155,7 +173,7 @@ describe('A3 独立评审（judge）', () => {
 
   it('评审调用失败 → 该条判 unclear（不是「不成立」），会话 judge_status=failed', async () => {
     const sessionId = await insertSession();
-    const findingId = await insertFinding(sessionId);
+    const { id: findingId } = await insertFinding(sessionId);
     const client: LLMClient = {
       provider: 'openai',
       complete: async () => {
@@ -190,6 +208,70 @@ describe('A3 独立评审（judge）', () => {
     const s = await pool.query(`SELECT judge_status FROM exploration_sessions WHERE id=$1`, [emptySession]);
     expect(s.rows[0]!.judge_status).toBe('skipped');
     expect(calls).toHaveLength(0);
+  }, 30000);
+
+  it('决策帧在盘上 → 评审请求带真图（评审看得见画面），材料里说明已附图', async () => {
+    const sessionId = await insertSession();
+    const order = sessionCounter + 1; // insertFinding 内部自增——先算好给 evidenceFrame 用
+    const inserted = await insertFinding(sessionId, {
+      evidenceFrame: { screenshotPath: `/screenshots/${sessionId}/finding-${order}.png`, capturedAt: new Date().toISOString() },
+    });
+    expect(inserted.order).toBe(order);
+    const frame = await writeFrame(sessionId, inserted.order);
+    const { client, calls } = makeLlm(() => ({ verdict: 'confirmed', reason: '截图可见列表未刷新', confidence: 0.8 }));
+
+    const { judgeExplorationSession } = await import('../src/pi/exploration/judge.js');
+    try {
+      await judgeExplorationSession(sessionId, { llm: client }); // vision 缺省 = 允许附图
+
+      expect(calls).toHaveLength(1);
+      // 请求带的是磁盘上那帧的真图（不是路径文本）。
+      expect(calls[0]!.image?.base64).toBe(frame.base64);
+      expect(calls[0]!.image?.mime).toBe('image/png');
+      // 多轮形态里图片块也在（用户消息首块 = 决策帧）。
+      const first = calls[0]!.messages?.[0]!.content[0]!;
+      expect(first.type).toBe('image');
+      // 材料里明确告知已附图（模型据此核对画面与描述）。
+      expect(calls[0]!.userMessage).toContain('决策帧截图已附在本消息的图片块里');
+    } finally {
+      await rm(dirname(frame.file), { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('附图那条路失败（网关拒图）→ 退纯文本再判一次，评审不因一张图整场挂掉', async () => {
+    const sessionId = await insertSession();
+    const inserted = await insertFinding(sessionId);
+    await writeFrame(sessionId, inserted.order); // 帧在盘上 → 首选附图
+    const withImage: LLMRequest[] = [];
+    const withoutImage: LLMRequest[] = [];
+    const client: LLMClient = {
+      provider: 'openai',
+      complete: async (req) => {
+        if (req.image || req.messages?.some((m) => m.content.some((b) => b.type === 'image'))) {
+          withImage.push(req);
+          throw new Error('网关拒图 400');
+        }
+        withoutImage.push(req);
+        return { kind: 'json', value: { verdict: 'dismissed', reason: '留痕显示为预期行为', provider: 'openai', vision: false, model: 'judge-model' } };
+      },
+    };
+
+    const { judgeExplorationSession } = await import('../src/pi/exploration/judge.js');
+    try {
+      await judgeExplorationSession(sessionId, { llm: client });
+
+      expect(withImage).toHaveLength(1);
+      expect(withoutImage).toHaveLength(1);
+      const f = await pool.query(`SELECT judge FROM exploration_findings WHERE id=$1`, [inserted.id]);
+      const judge = f.rows[0]!.judge as { verdict: string };
+      // 第二次（纯文本）成功 → 正常落判定，不是 unclear。
+      expect(judge.verdict).toBe('dismissed');
+      const s = await pool.query(`SELECT judge_status FROM exploration_sessions WHERE id=$1`, [sessionId]);
+      expect(s.rows[0]!.judge_status).toBe('done');
+    } finally {
+      const { screenshotDiskPath } = await import('../src/execute/explorationShared.js');
+      await rm(dirname(screenshotDiskPath(sessionId, inserted.order)), { recursive: true, force: true });
+    }
   }, 30000);
 });
 
