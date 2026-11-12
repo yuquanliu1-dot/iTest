@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  ArrowRight, ArrowUp, Bot, Database, GitBranch, Menu, MonitorSmartphone, Repeat, Wrench,
+  ArrowRight, ArrowUp, Bot, Bug, Compass, Database, GitCompare, Menu, MonitorSmartphone, Repeat, Wrench,
 } from 'lucide-react';
 import BrandGlyph from '../components/BrandGlyph';
 import Button from '../components/ui/Button';
@@ -13,9 +13,9 @@ import { useAuthStore } from '../stores/auth';
 import { applyLang } from '../stores/lang';
 import { LANG_STORAGE_KEY, readStoredLang, type Lang } from '../i18n';
 
-const FEATURE_ICONS = [Repeat, Bot, Database, Wrench, GitBranch, MonitorSmartphone];
+const FEATURE_ICONS = [Compass, Repeat, Bot, Database, Wrench, Bug, GitCompare, MonitorSmartphone];
 
-/** 特性卡在 12 栅格里的跨度：两张大卡 7+5，四张紧凑卡 3×4。避免等宽卡栅格的模板感 */
+/** 特性卡在 12 栅格里的跨度：两张大卡 7+5，四张紧凑卡 3×4，两张中卡 6+6。避免等宽卡栅格的模板感 */
 const FEATURE_SPANS = [
   'lg:col-span-7',
   'lg:col-span-5',
@@ -23,11 +23,14 @@ const FEATURE_SPANS = [
   'lg:col-span-3',
   'lg:col-span-3',
   'lg:col-span-3',
+  'lg:col-span-6',
+  'lg:col-span-6',
 ];
 
-/** 展示区三张真实界面截图，已按内容裁好取景：报告详情打头，两张并排垫底 */
+/** 展示区四张真实界面截图，已按内容裁好取景：报告与探索两张全宽打头，两张并排垫底 */
 const SHOT_IMAGES = [
   '/landing/showcase-report.png',
+  '/landing/showcase-exploration.png',
   '/landing/showcase-assistant.png',
   '/landing/showcase-case.png',
 ];
@@ -269,12 +272,12 @@ function PainPoints({ t }: { t: T }) {
   );
 }
 
-/* ---------- 产品预览：等高三栏，宽度不等 ---------- */
+/* ---------- 产品预览：两张全宽旗舰图 + 两张并排 ---------- */
 
 function Showcase({ t }: { t: T }) {
   const shots = t('showcase.shots', { returnObjects: true }) as { title: string; desc: string }[];
-  const lead = shots[0]!;
-  const rest = shots.slice(1);
+  const [lead, second, ...rest] = shots;
+  const wide = [lead!, second!];
   return (
     <section id="showcase" className="scroll-mt-16 mx-auto max-w-6xl px-6 py-20 lg:py-24">
       <header className="max-w-2xl">
@@ -284,21 +287,29 @@ function Showcase({ t }: { t: T }) {
           {t('showcase.subtitle')}
         </p>
       </header>
-      <figure className="mt-10">
-        <div
-          className="overflow-hidden rounded-xl border"
-          style={{ boxShadow: 'var(--shadow-sm)' }}
-        >
-          <img src={SHOT_IMAGES[0]} alt={lead.title} className="block w-full" />
-        </div>
-        <figcaption className="mt-3 max-w-[56ch]">
-          <h3 className="text-[14px] font-medium">{lead.title}</h3>
-          <p className="mt-1 text-[13px] leading-relaxed" style={{ color: 'var(--muted-foreground)' }}>
-            {lead.desc}
-          </p>
-        </figcaption>
-      </figure>
-      <div className="mt-8 grid gap-6 lg:grid-cols-2">
+      {/* 两张全宽：执行报告（页面签名元素）与探索式测试（新能力旗舰） */}
+      {wide.map((shot, i) => (
+        <figure key={shot.title} className={i === 0 ? 'mt-10' : 'mt-12'}>
+          <div
+            className="overflow-hidden rounded-xl border"
+            style={{ boxShadow: 'var(--shadow-sm)' }}
+          >
+            <img
+              src={SHOT_IMAGES[i]}
+              alt={shot.title}
+              loading={i === 0 ? undefined : 'lazy'}
+              className="block w-full"
+            />
+          </div>
+          <figcaption className="mt-3 max-w-[56ch]">
+            <h3 className="text-[14px] font-medium">{shot.title}</h3>
+            <p className="mt-1 text-[13px] leading-relaxed" style={{ color: 'var(--muted-foreground)' }}>
+              {shot.desc}
+            </p>
+          </figcaption>
+        </figure>
+      ))}
+      <div className="mt-12 grid gap-6 lg:grid-cols-2">
         {rest.map((shot, i) => (
           <figure key={shot.title}>
             <div
@@ -306,7 +317,7 @@ function Showcase({ t }: { t: T }) {
               style={{ boxShadow: 'var(--shadow-sm)' }}
             >
               <img
-                src={SHOT_IMAGES[i + 1]}
+                src={SHOT_IMAGES[i + 2]}
                 alt={shot.title}
                 loading="lazy"
                 className="block w-full"
@@ -379,7 +390,7 @@ function Workflow({ t }: { t: T }) {
           {t('workflow.subtitle')}
         </p>
       </header>
-      <ol className="mt-12 grid gap-8 lg:grid-cols-4 lg:gap-6">
+      <ol className="mt-12 grid gap-8 lg:grid-cols-5 lg:gap-5">
         {steps.map((s, i) => (
           <li key={s.title}>
             <div className="flex items-center gap-3">
