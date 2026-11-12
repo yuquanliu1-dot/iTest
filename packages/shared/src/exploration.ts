@@ -36,6 +36,13 @@ export const EXPLORATION_PERSONAS: ExplorationPersona[] = [
     labelEn: 'Accessibility',
     directive: '以无障碍视角探索：留意图片缺替代文本、表单缺标签、对比度不足、键盘不可达、弹窗聚焦丢失等可访问性问题。',
   },
+  {
+    key: 'security',
+    labelZh: '安全视角',
+    labelEn: 'Security',
+    directive:
+      '以安全视角探索：核查鉴权与越权边界——改 URL 里的 id/序号/参数尝试访问他人数据或无权限页面，已登录状态下直达管理/配置类地址看是否被拦；留意页面与报错中泄露的敏感信息（凭据、内部路径、堆栈）；输入框试特殊字符与脚本片段看回显是否被转义。越权尝试被放行即缺陷候选，被系统正确拦截则如实申报排除。',
+  },
 ];
 
 export const EXPLORATION_PERSONA_KEYS = EXPLORATION_PERSONAS.map((p) => p.key);

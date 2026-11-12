@@ -17,7 +17,7 @@ import { withTimeout } from '../../execute/explorationShared.js';
 import { logger } from '../../logger.js';
 
 /** 子目标条数上限：再多就不是「分解」，是把章程切碎了。
- *  12 条 = 「功能 + 边界 + 安全 + UI/UX」四类各占几条的量级（2026-11-12 用户口径）。 */
+ *  覆盖类型（功能/安全/边界/UI-UX）的广度不靠分解臆造（分解只依据章程）——靠人格矩阵多路并行，每路一个视角。 */
 export const DECOMPOSE_MAX_GOALS = 12;
 /** 分解调用超时（软失败口径：超时 = 无子目标）。 */
 const DECOMPOSE_TIMEOUT_MS = 60_000;
