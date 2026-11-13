@@ -482,6 +482,33 @@ export default function GroupsPage() {
 	const setTabFilter = (next: typeof tab) => void setRaw({ tab: next, page: '1' });
 	const setSearch = (next: string) => void setRaw({ q: next, page: '1' });
 
+	// Search/filter with zero hits must not read as "no cases at all" — the sidebar count and footer total would
+	// contradict the empty state and look like data loss (hit in practice). Any active narrowing dimension
+	// (client-side q/tab/status/tag/projects/group drill-down, server-side priority/scenario/solidified/versions)
+	// flips the table empty state to "no matches" plus a clear-filters entry.
+	const hasActiveFilters =
+		q.trim() !== '' ||
+		tab !== 'all' ||
+		effectiveGroupId !== '' ||
+		statusSelected.length > 0 ||
+		tagSelected.length > 0 ||
+		projectsSelected.length > 0 ||
+		!!priority ||
+		!!scenarioId ||
+		solidifiedSelected.length > 0 ||
+		(onLineScope && versionsSelected.length > 0);
+	// Single navigation instead of setRaw + goGroup: goGroup reads window.location.search, which could race
+	// with setRaw's replaceState. Dropping the params returns them to nuqs defaults; scope/pageSize are kept.
+	const clearAllFilters = () => {
+		const sp = new URLSearchParams(window.location.search);
+		for (const key of ['q', 'page', 'tab', 'status', 'tag', 'projects', 'priority', 'scenario', 'solidified', 'versions']) sp.delete(key);
+		const qs = sp.toString();
+		navigate({
+			pathname: versionId ? `/p/${projectId}/v/${versionId}/groups` : `/`,
+			search: qs ? `?${qs}` : '',
+		});
+	};
+
 	const tabs: DataTableTabs = {
 		id: 'tab',
 		allLabel: t('groups:all'),
@@ -996,7 +1023,20 @@ export default function GroupsPage() {
 									</div>
 								)}
 								empty={
-									<EmptyState icon="beaker" title={t('groups:noCases')} description={t('groups:noCasesHint')} />
+									hasActiveFilters ? (
+										<EmptyState
+											icon="search"
+											title={t('groups:noMatches')}
+											description={t('groups:noMatchesHint')}
+											action={
+												<Button size="sm" variant="ghost" onClick={clearAllFilters}>
+													{t('groups:clearFilters')}
+												</Button>
+											}
+										/>
+									) : (
+										<EmptyState icon="beaker" title={t('groups:noCases')} description={t('groups:noCasesHint')} />
+									)
 								}
 							/>
 						)}
