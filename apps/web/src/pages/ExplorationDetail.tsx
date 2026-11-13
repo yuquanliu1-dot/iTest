@@ -12,6 +12,7 @@ import EmptyState from '../components/ui/EmptyState';
 import StatusPill from '../components/ui/StatusPill';
 import PriorityBadge from '../components/ui/PriorityBadge';
 import LiveViewCard from '../components/LiveViewCard';
+import Markdown from '../components/ui/Markdown';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/Modal';
 import { fullDateTime } from '../lib/format';
 import { creatorName } from '../lib/creatorName';
@@ -391,9 +392,10 @@ export default function ExplorationDetail() {
             {session.error}
           </div>
         )}
+        {/* Summary is model-written markdown: render through the shared md-body renderer (a plain-text dump turns structured output into an unreadable wall). */}
         {session.summary && (
-          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4 text-[13px]" style={{ color: 'var(--muted-foreground)' }}>
-            {session.summary}
+          <div className="shrink-0 bg-card border rounded-[var(--radius-md)] p-4">
+            <Markdown text={session.summary} />
           </div>
         )}
 

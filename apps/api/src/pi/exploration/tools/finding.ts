@@ -146,7 +146,11 @@ export function createFinishTool(deps: ExplorationDeps & { onFinish(summary: str
     description: '结束探索并提交总结。主要路径都看过、或被卡住无法继续时调用。总结写：覆盖了什么、发现几条缺陷、无法继续的原因（如有）。',
     promptGuidelines: ['调用 finish 后不要再调用其它工具'],
     parameters: Type.Object({
-      summary: Type.String({ description: '本次探索总结' }),
+      // Markdown with sections + bullets is rendered by the detail page's md renderer; a run-on paragraph renders as an unreadable wall.
+      summary: Type.String({
+        description:
+          '本次探索总结，Markdown 格式：用小标题分节（如 ## 概览 / ## 覆盖情况 / ## 未覆盖及原因），覆盖与未覆盖分条列点，每条一行；禁止输出一整段流水长文',
+      }),
       goals: Type.Optional(
         Type.Array(
           Type.Object({

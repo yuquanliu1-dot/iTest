@@ -153,7 +153,9 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
     const countsNote = (findingStore?.savedCount ?? 0) > 0 ? `（报告缺陷 ${findingStore!.savedCount} 条）` : '';
     // Coverage digest: how much was covered and which sub-goals were not — exploration depth is not just rounds run.
     const coverageNote = coverageLedger ? `（覆盖：${coverageDigest(coverageLedger.snapshot())}）` : '';
-    if (finishSummary) return `${finishSummary}${countsNote}${coverageNote}`.trim();
+    // Notes join with a blank line: the summary is model markdown now, so platform notes render as their own paragraph instead of fusing into the last bullet.
+    const notes = [countsNote, coverageNote].filter(Boolean).join('');
+    if (finishSummary) return `${finishSummary}\n\n${notes}`.trim();
     const stopNote = idleTimedOut
       ? '（模型调用长时间无响应，已中止）'
       : budgetExceeded
