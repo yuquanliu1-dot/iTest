@@ -57,6 +57,10 @@ export default function Explorations() {
   const [allowFaultInjection, setAllowFaultInjection] = useState(false);
   // Turn budget: default 60 (same default backend-side, range 4~240); clearing = not sending = backend default.
   const [budgetTurns, setBudgetTurns] = useState<number | undefined>(60);
+  // Mirror the backend zod constraint (int, 4~240): number inputs don't enforce min/max on typed values,
+  // so an out-of-range turn count must block submit with an inline hint instead of a silent 400.
+  const budgetTurnsInvalid =
+    budgetTurns !== undefined && (!Number.isInteger(budgetTurns) || budgetTurns < 4 || budgetTurns > 240);
   // Test window, two states: default 1280×800 / custom width×height (aligned with the case detail window strategy; exploration runs headless so there is no "current window" state).
   const [windowMode, setWindowMode] = useState<'default' | 'custom'>('default');
   const [windowWidth, setWindowWidth] = useState<number | undefined>();
@@ -393,8 +397,11 @@ export default function Explorations() {
                   value={budgetTurns ?? ''}
                   onChange={(e) => setBudgetTurns(e.target.value === '' ? undefined : Number(e.target.value))}
                 />
-                <span className="text-[11px] flex-1 min-w-0" style={{ color: 'var(--muted-foreground)' }}>
-                  {t('explorations:budgetTurnsHint')}
+                <span
+                  className="text-[11px] flex-1 min-w-0"
+                  style={{ color: budgetTurnsInvalid ? 'var(--warning)' : 'var(--muted-foreground)' }}
+                >
+                  {budgetTurnsInvalid ? t('explorations:budgetTurnsInvalid') : t('explorations:budgetTurnsHint')}
                 </span>
               </div>
             </div>
@@ -506,7 +513,7 @@ export default function Explorations() {
           <DialogFooter className="px-5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
             <Button variant="ghost" onClick={() => setShowCreate(false)}>{t('common:cancel')}</Button>
             <Button
-              disabled={charterTooShort || personas.length === 0 || !windowCustomReady || create.isPending}
+              disabled={charterTooShort || personas.length === 0 || !windowCustomReady || budgetTurnsInvalid || create.isPending}
               onClick={() => create.mutate()}
             >
               {create.isPending
