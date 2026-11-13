@@ -97,6 +97,8 @@
     "failed": "Scope resolution failed; exploration continues"
   },
   "codeScopeCommits": "Commits",
+  "codeScopeShowAllCommits": "{{count}} more commits · show all",
+  "codeScopeCollapseCommits": "Collapse commit list",
   "codeScopeFiles": "Changed files",
   "codeScopeHintUrls": "Hint entry points (heuristic, may be inaccurate — verify on actual pages)",
   "codeScopeReason": "Resolution basis",

@@ -16,6 +16,7 @@ import {
   claimSession,
   finishSession,
   heartbeat,
+  persistTurnProgress,
   screenshotDiskPath,
   withFindingCounts,
   withTimeout,
@@ -406,6 +407,8 @@ async function runLegacyExplorationSession(input: { sessionId: string }): Promis
               return true;
             }
             turnCount += 1;
+            // Live progress: the detail page polls every 2s — without this write the charter card shows 0 until the session ends.
+            void persistTurnProgress(sessionId, turnCount).catch(() => undefined);
             if (turnCount > maxTurns || Date.now() > deadline) {
               budgetExceeded = true;
               return true;

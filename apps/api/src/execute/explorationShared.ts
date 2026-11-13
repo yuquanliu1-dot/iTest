@@ -51,6 +51,19 @@ export async function heartbeat(sessionId: string): Promise<boolean> {
   return row?.cancelRequested ?? false;
 }
 
+/**
+ * Live turn-progress persistence: turns_used used to be written only by finishSession, so a running session's charter card
+ * showed 0 forever (the runner's turnCount never reached the DB while the trail kept advancing — the numbers contradicted each
+ * other). Written at every turn boundary: one light UPDATE, turns are tens of seconds apart, ≤240 per session. Best-effort —
+ * callers fire-and-forget with a swallowed error; finishSession still writes the authoritative final count.
+ */
+export async function persistTurnProgress(sessionId: string, turnsUsed: number): Promise<void> {
+  await db
+    .update(explorationSessions)
+    .set({ turnsUsed })
+    .where(eq(explorationSessions.id, sessionId));
+}
+
 /** Idempotent claim: pending → running (atomic conditional update); losers (duplicate job / already deleted) bail directly. */
 export async function claimSession(sessionId: string): Promise<boolean> {
   const now = new Date();

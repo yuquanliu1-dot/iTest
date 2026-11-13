@@ -17,7 +17,7 @@ import { chromium } from 'playwright-core';
 import { getExplorationPersona } from '@itest/shared';
 import { db } from '../../db/client.js';
 import { explorationSessions } from '../../db/schema.js';
-import { claimSession, finishSession, heartbeat } from '../../execute/explorationShared.js';
+import { claimSession, finishSession, heartbeat, persistTurnProgress } from '../../execute/explorationShared.js';
 import {
   explorationWallClockMs,
   EXPLORATION_IDLE_TIMEOUT_MS,
@@ -358,6 +358,8 @@ export async function runExplorationSessionPi(input: { sessionId: string; idleTi
             }
             if (turnBoundary) {
               turnCount += 1;
+              // Live progress: the detail page polls every 2s — without this write the charter card shows 0 until the session ends.
+              void persistTurnProgress(sessionId, turnCount).catch(() => undefined);
               if (turnCount >= maxTurns || Date.now() > deadline) {
                 budgetExceeded = true;
                 piSession.abort();

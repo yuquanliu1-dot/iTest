@@ -120,6 +120,9 @@ export default function ExplorationDetail() {
   // Trail card long-text expansion (key = o<index>/d<index>) and code-scope group collapse (key = group name; default = collapsed when the group has >8 files).
   const [expandedText, setExpandedText] = useState<Record<string, boolean>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  // Commit list defaults to the first 10 entries; full expansion is the default-off state (the header claims the total count,
+  // so silent truncation would hide the window boundary — reviewers check "is day-3 included, day-4 excluded" against this list).
+  const [commitsExpanded, setCommitsExpanded] = useState(false);
   // Session trail auto-scroll: stick to the bottom as new steps arrive while running; stepsStick records whether the user is "watching the bottom" —
   // scrolling up pauses, scrolling back to the bottom resumes (see the onScroll on stepsBody and the effect below).
   const stepsListRef = useRef<HTMLOListElement | null>(null);
@@ -369,7 +372,11 @@ export default function ExplorationDetail() {
           <div className="text-[13px]" style={{ color: 'var(--foreground)' }}>{session.charter}</div>
           <div className="text-[11px] mt-1 flex items-center gap-3 flex-wrap" style={{ color: 'var(--muted-foreground)' }}>
             <span>{t('explorations:personaLabel')}：{personaLabel(session.persona, i18n.language)}</span>
-            <span>{t('explorations:turnsUsed')}：{session.turnsUsed}</span>
+            <span>
+              {t('explorations:turnsUsed')}：{session.turnsUsed}
+              {/* budgetTurns null = backend default, not known client-side — show the used count alone */}
+              {session.budgetTurns != null ? ` / ${session.budgetTurns}` : ''}
+            </span>
             {session.startUrl && <span className="truncate max-w-[320px]">{session.startUrl}</span>}
             <span>{t('explorations:createdBy')}：{creatorName(session.createdBy)}</span>
             <span>{fullDateTime(session.createdAt)}</span>
@@ -426,13 +433,28 @@ export default function ExplorationDetail() {
                 </div>
                 {codeScope.commits.length > 0 && (
                   <div className="flex flex-col gap-0.5">
-                    {codeScope.commits.slice(0, 10).map((c) => (
+                    {(commitsExpanded ? codeScope.commits : codeScope.commits.slice(0, 10)).map((c) => (
                       <div key={c.sha} className="text-[12px] font-mono truncate" title={c.subject}>
                         <span style={{ color: 'var(--muted-foreground)' }}>{c.sha.slice(0, 8)}</span>
                         <span className="mx-1" style={{ color: 'var(--muted-foreground)' }}>{c.date.slice(0, 10)}</span>
                         <span style={{ color: 'var(--foreground)' }}>{c.subject}</span>
                       </div>
                     ))}
+                    {/* The header counts the full list — truncation must be explicit or the 3-day window boundary is unverifiable on the page. */}
+                    {codeScope.commits.length > 10 && (
+                      <button
+                        type="button"
+                        className="flex items-center gap-1.5 text-left"
+                        onClick={() => setCommitsExpanded((v) => !v)}
+                      >
+                        <Icon name={commitsExpanded ? 'chevronDown' : 'chevronRight'} size={11} className="shrink-0" style={{ color: 'var(--muted-foreground)' }} />
+                        <span className="text-[11px]" style={{ color: 'var(--muted-foreground)' }}>
+                          {commitsExpanded
+                            ? t('explorations:codeScopeCollapseCommits')
+                            : t('explorations:codeScopeShowAllCommits', { count: codeScope.commits.length - 10 })}
+                        </span>
+                      </button>
+                    )}
                   </div>
                 )}
                 {/* Files rendered in full, grouped by type (SQL/Java/frontend/other): a silent slice once swallowed a +372 largest addition

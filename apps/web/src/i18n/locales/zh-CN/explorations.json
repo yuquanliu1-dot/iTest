@@ -97,6 +97,8 @@
     "failed": "解析失败，探索照常进行"
   },
   "codeScopeCommits": "提交",
+  "codeScopeShowAllCommits": "还有 {{count}} 条提交 · 展开全部",
+  "codeScopeCollapseCommits": "收起提交清单",
   "codeScopeFiles": "改动文件",
   "codeScopeHintUrls": "候选起点（启发式，可能不准，以实际页面为准）",
   "codeScopeReason": "解析依据",
