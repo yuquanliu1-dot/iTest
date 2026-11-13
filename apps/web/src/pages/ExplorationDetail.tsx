@@ -694,10 +694,43 @@ export default function ExplorationDetail() {
                         {` · ${Math.round(f.judge.confidence * 100)}%`}
                       </span>
                     )}
+                    {/* In-session verification badge (report_finding gate): the model reproduced and classified the defect
+                        before reporting — the gate only filters unverified candidates, never whole categories. */}
+                    {f.verification && (
+                      <span
+                        className="px-1.5 py-0.5 rounded text-[11px]"
+                        title={`${t('explorations:verificationExpected')}：${f.verification.expected} · ${t('explorations:verificationActual')}：${f.verification.actual}`}
+                        style={{ background: 'var(--muted)', color: 'var(--foreground)' }}
+                      >
+                        {t('explorations:verification')}: {t(`explorations:verificationCategory.${f.verification.category}`)}
+                        {` · ${t(`explorations:verificationConfidence.${f.verification.confidence}`)}`}
+                      </span>
+                    )}
                   </div>
                   <div className="text-[13px] whitespace-pre-wrap" style={{ color: 'var(--muted-foreground)' }}>
                     {f.description}
                   </div>
+
+                  {/* Verification detail (report_finding gate): expected vs actual + evidence list from the in-session verification. */}
+                  {f.verification && (
+                    <div className="rounded-[var(--radius-sm)] border p-2.5 flex flex-col gap-1" style={{ borderColor: 'var(--border)' }}>
+                      <div className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--foreground)' }}>
+                        <span style={{ color: 'var(--muted-foreground)' }}>{t('explorations:verificationExpected')}：</span>
+                        <span className="truncate">{f.verification.expected}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--foreground)' }}>
+                        <span style={{ color: 'var(--muted-foreground)' }}>{t('explorations:verificationActual')}：</span>
+                        <span className="truncate">{f.verification.actual}</span>
+                      </div>
+                      {f.verification.evidence.length > 0 && (
+                        <ul className="text-[11px] list-disc pl-5 flex flex-col gap-0.5" style={{ color: 'var(--muted-foreground)' }}>
+                          {f.verification.evidence.map((e, i) => (
+                            <li key={i}>{e}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
 
                   {steps.length > 0 && (
                     <div className="flex flex-col gap-1">

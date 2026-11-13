@@ -1281,6 +1281,21 @@ export const explorationFindings = pgTable('exploration_findings', {
     model?: string;
     judgedAt: string;
   }>(),
+  /**
+   * In-session verification record (report_finding mechanical gate): the model must re-trigger the anomaly and
+   * classify it before reporting; failed/missing verification never reaches this column (rejected candidates go to
+   * the excluded ledger instead). category taxonomy: code (code defect) / environment (environment configuration
+   * problem) / data (test data problem) / ux (usability issue) / other — ALL categories are real defects and all are
+   * recommended to the user; the gate only filters unverified candidates, never whole categories.
+   */
+  verification: jsonb('verification').$type<{
+    category: 'code' | 'environment' | 'data' | 'ux' | 'other';
+    expected: string;
+    actual: string;
+    evidence: string[];
+    confidence: 'high' | 'medium' | 'low';
+    reproducedAt: string;
+  }>(),
   /** pending → confirmed | dismissed; confirmed → promoted (writes promotedCaseId). */
   status: varchar('status', { length: 16 }).notNull().default('pending'),
   /** The review trio = same as assistant_solidify_proposals. */

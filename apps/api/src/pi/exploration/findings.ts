@@ -34,8 +34,19 @@ export interface FindingReportOutcome {
   imageBase64?: string;
 }
 
+/** In-session verification record (report_finding mechanical gate). The tool layer validates it before
+ *  calling report(); only verified candidates get here (reproduced is always true — failed-reproduction
+ *  candidates are rejected and auto-recorded into the excluded ledger, never persisted). */
+export interface FindingVerification {
+  category: 'code' | 'environment' | 'data' | 'ux' | 'other';
+  expected: string;
+  actual: string;
+  evidence: string[];
+  confidence: 'high' | 'medium' | 'low';
+}
+
 export interface FindingStore {
-  report(raw: unknown): Promise<FindingReportOutcome>;
+  report(raw: unknown, verification?: FindingVerification): Promise<FindingReportOutcome>;
   get savedCount(): number;
   get modelReported(): number;
 }
@@ -61,7 +72,7 @@ export function createFindingStore(args: {
     get modelReported() {
       return modelReported;
     },
-    async report(raw: unknown): Promise<FindingReportOutcome> {
+    async report(raw: unknown, verification?: FindingVerification): Promise<FindingReportOutcome> {
       modelReported += 1;
       const { accepted, dropped, invalid } = coerceFindings([raw], {
         existingTitles: [...seenTitles],
@@ -119,6 +130,18 @@ export function createFindingStore(args: {
             trailIndex: args.sessionStepsLength(),
             ...(screenshotPath ? { screenshotPath } : {}),
           },
+          ...(verification
+            ? {
+                verification: {
+                  category: verification.category,
+                  expected: verification.expected,
+                  actual: verification.actual,
+                  evidence: verification.evidence,
+                  confidence: verification.confidence,
+                  reproducedAt: new Date().toISOString(),
+                },
+              }
+            : {}),
         });
         savedCount += 1;
         seenTitles.add(f.title);

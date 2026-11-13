@@ -8,6 +8,7 @@
  *  - C1 coverage ledger (path dedupe/interaction counts/feed-back digest) + terminal coverage digest (how much covered / what's missing);
  *  - D3 error signals (console/HTTP collection, incremental drain, cap);
  *  - A1 evidence frame: finding persisted with evidence_frame, duplicate entry dedupe, trail segment cleared after successful persist;
+ *  - report_finding verification gate: missing block rejected / failed reproduction auto-recorded to excluded ledger / persisted with verification metadata (out-of-vocabulary degrades, never dropped);
  *  - trailStepOf action trail shape (legacy vocabulary alignment: sql/repo/press/wait…).
  *
  * Tools are driven by a fake page (only the methods tools actually call); finding persistence goes through real PG (column shapes must be real).
@@ -361,6 +362,128 @@ describe('pi 探索工具层', () => {
     // Missing title/description → rejected by shape tolerance.
     const bad = await store.report({});
     expect(bad.ok).toBe(false);
+  }, 30000);
+
+  it('验证闸：缺 verification 块 → 拒收不落库（也不记排除账本）', async () => {
+    const { createReportFindingTool } = await import('../src/pi/exploration/tools/finding.js');
+    const fake = makeFakePage();
+    const report = vi.fn(async () => ({ ok: true, order: 1, message: 'ok' }));
+    const noteExcluded = vi.fn(() => 1);
+    const tool = createReportFindingTool({
+      page: fake.page,
+      vision: true,
+      scopeOrigins: ['http://sut.example.com'],
+      findings: { report, savedCount: 0, modelReported: 0 },
+      noteExcluded,
+      onFinish: () => undefined,
+    });
+
+    const r = await tool.execute('c1', { title: '列表排序失效', description: '预期倒序实际乱序' } as never);
+    expect(r.isError).toBe(true);
+    // toolErr: the actionable rejection reason lives in details.summary (content carries the checklist).
+    expect(JSON.stringify(r)).toContain('缺少验证记录');
+    expect(report).not.toHaveBeenCalled();
+    expect(noteExcluded).not.toHaveBeenCalled();
+  }, 20000);
+
+  it('验证闸：reproduced=false → 自动记排除账本 + 拒收（候选永不落库）', async () => {
+    const { createReportFindingTool } = await import('../src/pi/exploration/tools/finding.js');
+    const fake = makeFakePage();
+    const report = vi.fn(async () => ({ ok: true, order: 1, message: 'ok' }));
+    const noteExcluded = vi.fn(() => 1);
+    const tool = createReportFindingTool({
+      page: fake.page,
+      vision: true,
+      scopeOrigins: ['http://sut.example.com'],
+      findings: { report, savedCount: 0, modelReported: 0 },
+      noteExcluded,
+      onFinish: () => undefined,
+    });
+
+    const r = await tool.execute('c2', {
+      title: '导出按钮无反应',
+      description: '疑似事件未绑定',
+      verification: {
+        reproduced: false,
+        category: 'code',
+        expected: '触发导出',
+        actual: '复现两次均无反应',
+        confidence: 'low',
+      },
+    } as never);
+    expect(r.isError).toBe(true);
+    expect(JSON.stringify(r)).toContain('排除账本');
+    expect(noteExcluded).toHaveBeenCalledTimes(1);
+    expect((noteExcluded.mock.calls[0]![0] as Array<{ claim: string }>)[0]!.claim).toContain('导出按钮无反应');
+    expect(report).not.toHaveBeenCalled();
+  }, 20000);
+
+  it('验证闸：验证通过 → 落库带 verification 元数据（环境配置类同样落库；词表外类别/置信度降级不丢条）', async () => {
+    const { createReportFindingTool } = await import('../src/pi/exploration/tools/finding.js');
+    const sessionId = await insertSession();
+    const fake = makeFakePage();
+    const store = findingsMod.createFindingStore({
+      sessionId,
+      page: fake.page,
+      getTrailSince: () => [],
+      resetTrailSince: () => undefined,
+      sessionStepsLength: () => 3,
+      onPersist: async () => undefined,
+    });
+    const noteExcluded = vi.fn(() => 1);
+    const tool = createReportFindingTool({
+      page: fake.page,
+      vision: true,
+      scopeOrigins: ['http://sut.example.com'],
+      findings: store,
+      noteExcluded,
+      onFinish: () => undefined,
+    });
+
+    const r1 = await tool.execute('c1', {
+      title: '监控服务不可达导致列表加载失败',
+      description: '预期列表正常渲染；实际接口 503',
+      verification: {
+        reproduced: true,
+        category: 'environment',
+        expected: '列表加载成功',
+        actual: '监控服务 503，列表空白',
+        evidence: ['GET /api/monitor → 503', '健康检查端点无响应'],
+        confidence: 'high',
+      },
+    } as never);
+    expect(r1.isError).toBeFalsy();
+
+    const r2 = await tool.execute('c2', {
+      title: '空值提交被静默接受',
+      description: '预期必填校验；实际直接入库',
+      verification: {
+        reproduced: true,
+        category: 'weird',
+        expected: '提交被拒',
+        actual: '空值入库',
+        confidence: 'extreme',
+      },
+    } as never);
+    expect(r2.isError).toBeFalsy();
+
+    const row = await pool.query(
+      `SELECT title, verification FROM exploration_findings WHERE session_id=$1 ORDER BY "order"`,
+      [sessionId],
+    );
+    expect(row.rows).toHaveLength(2);
+    const v1 = row.rows[0]!.verification as Record<string, unknown>;
+    expect(v1.category).toBe('environment');
+    expect(v1.expected).toBe('列表加载成功');
+    expect(v1.actual).toBe('监控服务 503，列表空白');
+    expect(v1.evidence).toEqual(['GET /api/monitor → 503', '健康检查端点无响应']);
+    expect(v1.confidence).toBe('high');
+    expect(typeof v1.reproducedAt).toBe('string');
+    // Out-of-vocabulary degrades (other/medium), the entry itself is never dropped — the gate filters unverified, never whole categories.
+    const v2 = row.rows[1]!.verification as Record<string, unknown>;
+    expect(v2.category).toBe('other');
+    expect(v2.confidence).toBe('medium');
+    expect(noteExcluded).not.toHaveBeenCalled();
   }, 30000);
 
   it('trailStepOf：动作留痕形状对齐 legacy 词表（sql/repo/press/wait/fill 原值）', async () => {

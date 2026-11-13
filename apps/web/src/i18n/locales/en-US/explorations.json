@@ -32,6 +32,21 @@
     "dismissed": "Does not hold",
     "unclear": "Insufficient evidence"
   },
+  "verification": "In-session verification",
+  "verificationCategory": {
+    "code": "Code defect",
+    "environment": "Environment config",
+    "data": "Data issue",
+    "ux": "Usability",
+    "other": "Other"
+  },
+  "verificationConfidence": {
+    "high": "High confidence",
+    "medium": "Medium confidence",
+    "low": "Low confidence"
+  },
+  "verificationExpected": "Expected",
+  "verificationActual": "Actual",
   "coverageTitle": "Coverage ledger",
   "coveragePaths": "pages",
   "coverageInteractions": "Interactions",

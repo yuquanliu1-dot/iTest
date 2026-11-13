@@ -32,6 +32,21 @@
     "dismissed": "不成立",
     "unclear": "材料不足"
   },
+  "verification": "会内验证",
+  "verificationCategory": {
+    "code": "代码缺陷",
+    "environment": "环境配置",
+    "data": "数据问题",
+    "ux": "体验问题",
+    "other": "其他"
+  },
+  "verificationConfidence": {
+    "high": "高置信",
+    "medium": "中置信",
+    "low": "低置信"
+  },
+  "verificationExpected": "预期",
+  "verificationActual": "实际",
   "coverageTitle": "覆盖账本",
   "coveragePaths": "个页面",
   "coverageInteractions": "交互",

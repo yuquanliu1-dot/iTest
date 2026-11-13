@@ -1311,6 +1311,15 @@ export interface ExplorationFinding {
     trailIndex: number;
     screenshotPath?: string;
   } | null;
+  /** In-session verification record (report_finding gate): reproduced+classified before reporting. Annotation only. */
+  verification?: {
+    category: 'code' | 'environment' | 'data' | 'ux' | 'other';
+    expected: string;
+    actual: string;
+    evidence: string[];
+    confidence: 'high' | 'medium' | 'low';
+    reproducedAt: string;
+  } | null;
   /** Cross-session intersection (S2): how many sessions reported the same defect; ≥2 = jointly discovered from multiple perspectives. */
   crossSessionCount: number;
   /** Independent review verdict (A3): annotation only, status unchanged — human review is the authority. */

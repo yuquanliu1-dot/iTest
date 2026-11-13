@@ -21,9 +21,11 @@ export function createReportFindingTool(deps: ExplorationDeps) {
     name: 'report_finding',
     label: 'report_finding',
     description:
-      '报告一个疑似缺陷（页面行为异常/校验缺失/状态错乱/体验破绽）。工具会立即截取当前页面作为证据帧并落库，截图回传供你核对。每次只报一条。',
+      '报告一条**已验证**的缺陷（页面行为异常/校验缺失/状态错乱/环境配置问题）。工具会立即截取当前页面作为证据帧并落库，截图回传供你核对。每次只报一条。验证记录为必填：先重新触发确认可复现、判定归属类别、写清预期 vs 实际与证据，才能上报；未验证或复现失败的候选不会被落库推荐。',
     promptGuidelines: [
-      '先取证再上报：描述里写清「预期 vs 实际」与证据（元素文本/接口行为/查库结果），不要只写主观感受',
+      '上报前先验证：重新触发同样的操作/再次观察，确认异常再次出现（reproduced=true）才算验证通过',
+      '类别判定：页面行为与产品预期不符=code；环境配置缺失/错误、服务不可达、登录态异常=environment；测试数据缺失/脏数据=data；功能正常但难用/误导/文案错误=ux；难以归类=other。所有类别都是真缺陷，都必须上报——环境/数据问题不是「不算缺陷」，模型不要自行过滤',
+      '复核后发现是预期行为、或无法复现：不要调用本工具，改用 note_excluded 记入排除账本',
       '同一缺陷只报一次；报完核对回传的截图帧，与描述不符时在描述里修正后再继续探索',
     ],
     parameters: Type.Object({
@@ -31,6 +33,29 @@ export function createReportFindingTool(deps: ExplorationDeps) {
       description: Type.String({ description: '现象描述：预期 vs 实际、证据（文本/接口/数据）、影响' }),
       severity: Type.Optional(Type.String({ description: '严重程度 P0/P1/P2/P3，缺省 P2' })),
       reproSteps: Type.Optional(Type.Array(Type.String(), { description: '复现步骤（从进入站点开始，一步一句）' })),
+      verification: Type.Object(
+        {
+          reproduced: Type.Boolean({
+            description: '是否已复现复核：重新触发/再次观察后异常再次出现=true；无法复现=false（false 会被拒收并记入排除账本）',
+          }),
+          category: Type.Union(
+            [Type.Literal('code'), Type.Literal('environment'), Type.Literal('data'), Type.Literal('ux'), Type.Literal('other')],
+            {
+              description:
+                '缺陷归属：code=代码缺陷（功能/逻辑/权限/计算/状态流转与预期不符）；environment=环境配置问题（配置缺失或错误、服务不可达、登录态异常、依赖故障）；data=数据问题（测试数据缺失/脏数据/前置数据不成立）；ux=体验问题（功能正常但难用、误导性交互、文案错误）；other=其他或证据不足。所有类别都是真缺陷，都会推荐给用户',
+            },
+          ),
+          expected: Type.String({ description: '预期行为（一句话）' }),
+          actual: Type.String({ description: '实际行为（一句话）' }),
+          evidence: Type.Optional(
+            Type.Array(Type.String(), { description: '证据清单（元素文本/接口行为/查库结果/配置值），最多 5 条', maxItems: 5 }),
+          ),
+          confidence: Type.Union([Type.Literal('high'), Type.Literal('medium'), Type.Literal('low')], {
+            description: '置信度：证据充分且逻辑闭环=high；有合理怀疑=medium；仅初步迹象=low',
+          }),
+        },
+        { description: '验证记录（必填）：复现复核 + 归类 + 预期 vs 实际 + 证据' },
+      ),
     }),
     executionMode: 'sequential',
     execute: async (_toolCallId, params) => {
@@ -38,14 +63,47 @@ export function createReportFindingTool(deps: ExplorationDeps) {
         .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
         .slice(0, 10)
         .map((s) => ({ action: s.trim().slice(0, 500) }));
+      const title = params.title.trim().slice(0, 60);
+      const v = params.verification;
+      // Mechanical gate 1: no verification record → reject and return the checklist (unverified candidates never reach the user).
+      if (!v || typeof v !== 'object') {
+        return toolErr(
+          `候选「${title}」未落库：缺少验证记录。上报前必须先验证——重新触发确认可复现、判定归属类别（code/environment/data/ux/other）、写清预期 vs 实际与证据。`,
+          '补全 verification 块后再报：reproduced=true、category=code|environment|data|ux|other、expected、actual、evidence[]、confidence。若复核发现是预期行为或无法复现，不要上报，改用 note_excluded 记入排除账本。',
+        );
+      }
+      // Mechanical gate 2: reproduction failed → not a confirmed defect; auto-record the exclusion so the candidate
+      // never silently disappears, then reject (nothing lands in findings, the user sees only verified defects).
+      if (v.reproduced !== true) {
+        deps.noteExcluded([
+          {
+            claim: `未复现候选：${title}`,
+            evidence: `复现复核失败：${String(v.actual ?? '').trim().slice(0, 500)}`,
+          },
+        ]);
+        return toolErr(
+          `候选「${title}」未落库（复现复核失败）。已自动记入排除账本，用户不会看到该候选。`,
+          '不要换措辞重报同一候选。若后来重新触发后异常稳定出现，可按完整 verification 块重新上报。',
+        );
+      }
       const raw = {
         title: params.title,
         description: params.description,
         ...(params.severity?.trim() ? { severity: params.severity.trim() } : {}),
         ...(steps.length > 0 ? { reproSteps: steps } : {}),
       };
-      const r = await deps.findings.report(raw);
-      const title = params.title.trim().slice(0, 60);
+      // Category whitelist-normalize: an out-of-vocabulary value degrades to 'other' rather than being dropped.
+      const CATEGORIES = ['code', 'environment', 'data', 'ux', 'other'] as const;
+      const r = await deps.findings.report(raw, {
+        category: (CATEGORIES as readonly string[]).includes(v.category) ? v.category : 'other',
+        expected: String(v.expected ?? '').trim().slice(0, 500),
+        actual: String(v.actual ?? '').trim().slice(0, 500),
+        evidence: (Array.isArray(v.evidence) ? v.evidence : [])
+          .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+          .slice(0, 5)
+          .map((x) => x.trim().slice(0, 500)),
+        confidence: v.confidence === 'high' || v.confidence === 'low' ? v.confidence : 'medium',
+      });
       if (!r.ok) {
         return toolErr(`缺陷未落库：${title}`, r.message);
       }
