@@ -131,4 +131,24 @@ describe('deepenVersionRepo', () => {
     const { deepenVersionRepo, RepoUnavailableError } = await import('../src/pi/repo.js');
     await expect(deepenVersionRepo(versionId, { depth: 5 })).rejects.toBeInstanceOf(RepoUnavailableError);
   }, 30_000);
+
+  it('锁竞争：deepen 排队等待持锁方完成（矩阵兄弟会话），助手 checkout 仍快失败', async () => {
+    const repoUrl = await makeDatedRepo();
+    const versionId = await seedVersion(repoUrl);
+    const { deepenVersionRepo, checkoutRepoForVersion, versionWorkspaceDir } = await import('../src/pi/repo.js');
+    const { default: lockfile } = await import('proper-lockfile');
+    const ws = versionWorkspaceDir(versionId);
+    await fs.mkdir(ws, { recursive: true });
+    // Hold the lock longer than the fail-fast budget (~6.2s): a 2-persona matrix starts both sessions at
+    // the same instant and the first deepen legitimately runs for tens of seconds — the sibling's deepen
+    // must queue (90s budget) instead of dying with LockTimeoutError, while the assistant checkout keeps
+    // its fail-fast behavior.
+    const release = await lockfile.lock(ws, { stale: 30_000 });
+    const hold = new Promise<void>((resolve) =>
+      setTimeout(async () => { await release(); resolve(); }, 7_000));
+    await expect(checkoutRepoForVersion(versionId, ws)).rejects.toThrow(/another fetch in progress/);
+    await deepenVersionRepo(versionId, { depth: 3 });
+    await hold;
+    expect(commitSubjects(ws)).toEqual(['c1', 'c2', 'c3']);
+  }, 30_000);
 });

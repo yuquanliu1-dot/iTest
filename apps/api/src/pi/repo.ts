@@ -15,6 +15,15 @@ export const DATA_DIR = process.env.PI_DATA_DIR ?? path.resolve(process.cwd(), '
 export const REPOS_ROOT = path.join(DATA_DIR, 'repos');
 export const WORKSPACES_ROOT = path.join(DATA_DIR, 'workspaces');
 export const REPO_LOCK_TIMEOUT_MS = 5_000;
+
+/** Lock wait budget for the deepen path. Persona-matrix sessions on the same version start at the same
+ *  instant and all deepen the SAME workspace — the winner legitimately runs a real deepen for tens of
+ *  seconds, so the siblings must queue behind it instead of failing with LockTimeoutError after ~6s
+ *  (observed on prod228: a 2-persona matrix instant-failed the second session's code-scope resolution
+ *  while the first was still deepening). The codeScope phase budget (withTimeout 30–120s per attempt)
+ *  still bounds the total wait; by the time a sibling acquires the lock its own fetch is a cheap no-op
+ *  (objects already local). The assistant checkout path (depth-1, seconds) keeps the fail-fast default. */
+const DEEPEN_LOCK_WAIT_MS = 90_000;
 export const REPO_RUN_TIMEOUT_MS = 30_000;
 export const MAX_OUTPUT_CHARS = 30_000;
 export const MAX_REPO_ENTRIES = 500;
@@ -524,12 +533,18 @@ async function fetchAndReset(target: string, info: ProjectRepo, ref: string, bou
 /** Directory lock: same target directory → same lock (proper-lockfile's lock file is the sibling path
  *  `<target>.lock`, so rm -rf target inside the lock does not destroy the lock itself). Checkout and
  *  "deepen shallow clone" share it → the two actions never stomp each other. */
-async function withRepoLock<T>(target: string, fn: () => Promise<T>): Promise<T> {
+async function withRepoLock<T>(target: string, fn: () => Promise<T>, opts?: { lockWaitMs?: number }): Promise<T> {
   // proper-lockfile lstats the target before locking; on the cold path it does not exist yet → ensure the directory first (idempotent)
   await fs.mkdir(target, { recursive: true });
   let release: () => Promise<void>;
   try {
-    release = await lockfile.lock(target, { stale: 30_000, retries: { retries: 5, minTimeout: 200 } });
+    // The wait budget comes from the retry cadence (npm retry): default 5 exponential retries ≈ 6.2s fail-fast;
+    // with lockWaitMs set, retry at 1s intervals for up to that long (e.g. the deepen path queuing behind a
+    // matrix sibling's in-flight deepen).
+    const retries = opts?.lockWaitMs
+      ? { retries: Math.ceil(opts.lockWaitMs / 1000), factor: 1, minTimeout: 1000, maxTimeout: 1000 }
+      : { retries: 5, minTimeout: 200 };
+    release = await lockfile.lock(target, { stale: 30_000, retries });
   } catch (e) {
     if ((e as { code?: string }).code === 'ELOCKED') throw new LockTimeoutError('another fetch in progress');
     throw e;
@@ -630,5 +645,5 @@ export async function deepenVersionRepo(versionId: string, bounds: ShallowBounds
     }
     await fetchAndReset(target, info, info.branch, bounds);
     return (await runGitIn(target, ['rev-parse', 'HEAD'])).trim();
-  });
+  }, { lockWaitMs: DEEPEN_LOCK_WAIT_MS });
 }
